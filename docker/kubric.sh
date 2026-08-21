@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Run a worker script inside the pinned Kubric image.
+#
+#   bash docker/kubric.sh physviol/render/worker_smoke.py --resolution 512
+#
+# The pattern is "your script, their container": the image already contains a
+# complete Kubric + Blender install, so we mount this repo at /kubric and run our
+# own file against it. Nothing is vendored. See docs/PLAN.md Part 0.
+#
+#   --user   makes rendered output land owned by you, not root
+#   --volume is both how the script gets in and how the frames get out
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIGEST_FILE="$REPO_ROOT/docker/IMAGE_DIGEST"
+IMAGE=""
+
+if [ $# -lt 1 ]; then
+  echo "usage: docker/kubric.sh <script.py> [args...]" >&2
+  exit 64
+fi
+
+# Prefer the pinned digest; fall back to the tag with a warning so a fresh
+# clone still works before the first pull.
+if [ -f "$DIGEST_FILE" ]; then
+  IMAGE="$(grep -m1 '^kubricdockerhub/kubruntu@sha256:' "$DIGEST_FILE" || true)"
+fi
+if [ -z "$IMAGE" ]; then
+  echo "warn: no pinned digest in docker/IMAGE_DIGEST, using :latest (not reproducible)" >&2
+  IMAGE="kubricdockerhub/kubruntu"
+fi
+
+exec docker run --rm --interactive \
+  --user "$(id -u):$(id -g)" \
+  --volume "$REPO_ROOT:/kubric" \
+  --workdir /kubric \
+  "$IMAGE" \
+  python3 "$@"

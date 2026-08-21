@@ -1,0 +1,40 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Generated dataset output: never enters git ---
+data/
+renders/
+out/
+clips/
+physviol_v0/
+*.npz
+*.mp4
+*.png
+*.exr
+*.tiff
+
+# --- Reference checkouts (see scripts/fetch_refs.sh) ---
+refs/
+
+# --- Source papers: re-fetchable, see context/README.md ---
+context/*.pdf
+
+# --- Local editor / OS noise ---
+.DS_Store
+.vscode/
+.idea/
