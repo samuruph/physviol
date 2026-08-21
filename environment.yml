@@ -1,0 +1,27 @@
+# Host-side environment for PhysViol.
+#
+# NOTE: this env does NOT contain Kubric, Blender or PyBullet. Those live inside
+# the pinned docker image and are never installed here -- see docs/PLAN.md Part 0.
+# This env covers everything on the host side of the seam: annotation, residuals,
+# severity maps, token grids, schema validation, visualisation and evaluation.
+#
+#   conda env create -f environment.yml
+#   conda activate physviol
+name: physviol
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy               # parabola fits, residual math
+  - pillow              # reading Kubric's PNG passes
+  - tifffile            # reading Kubric's depth TIFFs
+  - imageio
+  - imageio-ffmpeg      # mp4 encode for rgb_*.mp4 and viz overlays
+  - opencv              # mask overlays, resizing, contact sheets
+  - matplotlib          # severity heatmaps, report figures
+  - jsonschema          # physviol validate
+  - tqdm
+  - pytest
+  - pypdf               # reading the papers in context/
+  - pip

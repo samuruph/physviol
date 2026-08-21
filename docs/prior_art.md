@@ -21,7 +21,7 @@ Axes it splits on, both of which we adopt:
 
 | axis | values | our position |
 |---|---|---|
-| difficulty | Easy / Medium / Hard, plus a **Held Out** set | we adopt easy/medium/hard, but derive the bin from **intervention magnitude** rather than assigning it by hand |
+| difficulty | Easy / Medium / Hard, plus a **Held Out** set | we use **weak / medium / strong** -- named for the *intervention*, not the task, because ours is derived from intervention magnitude rather than assigned by hand |
 | camera | **Fixed** vs **Moving** | v0 ships orbit; MOVi's `linear_movement` camera mode gives us the moving tier cheaply (PLAN Part 0.5) |
 
 **The numbers that set our difficulty target** (their Table 2/3, best run per model):
@@ -94,8 +94,8 @@ Optical Consistency, Material Response.
 
 | skipped | why |
 |---|---|
-| **Continuum** (Cloth Drape, Cloth Waving) | PyBullet deformables are not accurate enough to compute a trustworthy law residual. Deferred to **Phase 3** with the MuJoCo backend. |
-| **Fluid** (Droplet Fall, Faucet Flow, River Flow) | Same reason, more so: no credible per-body residual for SPH/FLIP at v0. Out of scope. |
+| **Continuum** (Cloth Drape, Cloth Waving) | PyBullet exposes only `loadSoftBody`/`createSoftBodyAnchor` and Kubric wraps neither; no trustworthy per-element residual at v0. Deferred to **Phase 3** with the MuJoCo/MJX backend. |
+| **Fluid** (Droplet Fall, Faucet Flow, River Flow) | **Tested, not assumed.** Blender 2.93.4 in our image *does* ship Mantaflow, but headless scripted baking fails (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a liquid's per-frame mesh state does not fit the pose-based seam. Partially substituted at v0 by the **`granular_pour`** scenario — ~200 rigid spheres, honestly labelled `physics_medium: "granular"`. True fluid is **Phase 3**. See PLAN Part 2. |
 | **Temporal disorder** (frame shuffling / jump cuts) | Used by nearly every LikePhys scenario, and we intentionally omit it: it is an *encoding* artifact, not a physics violation. It has no law residual, and including it would reward exactly the shortcut detection our artifact-probe control exists to catch. |
 
 ### What this table is claiming

@@ -1,0 +1,310 @@
+"""Container-side worker: sample -> simulate -> inject -> render both twins.
+
+Runs INSIDE the pinned Kubric image (python 3.9). Everything it writes is on the
+host side of the seam: traj.npz, the raw render passes, and a plan.json.
+
+    bash docker/kubric.sh physviol/render/worker.py \
+        --scenario ball_drop --seed 91731 --tier D \
+        --family solidity --severity medium --outdir out/phase0
+
+Renders the valid and invalid twins through a *bit-identical* path: same scene
+object, same renderer, same seed -- only the replayed keyframes differ.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, "/kubric")
+
+import numpy as np
+import bpy
+import kubric as kb
+from kubric.renderer import Blender
+from kubric.simulator import PyBullet
+
+from physviol import injectors
+from physviol import scenarios
+from physviol.scenarios.base import SceneSpec, Tier
+from physviol.sim.trajectory import Contacts, Trajectory, prefix_identical
+
+PASSES = ("rgba", "segmentation", "depth", "forward_flow", "backward_flow",
+          "normal", "object_coordinates")
+
+
+# --------------------------------------------------------------------------
+KUBASIC = "gs://kubric-public/assets/KuBasic/KuBasic.json"
+HDRI = "gs://kubric-public/assets/HDRI_haven/HDRI_haven.json"
+
+
+def build_scene(spec: SceneSpec, scratch):
+    scene = kb.Scene(
+        resolution=(spec.tier.resolution, spec.tier.resolution),
+        frame_start=0, frame_end=spec.tier.num_frames - 1,
+        frame_rate=spec.tier.fps, step_rate=spec.tier.fps * 20,
+        gravity=spec.gravity,
+    )
+    simulator = PyBullet(scene, scratch)
+    renderer = Blender(scene, scratch, use_denoising=True,
+                       samples_per_pixel=spec.tier.samples_per_pixel,
+                       background_transparency=False)
+    scene.background = kb.Color(*spec.background_color)
+    scene.ambient_illumination = kb.Color(0.04, 0.04, 0.05)
+
+    # --- complexity L1+: photographic environment lighting + a dome backdrop
+    hdri_tex = None
+    if spec.hdri_id:
+        hdri_src = kb.AssetSource.from_manifest(HDRI)
+        hdri_tex = hdri_src.create(asset_id=spec.hdri_id)
+        renderer._set_ambient_light_hdri(hdri_tex.filename)
+
+    objs = {}
+    for b in spec.bodies:
+        material = kb.PrincipledBSDFMaterial(color=kb.Color(*b.color),
+                                             roughness=0.55, metallic=0.0)
+        common = dict(name=b.name, position=b.position, quaternion=b.quaternion,
+                      static=b.static, mass=b.mass, friction=b.friction,
+                      restitution=b.restitution, material=material,
+                      segmentation_id=b.segmentation_id)
+        if b.kind == "sphere":
+            obj = kb.Sphere(scale=b.scale, **common)
+        elif b.kind == "cube":
+            obj = kb.Cube(scale=b.scale, **common)
+        elif b.kind == "dome":
+            # KuBasic's dome is both the ground plane and the backdrop the HDRI
+            # is projected onto -- the idiom movi_def_worker.py uses.
+            kubasic = kb.AssetSource.from_manifest(KUBASIC)
+            obj = kubasic.create(asset_id="dome", name=b.name, friction=b.friction,
+                                 restitution=b.restitution, static=True,
+                                 background=True)
+            obj.segmentation_id = b.segmentation_id
+            scene += obj
+            if hdri_tex is not None:
+                dome_blender = obj.linked_objects[renderer]
+                node = dome_blender.data.materials[0].node_tree.nodes["Image Texture"]
+                node.image = bpy.data.images.load(hdri_tex.filename)
+            objs[b.name] = obj
+            continue
+        else:
+            raise ValueError("unknown body kind %r" % b.kind)
+        if not b.static:
+            obj.velocity = b.velocity
+            obj.angular_velocity = b.angular_velocity
+        scene += obj
+        objs[b.name] = obj
+
+    for l in spec.lights:
+        scene += kb.DirectionalLight(name=l.name, position=l.position,
+                                     look_at=l.look_at, intensity=l.intensity)
+    scene += kb.PerspectiveCamera(name="camera", position=spec.camera_position,
+                                  look_at=spec.camera_look_at)
+    return scene, simulator, renderer, objs
+
+
+# --------------------------------------------------------------------------
+def simulate(spec, scene, simulator, objs) -> Trajectory:
+    T = spec.tier.num_frames
+    animation, collisions = simulator.run(frame_start=0, frame_end=T - 1)
+
+    order = [b.name for b in spec.bodies]
+    B = len(order)
+    pos = np.zeros((T, B, 3), np.float32)
+    quat = np.zeros((T, B, 4), np.float32)
+    lvel = np.zeros((T, B, 3), np.float32)
+    avel = np.zeros((T, B, 3), np.float32)
+    for j, name in enumerate(order):
+        a = animation[objs[name]]
+        pos[:, j] = np.asarray(a["position"][:T], np.float32)
+        quat[:, j] = np.asarray(a["quaternion"][:T], np.float32)
+        lvel[:, j] = np.asarray(a["velocity"][:T], np.float32)
+        avel[:, j] = np.asarray(a["angular_velocity"][:T], np.float32)
+
+    seg_of = {b.name: b.segmentation_id for b in spec.bodies}
+    name_of_obj = {objs[n]: n for n in order}
+
+    # Kubric reports collisions with a float frame and *no* penetration depth
+    # (it discards pybullet's contact_distance), so depth is left at 0 here and
+    # computed geometrically by the residual module.
+    cf, ca, cb, cp, cn, ci = [], [], [], [], [], []
+    for c in collisions:
+        a_obj, b_obj = c["instances"]
+        if a_obj not in name_of_obj or b_obj not in name_of_obj:
+            continue
+        f = int(round(float(c["frame"])))
+        if not (0 <= f < T):
+            continue
+        cf.append(f)
+        ca.append(seg_of[name_of_obj[a_obj]])
+        cb.append(seg_of[name_of_obj[b_obj]])
+        cp.append(c["position"])
+        cn.append(c["contact_normal"])
+        ci.append(float(c["force"]))
+    n = len(cf)
+    contacts = Contacts(
+        np.asarray(cf, np.int32) if n else np.zeros((0,), np.int32),
+        np.asarray(ca, np.int32) if n else np.zeros((0,), np.int32),
+        np.asarray(cb, np.int32) if n else np.zeros((0,), np.int32),
+        np.asarray(cp, np.float32).reshape(n, 3) if n else np.zeros((0, 3), np.float32),
+        np.asarray(cn, np.float32).reshape(n, 3) if n else np.zeros((0, 3), np.float32),
+        np.asarray(ci, np.float32) if n else np.zeros((0,), np.float32),
+        np.zeros((n,), np.float32),
+    )
+
+    return Trajectory(
+        body_ids=np.asarray([seg_of[n_] for n_ in order], np.int32),
+        body_names=list(order),
+        pos=pos, quat=quat, lin_vel=lvel, ang_vel=avel,
+        mass=np.asarray([b.mass for b in spec.bodies], np.float32),
+        radius=np.asarray([b.bounding_radius for b in spec.bodies], np.float32),
+        is_static=np.asarray([b.static for b in spec.bodies], bool),
+        contacts=contacts, fps=float(spec.tier.fps),
+        gravity=np.asarray(spec.gravity, np.float32),
+        meta={"scenario": spec.scenario, "seed": spec.seed,
+              "tier": spec.tier.name, "label": "valid",
+              "spec": spec.to_dict()},
+    )
+
+
+# Where a removed body is parked. Far enough outside any scenario's camera
+# frustum that it contributes no pixels, which is how `permanence` renders as
+# genuine absence rather than as a teleport.
+GONE_Z = -1000.0
+
+
+def replay(spec, objs, traj: Trajectory) -> None:
+    """Write a trajectory back onto the scene as keyframes -- the seam's read side.
+
+    Same mechanism Kubric's own simulator.run uses to hand animation to Blender
+    (see refs/kubric/kubric/simulator/pybullet.py), so this is a supported path.
+    """
+    present = traj.present
+    for j, b in enumerate(spec.bodies):
+        obj = objs[b.name]
+        for f in range(traj.num_frames):
+            if present is not None and not bool(present[f, j]):
+                obj.position = (0.0, 0.0, GONE_Z)
+            else:
+                obj.position = tuple(float(x) for x in traj.pos[f, j])
+            obj.quaternion = tuple(float(x) for x in traj.quat[f, j])
+            obj.keyframe_insert("position", f)
+            obj.keyframe_insert("quaternion", f)
+
+
+def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
+    t0 = time.perf_counter()
+    stack = renderer.render()
+    dt = time.perf_counter() - t0
+
+    # Kubric numbers the raw segmentation by scene-asset order and only honours
+    # each asset's declared `segmentation_id` if you run this post-process --
+    # exactly what movi_def_worker.py does. Skipping it silently mislabels every
+    # instance whenever declaration order differs from insertion order, which
+    # then quietly corrupts every mask and residual downstream.
+    ordered = [objs[b.name] for b in spec.bodies if b.name in objs]
+    stack["segmentation"] = kb.adjust_segmentation_idxs(
+        stack["segmentation"], scene.assets, ordered)
+
+    declared = sorted({int(b.segmentation_id) for b in spec.bodies})
+    got = sorted(int(x) for x in np.unique(np.asarray(stack["segmentation"])) if x != 0)
+    if not set(got).issubset(set(declared)):
+        raise RuntimeError("segmentation ids %s are not the declared %s"
+                           % (got, declared))
+
+    arrays = {}
+    for k in PASSES:
+        if k in stack:
+            arrays[k] = np.asarray(stack[k])
+    np.savez_compressed(os.path.join(outdir, "passes_%s.npz" % tag), **arrays)
+
+    # No image files here: the container has no ffmpeg. All mp4s -- previews,
+    # released rgb.mp4 and the annotation overlays -- are written host-side by
+    # physviol.viz, which keeps a single encoder and one set of settings.
+    return dt, {k: list(v.shape) for k, v in arrays.items()}
+
+
+# --------------------------------------------------------------------------
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scenario", default="ball_drop")
+    ap.add_argument("--seed", type=int, default=91731)
+    ap.add_argument("--tier", default="D", choices=sorted(scenarios.TIERS))
+    ap.add_argument("--family", default="solidity")
+    ap.add_argument("--severity", default="all",
+                    help="one of weak|medium|strong, 'all', or a comma list")
+    ap.add_argument("--complexity", default="L0")
+    ap.add_argument("--window", type=int, default=None,
+                    help="uniform violation duration in frames; sustained "
+                         "families honour it, instant ones ignore it")
+    ap.add_argument("--outdir", default="out/phase0")
+    a = ap.parse_args()
+
+    tier = scenarios.TIERS[a.tier]
+    spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity)
+
+    pair_uid = "%s/%04d" % (a.scenario, a.seed)
+    outdir = os.path.join(a.outdir, a.scenario, "%04d" % a.seed)
+    scratch = os.path.join(outdir, "_scratch")
+    os.makedirs(scratch, exist_ok=True)
+
+    severities = (["weak", "medium", "strong"] if a.severity == "all"
+                  else [x.strip() for x in a.severity.split(",") if x.strip()])
+
+    # One scene build, one HDRI load, one valid rollout -- shared by every
+    # variant. At complexity L1 the environment costs ~4.6x an L0 render, so
+    # re-paying it per severity was most of the wall clock.
+    scene, simulator, renderer, objs = build_scene(spec, scratch)
+    traj_valid = simulate(spec, scene, simulator, objs)
+    traj_valid.save(os.path.join(outdir, "traj_valid.npz"))
+
+    replay(spec, objs, traj_valid)
+    t_valid, shapes = render_and_save(renderer, scene, spec, objs, outdir, "valid")
+
+    inj = injectors.get(a.family)
+    inj.window_frames = a.window
+    variants, timings = [], {"valid": round(t_valid, 2)}
+    for sev in severities:
+        rng = np.random.RandomState(a.seed + 7919)
+        plan = inj.plan(spec, traj_valid, rng, sev)
+        if plan is None:
+            variants.append({"severity": sev, "ok": False,
+                             "error": "injector produced no plan"})
+            continue
+        traj_invalid = inj.apply(spec, traj_valid, plan)
+
+        ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
+        if not ok:
+            variants.append({"severity": sev, "ok": False,
+                             "error": "trajectory prefix differs: %s" % why})
+            continue
+
+        vdir = os.path.join(outdir, "variants", "%s_%s" % (a.family, sev))
+        os.makedirs(vdir, exist_ok=True)
+        traj_invalid.save(os.path.join(vdir, "traj_invalid.npz"))
+        with open(os.path.join(vdir, "plan.json"), "w") as fh:
+            json.dump({"pair_uid": pair_uid, "spec": spec.to_dict(),
+                       "plan": plan.to_dict()}, fh, indent=2, sort_keys=True)
+
+        replay(spec, objs, traj_invalid)
+        dt, _ = render_and_save(renderer, scene, spec, objs, vdir, "invalid")
+        timings[sev] = round(dt, 2)
+        variants.append({"severity": sev, "ok": True, "dir": vdir,
+                         "kind": plan.kind,
+                         "t_event": plan.t_event, "windows": plan.windows,
+                         "magnitude": plan.magnitude,
+                         "magnitude_unit": plan.magnitude_unit})
+
+    print("PHASE0 " + json.dumps({
+        "ok": any(v.get("ok") for v in variants),
+        "pair_uid": pair_uid, "outdir": outdir, "family": a.family,
+        "tier": tier.name, "complexity": a.complexity,
+        "frames": tier.num_frames, "variants": variants,
+        "render_seconds": timings, "passes": shapes,
+    }))
+    return 0 if any(v.get("ok") for v in variants) else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

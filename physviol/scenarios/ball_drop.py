@@ -1,0 +1,59 @@
+"""`ball_drop` -- a sphere falls to a floor and bounces.
+
+Event structure: free fall -> contact -> rebound. The simplest scenario that
+still has a well-defined contact instant, which is what `solidity`,
+`superelastic` and `antigravity` all need. Grounded in LikePhys *Ball Drop*.
+"""
+from __future__ import annotations
+
+from . import _common as C
+from ._hdri import pick as pick_hdri
+from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
+                   Scenario, Tier, register)
+
+
+class BallDrop(Scenario):
+    name = "ball_drop"
+
+    # Segmentation ids are fixed per role so downstream annotation never has to
+    # guess which instance is the actor.
+    SEG_FLOOR, SEG_BALL = 1, 2
+
+    def sample(self, seed: int, tier: Tier,
+               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+        rng = self.rng(seed)
+        cx = COMPLEXITY[complexity]
+        if not cx.implemented:
+            raise NotImplementedError(
+                "complexity %s (%s) is scaffolded but not built yet; "
+                "implemented: %s" % (complexity, cx.movi_analogue,
+                                     [k for k, v in COMPLEXITY.items() if v.implemented]))
+
+        radius = float(rng.uniform(0.35, 0.55))
+        drop_height = float(rng.uniform(2.4, 3.4))
+        restitution = float(rng.uniform(0.55, 0.75))
+        # A little lateral drift so the contact is not perfectly axis-aligned.
+        vx, vy = float(rng.uniform(-0.5, 0.5)), float(rng.uniform(-0.5, 0.5))
+        hue = float(rng.uniform(0.0, 1.0))
+
+        hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
+        floor = C.ground(cx, self.SEG_FLOOR)
+
+        ball = BodySpec(
+            name="ball", kind="sphere", position=(0.0, 0.0, drop_height),
+            scale=(radius, radius, radius), velocity=(vx, vy, 0.0),
+            mass=1.0, friction=0.4, restitution=restitution,
+            color=C.hue_rgb(hue), segmentation_id=self.SEG_BALL, role="actor")
+
+        return SceneSpec(
+            scenario=self.name, seed=seed, tier=tier,
+            bodies=[floor, ball],
+            lights=C.lights(cx),
+            camera_position=(5.2, -4.4, 2.4), camera_look_at=(0.0, 0.0, 1.0),
+            floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
+            notes={"radius": radius, "drop_height": drop_height,
+                   "restitution": restitution},
+        )
+
+
+register(BallDrop())

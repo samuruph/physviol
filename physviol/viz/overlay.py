@@ -1,0 +1,326 @@
+"""Annotation visualiser -- docs/PLAN.md Verification.
+
+Produces ONE mp4 per invalid clip showing every annotation side by side, so a
+human can tell at a glance whether the labels are right. Never trust a metric
+built on an unviewed label.
+
+Layout:
+
+    +---------------------------------------------------------------+
+    | domain / family / scenario   seed   severity      [O] ACTIVE   |
+    +------------+------------+------------+------------+------------+
+    | RGB        | + MASK     | SEVERITY   | CAUSAL     | DIVERGENCE |
+    +------------+------------+------------+------------+------------+
+    | timeline: violation window (red) / observable (amber) + playhead|
+    | t_event  t_obs  t_end  lag   sev(t)   peak                     |
+    +---------------------------------------------------------------+
+
+No image files are written -- mp4 only.
+"""
+from __future__ import annotations
+
+import json
+import os
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+from . import video as vid
+
+PANEL = 288                      # each panel is rendered at this size
+HEADER = 34
+TIMELINE = 78
+PAD = 6
+
+C_BG = (18, 18, 22)
+C_TEXT = (232, 232, 238)
+C_DIM = (150, 150, 160)
+C_MASK = (255, 70, 70)
+C_ACTIVE = (255, 60, 60)
+C_OBS = (250, 185, 60)
+C_CAUSAL1 = (255, 70, 70)
+C_CAUSAL2 = (90, 160, 255)
+C_REF = (90, 235, 120)      # "where it should be", from the valid twin
+
+
+def build(clip_dir: str, out_path: Optional[str] = None,
+          panel: int = PANEL, **_ignored) -> Dict[str, object]:
+    import cv2
+
+    meta = _json(os.path.join(clip_dir, "meta.json"))
+    v = meta.get("violation") or {}
+    T = int(meta["num_frames"])
+
+    rgb = _rgb(clip_dir, T)
+    mask = _npz(clip_dir, "violation_mask.npz", "mask")
+    sev = _npz(clip_dir, "severity_map.npz", "severity")
+    causal = _npz(clip_dir, "causal_mask.npz", "mask")
+    ref = _npz(clip_dir, "reference_mask.npz", "mask")
+    diverg = _npz(clip_dir, "divergence_map.npz", "divergence")
+    tl = np.load(os.path.join(clip_dir, "timelines.npz"))
+
+    sev = None if sev is None else sev.astype(np.float32)
+    diverg = None if diverg is None else diverg.astype(np.float32)
+
+    vwin = [tuple(w) for w in v.get("violation_windows", [])]
+    owin = [tuple(w) for w in v.get("observable_windows", [])]
+    t_event = int(v.get("t_event_frame", -1))
+    t_obs = int(v.get("t_observable_frame", -1))
+    t_end = int(v.get("t_end_frame", -1))
+    peak = (v.get("peak_residual") or {})
+
+    panels: List[Tuple[str, str]] = [("RGB", "rgb"),
+                                     ("MASK red=violation  green=should-be", "mask")]
+    if sev is not None:
+        panels.append(("SEVERITY MAP", "sev"))
+    if causal is not None:
+        panels.append(("CAUSAL MASK", "causal"))
+    if diverg is not None:
+        panels.append(("DIVERGENCE (not GT)", "div"))
+
+    n = len(panels)
+    W = n * panel + (n + 1) * PAD
+    H = HEADER + panel + 2 * PAD + TIMELINE
+    out = np.zeros((T, H, W, 3), np.uint8)
+
+    for t in range(T):
+        f = np.full((H, W, 3), C_BG, np.uint8)
+        active = bool(tl["active"][t])
+        observable = bool(tl["observable"][t])
+        occluded = bool(tl["occluded"][t]) if "occluded" in tl.files else False
+
+        for i, (label, kind) in enumerate(panels):
+            img = _panel(kind, t, rgb, mask, sev, causal, diverg, panel, ref)
+            x = PAD + i * (panel + PAD)
+            y = HEADER + PAD
+            f[y:y + panel, x:x + panel] = img
+            cv2.rectangle(f, (x, y), (x + panel - 1, y + panel - 1), (60, 60, 70), 1)
+            _label(f, label, (x + 5, y + 16))
+            if kind == "sev":
+                _sev_scale(f, x, y, panel, float(tl["severity_t"][t]))
+            if kind == "mask":
+                px = int(mask[t].sum()) if mask is not None else 0
+                _text(f, "%d px" % px, (x + 5, y + panel - 8), C_DIM, 0.40, 1)
+
+        _header(f, W, meta, t, T, active, observable, occluded)
+        _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end,
+                  float(tl["severity_t"][t]), peak, v)
+        out[t] = f
+
+    out_path = out_path or os.path.join(clip_dir, "overlay.mp4")
+    vid.write(out, out_path, fps=int(meta.get("fps", 12)))
+    return {"path": out_path, "frames": T, "panels": [p[0] for p in panels],
+            "t_event": t_event, "t_observable": t_obs, "t_end": t_end,
+            "violation_windows": vwin, "observable_windows": owin}
+
+
+# ------------------------------------------------------------------ panels
+def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None):
+    import cv2
+    base = rgb[t].astype(np.float32)
+
+    if kind == "rgb":
+        img = base
+    elif kind == "mask":
+        img = base.copy()
+        if mask is not None:
+            m = mask[t].astype(bool)
+            img[m] = img[m] * 0.55 + np.array(C_MASK, np.float32) * 0.45
+            edge = m ^ _erode(m)
+            img[edge] = np.array(C_MASK, np.float32)
+        if ref is not None:
+            # Where the culprit should be, per the valid twin -- drawn *last*
+            # and outline-only. The violation mask is a superset of it for
+            # vanish-type families, so drawing the reference first would let the
+            # red fill hide it exactly when it matters most.
+            r = ref[t].astype(bool)
+            img[r ^ _erode(r)] = np.array(C_REF, np.float32)
+    elif kind == "sev":
+        s = np.clip(sev[t], 0.0, 1.0)
+        heat = cv2.applyColorMap((s * 255).astype(np.uint8),
+                                 cv2.COLORMAP_INFERNO)[..., ::-1].astype(np.float32)
+        a = (s > 0)[..., None].astype(np.float32) * 0.88
+        img = base * 0.35 * (1 - a) + base * (1 - a) * 0.65 + heat * a
+    elif kind == "causal":
+        img = base * 0.45
+        c = causal[t]
+        img[c == 1] = np.array(C_CAUSAL1, np.float32)
+        img[c == 2] = np.array(C_CAUSAL2, np.float32)
+    else:  # divergence
+        d = np.clip(diverg[t], 0.0, 1.0)
+        img = (cv2.applyColorMap((d * 255).astype(np.uint8),
+                                 cv2.COLORMAP_BONE)[..., ::-1]).astype(np.float32)
+
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    return cv2.resize(img, (size, size), interpolation=cv2.INTER_NEAREST)
+
+
+# ------------------------------------------------------------------ chrome
+def _w(s, scale, thick=1):
+    import cv2
+    return cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)[0][0]
+
+
+def _header(f, W, meta, t, T, active, observable, occluded):
+    """Laid out right-to-left from measured widths so nothing ever collides."""
+    import cv2
+    v = meta.get("violation") or {}
+
+    # --- right edge: frame counter, then the state pill ---
+    frame_s = "f %d/%d" % (t, T - 1)
+    x = W - PAD - _w(frame_s, 0.46)
+    _text(f, frame_s, (x, 22), C_TEXT, 0.46, 1)
+
+    state = "VIOLATION ACTIVE" if active else (
+        "observable only" if observable else ("occluded" if occluded else "clean"))
+    col = C_ACTIVE if active else C_DIM
+    x -= 14 + _w(state, 0.50 if active else 0.46)
+    _text(f, state, (x, 22), col, 0.50 if active else 0.46, 1)
+    x -= 16
+    cv2.circle(f, (x, 16), 7, C_ACTIVE if active else (70, 70, 78),
+               -1 if active else 1)
+    if active:
+        cv2.circle(f, (x, 16), 7, (255, 255, 255), 1)
+    right_limit = x - 14
+
+    # --- left edge: identity, then metadata if it still fits ---
+    left = "%s / %s / %s" % (meta.get("domain"), meta.get("family"),
+                             meta.get("scenario"))
+    _text(f, left, (PAD + 2, 22), C_TEXT, 0.52, 1)
+    lx = PAD + 2 + _w(left, 0.52) + 22
+    sev_bin = (v.get("intervention") or {}).get("severity_bin", "-")
+    mid = "seed %s   tier %s   %s" % (meta.get("seed"), meta.get("tier"), sev_bin)
+    if lx + _w(mid, 0.46) < right_limit:
+        _text(f, mid, (lx, 22), C_DIM, 0.46, 1)
+
+
+def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v):
+    import cv2
+    y0 = H - TIMELINE + 4
+    x0, x1 = PAD + 2, W - PAD - 2
+    span = x1 - x0
+
+    def fx(frame):
+        return int(x0 + (frame / max(T, 1)) * span)
+
+    _text(f, "violation window", (x0, y0 + 10), C_MASK, 0.42, 1)
+    _text(f, "observable", (x0 + 150, y0 + 10), C_OBS, 0.42, 1)
+
+    for (label, wins, color, row) in (("v", vwin, C_MASK, 0), ("o", owin, C_OBS, 1)):
+        ry = y0 + 16 + row * 13
+        cv2.rectangle(f, (x0, ry), (x1, ry + 10), (40, 40, 48), -1)
+        for s, e in wins:
+            cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 10),
+                          color, -1)
+
+    # frame ticks every frame, labelled every 4
+    ty = y0 + 42
+    for i in range(T):
+        cv2.line(f, (fx(i), ty), (fx(i), ty + 4), (90, 90, 100), 1)
+        if i % 4 == 0:
+            _text(f, str(i), (fx(i) - 3, ty + 15), C_DIM, 0.34, 1)
+
+    # Markers. Clocks that land on the same frame -- t_event == t_obs is the
+    # common case whenever nothing occludes the culprit -- are merged into one
+    # label rather than overprinted.
+    marks = [(t_event, "t_event", C_MASK), (t_obs, "t_obs", C_OBS),
+             (t_end, "t_end", (170, 170, 210))]
+    by_frame = {}
+    for frame, tag, col in marks:
+        if 0 <= frame < T:
+            by_frame.setdefault(frame, []).append((tag, col))
+    for frame in sorted(by_frame):
+        tags = by_frame[frame]
+        col = tags[0][1]
+        label = "=".join(t for t, _ in tags)
+        cv2.line(f, (fx(frame), y0 + 16), (fx(frame), ty + 4), col, 1)
+        tw = _w(label, 0.36)
+        tx = fx(frame) + 3
+        if tx + tw > x1:
+            tx = fx(frame) - tw - 3
+        _text(f, label, (tx, y0 + 13), col, 0.36, 1)
+
+    # playhead
+    px = fx(t) + max(1, span // (2 * max(T, 1)))
+    cv2.line(f, (px, y0 + 14), (px, ty + 5), (255, 255, 255), 1)
+
+    lag = v.get("observability_lag_frames", 0)
+    info = ("t_event=%d  t_obs=%d  t_end=%d  lag=%d  |  severity(t)=%.3f  "
+            "peak=%.3f  r=%.3f (%s)"
+            % (t_event, t_obs, t_end, lag, sev_t,
+               float(peak.get("score", 0.0)), float(peak.get("value", 0.0)),
+               peak.get("law", "-")))
+    _text(f, info, (x0, H - 6), C_TEXT, 0.44, 1)
+
+
+def _sev_scale(f, x, y, size, value):
+    """A 0..1 INFERNO ramp with the live value marked -- a dark purple blob is
+    otherwise indistinguishable from an empty map."""
+    import cv2
+    bw, bh = size - 20, 9
+    bx, by = x + 10, y + size - 26
+    ramp = np.linspace(0, 255, bw).astype(np.uint8)[None, :].repeat(bh, 0)
+    f[by:by + bh, bx:bx + bw] = cv2.applyColorMap(ramp,
+                                                  cv2.COLORMAP_INFERNO)[..., ::-1]
+    mx = bx + int(np.clip(value, 0, 1) * (bw - 1))
+    cv2.line(f, (mx, by - 3), (mx, by + bh + 3), (255, 255, 255), 1)
+    _text(f, "s=%.3f" % value, (bx, by - 6), (255, 255, 255), 0.42, 1)
+    _text(f, "0", (bx - 7, by + bh + 1), C_DIM, 0.34, 1)
+    _text(f, "1", (bx + bw + 2, by + bh + 1), C_DIM, 0.34, 1)
+
+
+def _label(f, s, org):
+    _text(f, s, org, (255, 255, 255), 0.44, 1)
+
+
+def _text(img, s, org, color, scale, thick=1, backing=True):
+    """Draw legible text over arbitrary imagery.
+
+    Deliberately a dark backing box rather than a thick black outline: in
+    OpenCV the Hershey glyph *advance width* grows with stroke thickness, so an
+    outline pass drawn at thick+2 is wider than the fill pass and its tail
+    glyphs poke out past the text as dark ghosts.
+    """
+    import cv2
+    (tw, th), base = cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
+    x, y = int(org[0]), int(org[1])
+    if backing:
+        x0, y0 = max(0, x - 2), max(0, y - th - 2)
+        x1, y1 = min(img.shape[1], x + tw + 2), min(img.shape[0], y + base + 1)
+        if x1 > x0 and y1 > y0:
+            roi = img[y0:y1, x0:x1].astype(np.float32)
+            img[y0:y1, x0:x1] = (roi * 0.25).astype(np.uint8)
+    cv2.putText(img, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick,
+                cv2.LINE_AA)
+
+
+# ------------------------------------------------------------------ io
+def _json(p):
+    with open(p) as fh:
+        return json.load(fh)
+
+
+def _npz(clip_dir, fname, key):
+    p = os.path.join(clip_dir, fname)
+    if not os.path.exists(p):
+        return None
+    z = np.load(p)
+    return z[key] if key in z.files else z[z.files[0]]
+
+
+def _rgb(clip_dir, T):
+    import imageio.v2 as imageio
+    p = os.path.join(clip_dir, "rgb.mp4")
+    if not os.path.exists(p):
+        raise FileNotFoundError("no rgb.mp4 in %s" % clip_dir)
+    r = imageio.get_reader(p)
+    frames = [np.asarray(x)[..., :3] for x in r]
+    r.close()
+    return np.stack(frames[:T]).astype(np.uint8)
+
+
+def _erode(m):
+    e = m.copy()
+    for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        e &= np.roll(np.roll(m, dy, axis=0), dx, axis=1)
+    return e

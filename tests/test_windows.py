@@ -1,0 +1,56 @@
+import numpy as np
+
+from physviol.annotate import windows as win
+
+
+def test_rasterise_to_windows_roundtrip():
+    for w in ([(1, 2)], [(0, 0)], [(1, 2), (5, 7)], [(0, 3), (5, 5), (9, 12)]):
+        a = win.rasterise(w, 13)
+        assert win.to_windows(a) == [tuple(x) for x in w]
+
+
+def test_repeated_family_produces_several_windows():
+    """A super-elastic bounce fires once per contact -- the reason windows are
+    a list rather than a single interval."""
+    a = np.zeros(20, bool)
+    for s, e in [(3, 4), (9, 10), (15, 16)]:
+        a[s:e + 1] = True
+    assert win.to_windows(a) == [(3, 4), (9, 10), (15, 16)]
+
+
+def test_observability_can_be_interrupted():
+    """Re-occlusion splits observability into several windows."""
+    a = np.array([0, 0, 1, 1, 0, 0, 1, 1, 1, 0], bool)
+    assert win.to_windows(a) == [(2, 3), (6, 8)]
+
+
+def test_observable_frames_needs_dynamic_ids_only():
+    """Including a static participant destroys the signal: pixels move from the
+    ball id to the floor id and the union footprint never changes."""
+    T, H, W = 3, 4, 4
+    sv = np.ones((T, H, W), np.uint16)          # all floor
+    si = np.ones((T, H, W), np.uint16)
+    sv[1, 0, 0] = 2                             # ball visible in valid only
+    assert win.observable_frames(sv, si, [2]).tolist() == [False, True, False]
+    # with the floor included, the union {1,2} is identical every frame
+    assert win.observable_frames(sv, si, [1, 2]).tolist() == [False, False, False]
+
+
+def test_occlusion_lag_is_reported_when_the_culprit_is_hidden():
+    """The three-clocks payoff: a violation fired while the actor is fully
+    occluded is not observable until it fails to re-emerge."""
+    T = 12
+    sv = np.zeros((T, 4, 4), np.uint16)
+    si = np.zeros((T, 4, 4), np.uint16)
+    # Actor visible except frames 5-8, when it is behind an occluder.
+    for t in range(T):
+        if not (5 <= t <= 8):
+            sv[t, 0, 0] = 2
+            si[t, 0, 0] = 2
+    # Removed from frame 6; in the invalid twin it never comes back.
+    for t in range(9, T):
+        si[t, 0, 0] = 0
+    obs = win.observable_frames(sv, si, [2])
+    assert not obs[:9].any(), "must not be observable while hidden"
+    assert obs[9:].all()
+    assert win.to_windows(obs) == [(9, T - 1)]

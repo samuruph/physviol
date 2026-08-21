@@ -1,0 +1,106 @@
+"""Spatiotemporal masks -- docs/PLAN.md 3.3.
+
+The primary annotation. Every mask is [T, H, W]: a value per pixel per frame, so
+"where" and "when" are answered by one array.
+
+**The union rule.** A naive "pixels of the culprit in the invalid render" is
+wrong for a sixth of the taxonomy -- a vanished body has *no* invalid-side
+pixels precisely because it vanished, and a teleported one is in two places. So
+
+    violation_mask[t] = footprint(culprit, invalid, t) | footprint(culprit, valid, t)
+
+which handles vanish (valid side only), spawn (invalid side only) and teleport
+(both, disjoint) with one rule. It is well-defined only because the twins are
+pixel-aligned and share instance indexing -- prefix identity paying off.
+"""
+from __future__ import annotations
+
+from typing import Dict, Sequence
+
+import numpy as np
+
+
+def footprint(seg: np.ndarray, ids: Sequence[int]) -> np.ndarray:
+    """[T,H,W] bool: pixels belonging to any of `ids`."""
+    s = seg[..., 0] if seg.ndim == 4 else seg
+    return np.isin(s, np.asarray(list(ids), dtype=s.dtype))
+
+
+def violation_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
+                   dynamic_causal_ids: Sequence[int],
+                   active: np.ndarray) -> np.ndarray:
+    """The union rule, gated to the frames where the violation is active.
+
+    Only *dynamic* causal bodies contribute. A static participant (the floor a
+    ball sinks through) would otherwise flood the mask with the entire surface;
+    it is recorded in `causal_mask` level 2 instead.
+    """
+    u = footprint(seg_valid, dynamic_causal_ids) | footprint(seg_invalid,
+                                                             dynamic_causal_ids)
+    return u & np.asarray(active, bool)[:, None, None]
+
+
+def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
+                primary_ids: Sequence[int], secondary_ids: Sequence[int],
+                active: np.ndarray, neighbourhood: int = 3) -> np.ndarray:
+    """uint8 [T,H,W]: 0 = nothing, 1 = primary culprit, 2.. = other participants.
+
+    Static participants are included only in a small neighbourhood of the
+    primary culprit, so "the floor" becomes "the bit of floor being passed
+    through" rather than the whole plane.
+    """
+    prim = violation_mask(seg_valid, seg_invalid, primary_ids, active)
+    out = np.zeros(prim.shape, np.uint8)
+    out[prim] = 1
+    if len(secondary_ids):
+        near = _dilate(prim, neighbourhood)
+        sec = (footprint(seg_valid, secondary_ids)
+               | footprint(seg_invalid, secondary_ids))
+        sec = sec & near & np.asarray(active, bool)[:, None, None] & ~prim
+        out[sec] = 2
+    return out
+
+
+def reference_mask(seg_valid: np.ndarray,
+                   dynamic_causal_ids: Sequence[int]) -> np.ndarray:
+    """Where the culprit *should* be -- its footprint in the valid twin.
+
+    Shipped on both clips of a pair and ungated in time, so a consumer always
+    has the counterfactual: the lawful trajectory the invalid clip departed
+    from. It is what makes the union rule legible rather than mysterious -- for
+    a vanished body this mask is the only place the object appears at all.
+
+    Distinct from `violation_mask`, which is the union over both twins gated to
+    the active window. This one is pure "should", with no claim about wrongness.
+    """
+    return footprint(seg_valid, dynamic_causal_ids)
+
+
+def divergence_map(rgb_valid: np.ndarray, rgb_invalid: np.ndarray) -> np.ndarray:
+    """|valid - invalid| in pixel space, normalised to [0,1].
+
+    NOT the violation region -- after t_event a twin pair diverges everywhere
+    downstream. Shipped for analysis and labelled as such; never a target.
+    """
+    a = rgb_valid[..., :3].astype(np.float32)
+    b = rgb_invalid[..., :3].astype(np.float32)
+    return (np.abs(a - b).max(axis=-1) / 255.0).astype(np.float16)
+
+
+def _dilate(mask: np.ndarray, k: int) -> np.ndarray:
+    """Square dilation by `k` px, per frame, without a SciPy dependency."""
+    out = mask.copy()
+    for dy in range(-k, k + 1):
+        for dx in range(-k, k + 1):
+            if dy == 0 and dx == 0:
+                continue
+            out |= np.roll(np.roll(mask, dy, axis=1), dx, axis=2)
+    return out
+
+
+def summarise(mask: np.ndarray) -> Dict[str, object]:
+    T = mask.shape[0]
+    per_frame = mask.reshape(T, -1).sum(axis=1)
+    return {"frames_nonempty": int((per_frame > 0).sum()),
+            "peak_pixels": int(per_frame.max()) if T else 0,
+            "peak_frame": int(np.argmax(per_frame)) if T else -1}
