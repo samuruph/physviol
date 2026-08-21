@@ -241,6 +241,21 @@ class Scenario:
         """
         return None
 
+    def rescript(self, spec: "SceneSpec", traj, t0: int,
+                 omega_scale: float) -> bool:
+        """Re-run the scenario's own constrained motion from `t0` with its
+        angular rate multiplied by `omega_scale`. Return False if unsupported.
+
+        The division of labour that keeps injectors scenario-agnostic: the
+        *scenario* owns its constraint (a pendulum knows it swings about a
+        pivot), the *injector* owns the intervention (angular momentum reverses).
+        Without this an `angular_momentum` injector would have to know what a
+        pendulum is, which is the per-combination code the whole design avoids.
+        Injectors dispatch on `spec.notes["constraint"]`, never on the
+        scenario's name.
+        """
+        return False
+
     @staticmethod
     def rng(seed: int) -> np.random.RandomState:
         # RandomState (not default_rng) so the stream is identical under
