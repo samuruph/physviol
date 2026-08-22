@@ -115,6 +115,9 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 
 
 # ------------------------------------------------------------------ panels
+SEV_GAMMA = 0.55   # display-only; see the note in _panel
+
+
 def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None):
     import cv2
     base = rgb[t].astype(np.float32)
@@ -137,7 +140,13 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None):
             img[r ^ _erode(r)] = np.array(C_REF, np.float32)
     elif kind == "sev":
         s = np.clip(sev[t], 0.0, 1.0)
-        heat = cv2.applyColorMap((s * 255).astype(np.uint8),
+        # Gamma for display only. A severity of 0.13 lands in the near-black
+        # end of inferno, so an honest linear ramp renders a real violation as
+        # an invisible smudge -- and "is the severity field sensible" is the
+        # question this panel exists to answer. The transform is monotone, so
+        # brighter still means worse and columns of a grid stay comparable, and
+        # the exact value is printed beside the scale bar either way.
+        heat = cv2.applyColorMap((s ** SEV_GAMMA * 255).astype(np.uint8),
                                  cv2.COLORMAP_INFERNO)[..., ::-1].astype(np.float32)
         a = (s > 0)[..., None].astype(np.float32) * 0.88
         img = base * 0.35 * (1 - a) + base * (1 - a) * 0.65 + heat * a
@@ -254,12 +263,19 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v):
 
 
 def _sev_scale(f, x, y, size, value):
-    """A 0..1 INFERNO ramp with the live value marked -- a dark purple blob is
-    otherwise indistinguishable from an empty map."""
+    """A 0..1 severity axis in INFERNO with the live value marked.
+
+    The axis stays linear in severity; only the colour lookup is gamma'd, so
+    the tick position reads off directly and a dark purple blob is still
+    distinguishable from an empty map."""
     import cv2
     bw, bh = size - 20, 9
     bx, by = x + 10, y + size - 26
-    ramp = np.linspace(0, 255, bw).astype(np.uint8)[None, :].repeat(bh, 0)
+    # The bar is a legend for the panel, so it has to carry the panel's gamma.
+    # A linear ramp under a gamma'd map would put a colour on the scale that
+    # never appears in the image beside it.
+    axis = np.linspace(0.0, 1.0, bw) ** SEV_GAMMA
+    ramp = (axis * 255).astype(np.uint8)[None, :].repeat(bh, 0)
     f[by:by + bh, bx:bx + bw] = cv2.applyColorMap(ramp,
                                                   cv2.COLORMAP_INFERNO)[..., ::-1]
     mx = bx + int(np.clip(value, 0, 1) * (bw - 1))

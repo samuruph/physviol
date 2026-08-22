@@ -4,9 +4,9 @@
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
 — all derived from the simulator, not from human annotation.
 
-> **Status: all 48 build cells runnable.** 13 scenarios × 17 violation families compose
-> through the trajectory seam; `physviol generate` walks the whole matrix.
-> Design doc: [docs/PLAN.md](docs/PLAN.md).
+> **Status: all 48 build cells generate, annotate and validate.** 13 scenarios × 17
+> violation families compose through the trajectory seam; `physviol generate` walks the whole
+> matrix in 8 minutes at Tier D. Design doc: [docs/PLAN.md](docs/PLAN.md).
 
 ---
 
@@ -44,8 +44,8 @@ python -m physviol.cli generate --debug --complexity L0 \
 
 `--debug` is Tier D: 128², 13 frames, 16 spp. `--complexity L0` is a solid background with a
 sun lamp, which needs no network and renders ~4.6× faster than the photographic L1. Roughly
-**8 s per pair**. This is the loop to iterate in — a bug found at Tier D is fixed for all
-three tiers.
+**10 s per pair**, including annotation and the overlay video. This is the loop to iterate in
+— a bug found at Tier D is fixed for all three tiers.
 
 ### b. Small subset — every family, one scenario, or a slice of the matrix
 
@@ -59,7 +59,8 @@ python -m physviol.cli generate --debug --complexity L0 --family solidity --seed
 # the whole matrix, but stop after 6 cells
 python -m physviol.cli generate --debug --complexity L0 -n 6 --seed 777
 
-# the whole matrix, one randomisation each: 48 cells, ~13 min at L0/Tier D
+# the whole matrix, one randomisation each: 48 cells in 8m12s at L0/Tier D
+# (measured: 61 clips, 107 MB, 10.3 s per pair including annotation and video)
 bash scripts/generate_sample.sh L0 D 777 strong 4
 ```
 
