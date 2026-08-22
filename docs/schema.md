@@ -105,7 +105,11 @@ Novelty claims (a `null` cross-reference) must be justified in [prior_art.md](pr
 window of length 1. `t_event_frame` / `t_end_frame` are the min and max across all windows
 and are retained for consumers that only want a coarse interval.
 
-**Invariant:** `t_event_frame ≤ t_observable_frame ≤ t_end_frame`.
+**Invariant:** `t_event_frame ≤ t_observable_frame` and `t_event_frame ≤ t_end_frame`.
+Observability arriving *after* `t_end` is ordinary rather than a bug: a super-elastic
+bounce adds its energy on one frame and the body has not visibly moved by the time the
+window shuts. `t_end` is when the intervention stops acting; when it becomes visible is
+a separate question, which is why there are three clocks and not one.
 
 `magnitude` is the knob we turned (exact); `peak_residual.value` is the measured consequence.
 `severity_bin` (`weak`/`medium`/`strong`) is derived from `magnitude`, not from model
@@ -242,7 +246,7 @@ without re-simulating.
 ## Cross-checks enforced by `physviol validate`
 
 1. jsonschema conformance against `meta.schema.json`
-2. `t_event_frame ≤ t_observable_frame ≤ t_end_frame`
+2. `t_event_frame ≤ t_observable_frame` and `t_event_frame ≤ t_end_frame`
 3. `violation_windows` sorted, non-overlapping, within `[0, num_frames)`; `t_event_frame` and
    `t_end_frame` equal their min and max
 4. `timelines.active` is exactly the rasterisation of `violation_windows`; likewise

@@ -374,3 +374,42 @@ def in_frame(spec, points: np.ndarray, margin: float = 0.04) -> np.ndarray:
         y = (p @ up) / z
     lim = TAN_HALF_FOV * (1.0 - margin)
     return (z > 1e-3) & (np.abs(x) <= lim) & (np.abs(y) <= lim)
+
+
+def first_impact(traj, body_id: int, exclude=(), min_speed: float = 0.3,
+                 min_normal_fraction: float = 0.3):
+    """(frame, other_id, normal) of this body's first real *impact*.
+
+    Distinct from `first_contact_any`, which returns the first contact of any
+    kind -- including the every-frame contact of a ball rolling along the floor.
+    `superelastic` needs a collision it can reflect: on a rolling contact the
+    normal is perpendicular to the motion, so flipping the normal component
+    changes nothing at all and the clip ships with a violation that never
+    happened. An impact is a contact the body is moving *into*.
+    """
+    c = traj.contacts
+    if not len(c):
+        return None
+    for k in np.argsort(np.asarray(c.frame)):
+        f = int(c.frame[k])
+        if f < 1 or f >= traj.num_frames:
+            continue
+        a, b = int(c.body_a[k]), int(c.body_b[k])
+        if body_id not in (a, b):
+            continue
+        other = b if a == body_id else a
+        if other in exclude:
+            continue
+        n = np.asarray(c.normal[k], np.float64)
+        if float(np.linalg.norm(n)) < 1e-6:
+            continue
+        n = n / float(np.linalg.norm(n))
+        bi = traj.index_of(body_id)
+        v = np.asarray(traj.lin_vel[f - 1, bi], np.float64)
+        speed = float(np.linalg.norm(v))
+        if speed < min_speed:
+            continue
+        if abs(float(np.dot(v, n))) < min_normal_fraction * speed:
+            continue
+        return f, other, n
+    return None

@@ -89,10 +89,18 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         seed, tier, spec_d.get("complexity", {}).get("name", "L0"))
     inj = injectors.get(family)
 
-    causal_ids: List[int] = list(plan_d["causal_body_ids"])
-    dynamic_ids = [b.segmentation_id for b in spec.bodies
-                   if b.segmentation_id in causal_ids and not b.static]
-    static_ids = [i for i in causal_ids if i not in dynamic_ids]
+    causal_ids: List[int] = [int(i) for i in plan_d["causal_body_ids"]]
+    # Order is the injector's, not the scene's. `causal_body_ids[0]` is the
+    # culprit the plan is *about* -- the body that failed to react, the half
+    # that split off, the actor whose bounce gained energy -- and the residual,
+    # the noise floor and `r_strong` are all measured on it. Re-deriving the
+    # order by walking `spec.bodies` silently picked whichever participant the
+    # scenario happened to declare first: in `pyramid_impact` that is a pyramid
+    # sphere rather than the falling cube, so `superelastic` scored the wrong
+    # body against the right reference and read 0.18 on a maximal violation.
+    dynamic = {int(b.segmentation_id) for b in spec.bodies if not b.static}
+    dynamic_ids = [i for i in causal_ids if i in dynamic]
+    static_ids = [i for i in causal_ids if i not in dynamic]
     primary_id = dynamic_ids[0] if dynamic_ids else causal_ids[0]
 
     # The plan's notes ARE the residual context. Each injector knows what its
@@ -170,7 +178,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # annotations, which answer "where can this be seen" rather than "when is
     # it happening". `active` remains the ground-truth timeline.
     observable = win_mod.observable_frames(seg_v, seg_i, dynamic_ids or causal_ids)
-    visible = active & observable
+    visible, s_visible = sev_mod.attribute_to_evidence(s_invalid, active, observable)
 
     # ---- 3.3 masks (the union rule) --------------------------------------
     vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, visible)
@@ -182,7 +190,6 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # Every dynamic culprit is painted, not just the primary. `global_gravity`
     # acts on the whole scene and `fission` on both halves; painting one body
     # would leave the severity field describing a fraction of the violation.
-    s_visible = sev_mod.carry_to_visible(s_invalid, active, observable)
     smap = sev_mod.paint(seg_i, {int(b): s_visible for b in dynamic_ids or [primary_id]},
                          active=visible)
     # The union rule can mark pixels the culprit does not occupy in the invalid
@@ -271,7 +278,12 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             "violation_windows": tinfo["violation_windows"],
             "observable_windows": tinfo["observable_windows"],
             "peak_residual": float(r_invalid.max()),
+            # The raw bounded score, and the one that actually ships. They
+            # differ whenever the residual peaks on a frame no camera can see,
+            # and reporting only the raw one hid a clip whose severity field
+            # was entirely zero behind a cheerful "peak_s=1.00".
             "peak_score": float(s_invalid.max()),
+            "peak_severity": float(sev_t.max()),
             "mask": masks_mod.summarise(vmask),
             "noise_floor": floor.to_dict()}
 

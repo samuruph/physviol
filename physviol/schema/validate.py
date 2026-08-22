@@ -66,9 +66,20 @@ def validate_clip(cdir: str) -> List[str]:
     T = int(m["num_frames"])
     te, to, tend = (int(v["t_event_frame"]), int(v["t_observable_frame"]),
                     int(v["t_end_frame"]))
-    # 2. ordering
-    if not (te <= to <= tend):
-        bad("t_event=%d <= t_observable=%d <= t_end=%d violated" % (te, to, tend))
+    # 2. ordering. Evidence cannot precede its cause, and a window cannot end
+    # before it starts.
+    #
+    # Deliberately NOT `te <= to <= tend`. Observability arriving *after* the
+    # window closes is ordinary, not a bug: a super-elastic bounce adds its
+    # energy on one frame and the body has not visibly moved by the time the
+    # window shuts, while a one-frame teleport can take another frame to shift
+    # a pixel at 128 squared. `t_end` is when the intervention stops acting;
+    # when it becomes visible is a separate question, which is the entire
+    # reason there are three clocks and not one.
+    if to < te:
+        bad("t_observable=%d precedes t_event=%d" % (to, te))
+    if tend < te:
+        bad("t_end=%d precedes t_event=%d" % (tend, te))
     # 3. windows sorted, disjoint, in range; endpoints agree
     wins = [tuple(w) for w in v["violation_windows"]]
     if not wins:

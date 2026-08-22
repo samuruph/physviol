@@ -233,15 +233,61 @@ class SuperElastic(Injector):
         # speed squared, so a speed gain of k shows up as k^2 - 1.
         return float(self.GAIN_BY_BIN["strong"] ** 2 - 1.0)
 
-    def _boosted(self, spec, traj, targets, t0, gain) -> Trajectory:
+    def _boosted(self, spec, traj, targets, t0, gain, normal=None) -> Trajectory:
+        """Reflect each body's *incoming* velocity with restitution `gain` > 1.
+
+        Amplifying the outgoing velocity instead is the obvious implementation
+        and it is wrong wherever the impact is heavily damped: a 2.2 kg cube
+        landing on a pyramid of 0.8 kg spheres has essentially stopped by the
+        next sampled frame, and 2.1x of nothing is nothing -- the clip shipped
+        with a total-energy residual of exactly zero. Restitution is a statement
+        about the ratio of outgoing to *incoming* speed, so that is what this
+        computes, and the resulting energy gain is k^2 - 1 no matter how the
+        simulator resolved the collision.
+        """
         out = self._clone(traj)
         for body in targets:
             bi = traj.index_of(int(body.segmentation_id))
-            v0 = traj.lin_vel[t0, bi].astype(np.float64) * gain
-            self._rewrite_from(spec, traj, out, body, t0 + 1, v0=v0,
+            v_in = traj.lin_vel[t0 - 1, bi].astype(np.float64)
+            n = (np.asarray(normal, np.float64) if normal is not None
+                 else self._contact_normal(traj, t0, int(body.segmentation_id),
+                                           v_in))
+            # Reflection is quadratic in the normal, so its sign does not
+            # matter -- only that it is the *impact's* normal.
+            v_out = v_in - (1.0 + gain) * float(np.dot(v_in, n)) * n
+            out.lin_vel[t0, bi, :] = v_out.astype(np.float32)
+            self._rewrite_from(spec, traj, out, body, t0 + 1, v0=v_out,
                                restitution=min(0.98, float(body.restitution) * gain))
-            out.lin_vel[t0, bi, :] = v0.astype(np.float32)
         return out
+
+    @staticmethod
+    def _contact_normal(traj, frame: int, body_id: int, v_in) -> np.ndarray:
+        """The normal of the frame's most head-on contact for this body.
+
+        Taking the *first* matching contact is what made a ball-ball collision
+        reflect about the floor: two balls rolling into each other are touching
+        the ground on the same frame, and the ground's normal is perpendicular
+        to their motion, so the reflection was the identity and the "bouncier"
+        ball sailed straight through its partner. Scoring by how much of the
+        body's velocity lies along each normal picks the collision that is
+        actually happening.
+        """
+        best, best_score = np.array([0.0, 0.0, 1.0]), -1.0
+        c = traj.contacts
+        for k in range(len(c)):
+            if int(c.frame[k]) != int(frame):
+                continue
+            if body_id not in (int(c.body_a[k]), int(c.body_b[k])):
+                continue
+            cand = np.asarray(c.normal[k], np.float64)
+            mag = float(np.linalg.norm(cand))
+            if mag < 1e-6:
+                continue
+            cand = cand / mag
+            score = abs(float(np.dot(v_in, cand)))
+            if score > best_score:
+                best, best_score = cand, score
+        return best
 
     def _targets(self, spec, actor, partner_id):
         out = [actor]
@@ -255,10 +301,15 @@ class SuperElastic(Injector):
         actor = self._primary(spec)
         if actor is None:
             return None
-        event = _contact_event(spec, traj, actor)
-        if event is None:
+        # An impact, not merely a contact: reflecting the normal component of a
+        # rolling ball's velocity along the floor changes nothing, and the clip
+        # would ship claiming a super-elastic bounce that never happened.
+        dormant = tuple(int(b.segmentation_id) for b in spec.bodies if b.dormant)
+        impact = _geom.first_impact(traj, int(actor.segmentation_id),
+                                    exclude=dormant)
+        if impact is None:
             return None
-        t0, partner_id, _ = event
+        t0, partner_id, normal = impact
         if not (1 <= t0 < traj.num_frames - 2):
             return None
 
@@ -267,8 +318,21 @@ class SuperElastic(Injector):
         # Roll the boosted trajectory forward here so the windows can be the
         # frames energy is *actually* gained on, rather than a guess. `apply`
         # recomputes the same thing deterministically.
-        preview = self._boosted(spec, traj, targets, t0, gain)
+        preview = self._boosted(spec, traj, targets, t0, gain, normal)
         windows = self._gain_windows(preview, targets, traj, t0)
+
+        # The reference has to be measured, not declared. Boosting the speed by
+        # k multiplies *kinetic* energy by k^2, but the law scores total
+        # mechanical energy, so the achievable gain depends on how much of the
+        # body's energy is potential when it bounces. A cube striking the apex
+        # of a pyramid is most of a metre up and carries a large potential
+        # term, so a declared reference of k^2 - 1 is unreachable there and
+        # every clip in that scenario scores a fraction of what it deserves.
+        top = _top_of_partner(spec, traj, partner_id, t0)
+        strong_preview = self._boosted(spec, traj, targets, t0,
+                                       self.GAIN_BY_BIN["strong"], normal)
+        r_strong = self._measure(strong_preview, int(actor.segmentation_id),
+                                 "energy_at_contact", {"surface_top": top})
 
         return InterventionPlan(
             family=self.family, kind="repeated", t_event=windows[0][0],
@@ -280,8 +344,10 @@ class SuperElastic(Injector):
             magnitude=float(gain ** 2 - 1.0),
             magnitude_unit="energy_gain_ratio", severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
-                   "surface_top": _top_of_partner(spec, traj, partner_id, t0),
+                   "surface_top": top,
                    "speed_gain": gain, "n_bounces": len(windows),
+                   "r_strong": float(r_strong),
+                   "impact_normal": [float(x) for x in normal],
                    "targets": [int(b.segmentation_id) for b in targets]})
 
     @staticmethod
@@ -324,7 +390,8 @@ class SuperElastic(Injector):
         targets = self._targets(spec, actor, plan.notes["targets"][-1])
         out = self._boosted(spec, traj, targets,
                             int(plan.params["first_contact_frame"]),
-                            float(plan.params["speed_gain"]))
+                            float(plan.params["speed_gain"]),
+                            plan.notes.get("impact_normal"))
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"

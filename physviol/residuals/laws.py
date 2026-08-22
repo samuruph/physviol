@@ -127,12 +127,34 @@ def linear_momentum(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
 
 @register("energy_at_contact")
 def energy_at_contact(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
-    """Super-elastic: fractional kinetic-energy *gain* across a frame."""
+    """Super-elastic: fractional gain in *total mechanical* energy across a frame.
+
+    Kinetic energy alone is the wrong quantity, and wrong in a way that quietly
+    destroys the signal: a body in free fall gains kinetic energy on every
+    single frame, perfectly lawfully, by trading height for speed. Scored on
+    kinetic energy the valid twin registers a large residual throughout its
+    fall, the noise floor calibrated on it swallows the real bounce, and a
+    genuine super-elastic clip comes out with a severity field of exactly zero.
+
+    Potential energy is measured from `surface_top`, so free flight conserves
+    the total, a lawful bounce loses some to restitution, and only energy
+    arriving from nowhere shows up. No contact gate is needed -- the law is now
+    true on every frame, which is what a conservation law should be.
+    """
     m = float(traj.mass[b])
+    g = float(np.linalg.norm(traj.gravity))
+    datum = float(ctx.get("surface_top", 0.0))
+    r = max(float(traj.radius[b]), 1e-9)
     v = traj.lin_vel[:, b, :].astype(np.float64)
-    e = 0.5 * m * np.sum(v * v, axis=1)
+    h = traj.pos[:, b, 2].astype(np.float64) - datum
+    e = 0.5 * m * np.sum(v * v, axis=1) + m * g * h
+
     out = np.zeros_like(e)
-    prev = np.maximum(e[:-1], 1e-9)
+    if e.shape[0] < 2:
+        return out
+    # Scale by the body's own gravitational energy over one radius, so a body
+    # momentarily at rest at the datum does not divide a small gain by ~0.
+    prev = np.maximum(e[:-1], m * g * r)
     out[1:] = np.maximum(0.0, e[1:] - e[:-1]) / prev
     return out
 

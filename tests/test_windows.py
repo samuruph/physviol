@@ -65,12 +65,12 @@ def test_severity_is_attributed_to_the_frame_it_becomes_visible():
     frame that shows nothing. Carrying it to the next observable frame is what
     keeps the severity field honest about how bad the violation was.
     """
-    from physviol.annotate.severity import carry_to_visible
+    from physviol.annotate.severity import attribute_to_evidence
 
     active = np.array([0, 0, 1, 1, 1, 1, 0, 0], bool)
     observable = np.array([0, 0, 0, 1, 1, 1, 1, 1], bool)
     s = np.array([0.0, 0.0, 0.9, 0.2, 0.3, 0.1, 0.0, 0.0])
-    out = carry_to_visible(s, active, observable)
+    gate, out = attribute_to_evidence(s, active, observable)
     assert out[2] == 0.0, "an invisible frame must not carry severity"
     assert out[3] == pytest.approx(0.9), "the spike must surface where it can be seen"
     assert out[4] == pytest.approx(0.3)
@@ -84,9 +84,40 @@ def test_carry_to_visible_is_the_identity_when_nothing_is_hidden():
     release into a monotone step, losing exactly the time variation the
     severity field exists to express.
     """
-    from physviol.annotate.severity import carry_to_visible
+    from physviol.annotate.severity import attribute_to_evidence
 
     active = np.array([0, 1, 1, 1, 1, 0], bool)
     s = np.array([0.0, 0.5, 1.0, 1.0, 0.5, 0.0])
-    out = carry_to_visible(s, active, np.ones(6, bool))
+    gate, out = attribute_to_evidence(s, active, np.ones(6, bool))
     assert out == pytest.approx(s * active)
+    assert list(gate) == list(active)
+
+
+def test_evidence_after_the_window_still_gets_annotated():
+    """A violation whose consequence only shows up once the window has closed.
+
+    `ball_collision x superelastic` adds its energy over two frames and the
+    body has not visibly moved by the time the window shuts, so gating strictly
+    on `active AND observable` left the clip with an empty mask and an
+    all-zero severity field -- internally consistent and useless. The severity
+    spills to the first observable frame instead.
+    """
+    from physviol.annotate.severity import attribute_to_evidence
+
+    active = np.array([0, 0, 0, 0, 1, 1, 0, 0], bool)
+    observable = np.array([0, 0, 0, 0, 0, 0, 1, 1], bool)
+    s = np.array([0.0, 0.0, 0.0, 0.0, 0.8, 0.2, 0.0, 0.0])
+    gate, out = attribute_to_evidence(s, active, observable)
+    assert gate[6] and out[6] == pytest.approx(0.8)
+    assert not gate[:6].any() and not gate[7]
+
+
+def test_a_never_observable_window_annotates_nothing():
+    """Removed while fully occluded: no evidence anywhere, and the annotation
+    must say so rather than invent a region."""
+    from physviol.annotate.severity import attribute_to_evidence
+
+    active = np.array([0, 1, 1, 1, 0], bool)
+    gate, out = attribute_to_evidence(np.array([0, 1.0, 1.0, 1.0, 0]),
+                                      active, np.zeros(5, bool))
+    assert not gate.any() and not out.any()

@@ -28,7 +28,7 @@ class ProjectileToss(Scenario):
         # Aim the arc so the apex lands mid-clip and the body is still airborne
         # at the last frame -- free flight must cover the whole window.
         flight = tier.num_frames / float(tier.fps)
-        vz = float(9.81 * flight * rng.uniform(0.55, 0.70))
+        vz = float(9.81 * flight * rng.uniform(0.48, 0.60))
         vx = float(rng.uniform(1.6, 2.8) * rng.choice([-1.0, 1.0]))
         z0 = float(rng.uniform(0.6, 1.1))
 
@@ -45,7 +45,10 @@ class ProjectileToss(Scenario):
             bodies=[C.ground(cx, self.SEG_FLOOR), ball,
                     C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 1.2)),
-            camera_position=(0.4, -9.0, 2.6), camera_look_at=(0.0, 0.0, 1.8),
+            # Aimed high with room to spare: `antigravity` and `phantom_impulse`
+            # push the actor *up*, and a frame with no headroom makes them clamp
+            # themselves down to stay in shot.
+            camera_position=(0.4, -10.0, 2.9), camera_look_at=(0.0, 0.0, 2.2),
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
             notes={"radius": radius, "v0": [vx, 0.0, vz],
                    "flight_seconds": flight, "actor_kind": kind})

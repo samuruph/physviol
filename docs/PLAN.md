@@ -660,7 +660,7 @@ Rasterised into **`timelines.npz`** so consumers never expand intervals themselv
   `observable_windows = [[19,26],[38,50]]`
 - `instant` violations are the degenerate case, a single window of length 1
 
-**Invariant, enforced by `physviol validate`:** `t_event ≤ t_observable ≤ t_end`;
+**Invariant, enforced by `physviol validate`:** `t_event ≤ t_observable` and `t_event ≤ t_end`;
 `violation_windows` are sorted, non-overlapping, and within `[0, T)`; `active` is exactly the
 rasterisation of `violation_windows`.
 
@@ -1137,7 +1137,7 @@ Ordered by when it runs; the first four catch real bugs.
 - **`tests/test_residual_zero_on_valid.py`** — every law residual on valid clips stays below
   the calibrated noise floor. Catches injector leakage into the control arm.
 - **`tests/test_windows.py`** — `violation_windows` are sorted, non-overlapping, in range;
-  `active[T]` is exactly their rasterisation; `t_event ≤ t_observable ≤ t_end`;
+  `active[T]` is exactly their rasterisation; `t_event ≤ t_observable`;
   `severity_t[t] == severity_map[t].max()`.
 - **`tests/test_mask_union.py`** — for `permanence`-vanish and `continuity`-teleport clips,
   `violation_mask` is **non-empty** on every frame that is active **and** observable, and

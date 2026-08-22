@@ -107,10 +107,11 @@ def cmd_generate(a) -> int:
                                  overlay=not a.no_overlay, only=produced):
                 done.append(res)
                 print("  %-15s seed=%-5d %-17s %-6s t_event=%-3d lag=%-2d "
-                      "vwin=%-13s peak_s=%.2f"
+                      "vwin=%-13s sev=%.2f"
                       % (scenario, seed, res["family"], res["severity"],
                          res["t_event"], res["observability_lag"],
-                         str(res["violation_windows"])[:13], res["peak_score"]))
+                         str(res["violation_windows"])[:13],
+                         res.get("peak_severity", res["peak_score"])))
     dt = time.perf_counter() - t0
     print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
           % (len(done), dt, dt / max(len(done), 1), rel))

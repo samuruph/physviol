@@ -84,40 +84,66 @@ def paint(seg: np.ndarray, score_by_body: Dict[int, np.ndarray],
     return out.astype(np.float16)
 
 
-def carry_to_visible(score: np.ndarray, active: np.ndarray,
-                     observable: np.ndarray) -> np.ndarray:
-    """Attribute severity to the frame where the evidence for it arrives.
+def attribute_to_evidence(score: np.ndarray, active: np.ndarray,
+                          observable: np.ndarray):
+    """Place each window's severity on the frames where its evidence shows.
 
-    Some violations are a single spike in the residual, on a frame that shows
-    nothing. A super-elastic bounce changes the velocity at the contact frame
-    while the body is still in exactly the same place in both twins; a
-    pendulum's angular momentum reverses one frame before the arc visibly
-    turns. Painting severity strictly per-frame puts the whole magnitude on an
-    invisible frame and leaves every visible one reading ~0 -- a strong
-    violation annotated as harmless.
+    Returns `(gate, attributed)`: the frames the spatial annotations cover, and
+    the score to paint on them.
 
-    So within each violation window, severity accumulated while nothing was
-    observable is carried to the next observable frame. The physical reading:
-    inside an active window, what you can see cannot be less severe than what
-    has already happened and not yet been shown. Windows never carry into each
-    other, and where nothing is hidden -- which is most cells -- this is exactly
-    the identity, so a shaped intervention like `antigravity` keeps its rise and
-    fall rather than being flattened into a running maximum.
+    Three cases, and the same rule handles all of them.
+
+    * **Nothing hidden** -- the common case. Every active frame is observable,
+      so this is the identity and a shaped intervention like `antigravity`
+      keeps its rise and fall rather than being flattened into a running
+      maximum.
+    * **Hidden frames inside the window.** A super-elastic bounce changes the
+      velocity while the body is still in exactly the same place in both twins;
+      a pendulum's angular momentum reverses a frame before the arc turns.
+      Severity accumulated on those frames is carried to the next observable
+      one, so the magnitude lands where it can be seen instead of reading 0.00
+      on every frame that shows anything.
+    * **No observable frame in the window at all.** The evidence arrives after
+      the intervention has stopped acting -- a two-frame bounce whose
+      displacement first registers a frame later. The severity spills to the
+      first observable frame after the window, because the alternative is an
+      invalid clip that ships with an empty mask and a zero severity field:
+      technically consistent, and useless to train on.
+
+    A window whose culprit is never observable at all -- removed while fully
+    occluded -- correctly yields nothing. That is the case the observability lag
+    exists to describe, and inventing a region for it would be a lie.
     """
     s = np.asarray(score, np.float64)
     act = np.asarray(active, bool)
     obs = np.asarray(observable, bool)
-    out = np.zeros_like(s)
-    carried = 0.0
-    for t in range(s.shape[0]):
+    T = int(s.shape[0])
+    gate = np.zeros((T,), bool)
+    out = np.zeros((T,), np.float64)
+
+    t = 0
+    while t < T:
         if not act[t]:
-            carried = 0.0
+            t += 1
             continue
-        carried = max(carried, float(s[t]))
-        if obs[t]:
-            out[t] = carried
-            carried = 0.0
-    return out
+        end = t
+        while end + 1 < T and act[end + 1]:
+            end += 1
+
+        carried, seen = 0.0, False
+        for f in range(t, end + 1):
+            carried = max(carried, float(s[f]))
+            if obs[f]:
+                out[f], gate[f], carried, seen = carried, True, 0.0, True
+        if not seen:
+            for f in range(end + 1, T):
+                if act[f]:
+                    break            # the next window owns everything from here
+                if obs[f]:
+                    out[f], gate[f] = carried, True
+                    break
+        t = end + 1
+    return gate, out
 
 
 def temporal_profile(severity_map: np.ndarray) -> np.ndarray:
