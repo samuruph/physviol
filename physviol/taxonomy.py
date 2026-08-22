@@ -111,7 +111,7 @@ class Scenario(NamedTuple):
 
 SCENARIOS: Dict[str, Scenario] = {
     "ball_drop": Scenario(
-        "sphere falls to a floor and bounces",
+        "sphere or cube falls to a floor and bounces",
         "free fall -> contact -> rebound", False, "rigid", "LikePhys Ball Drop"),
     "ball_collision": Scenario(
         "two spheres roll toward each other",
@@ -135,7 +135,7 @@ SCENARIOS: Dict[str, Scenario] = {
         "cube dropped onto a sphere pyramid",
         "multi-body contact chain", False, "rigid", "LikePhys Pyramid Impact"),
     "pendulum_swing": Scenario(
-        "bob on a rigid rod",
+        "bob on a rigid rod, swung from a pivot (scripted, not solved)",
         "constrained periodic arc", False, "rigid", "LikePhys Pendulum"),
     "resting_table": Scenario(
         "several bodies at rest on a surface",
@@ -150,7 +150,7 @@ SCENARIOS: Dict[str, Scenario] = {
         "MOVi-style multi-object toss",
         "dense collisions, heavy occlusion", True, "rigid", "MOVi baseline"),
     "granular_pour": Scenario(
-        "~200 small spheres poured from a spout into a bowl",
+        "a loose column of grains falls into an open box (40 at Tier D, 96 above)",
         "streaming flow, accumulation, break-up", False, "granular",
         "LikePhys Faucet Flow (as granular, not fluid)"),
 }

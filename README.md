@@ -70,7 +70,8 @@ what you want for a sweep.
 
 ```bash
 # Tier A (256px, 25 frames), photographic backgrounds, 6 randomisations per cell.
-# 48 cells x 6 = 288 pairs = 576 clips.
+# 48 cells x 6 = 288 invalid clips, sharing 78 valid twins (one per
+# scenario+seed, since every family of a scenario renders in the same run).
 python -m physviol.cli generate --tier A --complexity L1 \
     --variants 6 --seed 100000 --severity strong --keep-going \
     --outdir out/physviol_v0
@@ -83,6 +84,10 @@ python -m physviol.cli generate --tier A --complexity L1 \
 
 python -m physviol.cli validate out/physviol_v0
 ```
+
+One valid clip serves every family of the same scenario and seed: the twins are
+bit-identical by construction, so rendering it once is both correct and cheaper.
+`validate` expects exactly that shape — one `valid` and one or more `invalid` per `pair_uid`.
 
 **`--variants N` is the randomisation knob.** Each variant is a fresh seed, and a seed drives
 every free parameter a scenario has: sizes, speeds, drop heights, restitution, colours, the

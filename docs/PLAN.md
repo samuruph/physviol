@@ -295,6 +295,16 @@ again, and re-emerges. So both are stored as **lists of intervals**:
   actually present. Derived from pixel evidence, so it lags, and it can be interrupted by
   re-occlusion. Not simply a shifted copy of `violation_windows`.
 
+The two are not interchangeable, and the difference is what the spatial annotations are gated
+on. `active` is ground truth about the *world*: the frames on which the law is being broken.
+`observable` is about the *image*: the frames on which the two renders differ at all. A
+super-elastic bounce is unlawful the instant the contact resolves, while the body is still in
+exactly the same place in both twins — active, not yet observable. `violation_mask` and
+`severity_map` answer "where can this be seen" and so are gated on `active AND observable`;
+`timelines.active` keeps the unhedged truth. Severity accumulated while nothing is observable
+is carried to the next observable frame inside the same window, so a violation whose residual
+is a single invisible spike is not annotated as harmless.
+
 Both are also rasterised to per-frame boolean timelines (`active[T]`, `observable[T]`) so a
 consumer never has to expand intervals itself.
 
@@ -513,7 +523,7 @@ plus a granular stand-in for the fluid domain.
 | `rolling_ramp` | cube tumbles down a raised ramp and off its lip | rolling contact, then a short free flight | no | new |
 | `shadow_track` | object translates under a fixed light | a clean, trackable cast shadow | no | LikePhys *Moving Shadow* |
 | `clutter_toss` | MOVi-style multi-object toss | dense collisions, heavy occlusion | implicit | MOVi baseline |
-| `granular_pour` | ~200 small spheres poured from a spout into a bowl | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
+| `granular_pour` | a loose column of grains falls into an open box (40 at Tier D, 96 above) | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
 
 ### Which families can be injected into which scenarios
 
@@ -661,7 +671,8 @@ value per pixel per frame, so "where" and "when" are answered by the same array.
 
 | array | shape | dtype | meaning |
 |---|---|---|---|
-| **`violation_mask`** | `[T,H,W]` | bool | **the primary annotation.** True on the culprit body's pixels, on frames where the violation is active. |
+| **`violation_mask`** | `[T,H,W]` | bool | **the primary annotation.** True on the culprit body's pixels, on frames where the violation is active **and visible**. |
+| **`reference_mask`** | `[T,H,W]` | bool | where the culprit *should* be — its footprint in the valid twin, ungated in time. Shipped on **both** clips. |
 | `causal_mask` | `[T,H,W]` | uint8 | `0` = nothing, `1` = primary culprit, `k ≥ 2` = consequence body `k−1`. Separates cause from effect spatially. |
 | `seg` | `[T,H,W]` | uint16 | instance ids — the substrate every other mask is painted into |
 | `divergence_map` | `[T,H,W]` | f16 | `\|valid − invalid\|` in pixel space. **Shipped for analysis, NOT the violation region, never a training target.** |
@@ -731,7 +742,18 @@ severity_map[t, y, x] = s(b, t)   where  b = seg[t, y, x],  b ∈ causal_body_id
 
 Occlusion is already resolved by `seg`, so no depth reasoning is needed. Where the mask rule
 in §3.3 pulls in the valid twin's footprint (vanish, teleport), the score is painted there
-too. Overlaps resolve by `max`.
+too. Overlaps resolve by `max`. Every *dynamic* culprit is painted, not only the primary one:
+`global_gravity` acts on the whole scene and `fission` on both halves, and painting one body
+would describe a fraction of the violation.
+
+Painting is gated on `active AND observable`, like the mask. Severity that accrues while
+nothing is observable is carried forward to the next observable frame **within the same
+window** — otherwise a violation whose residual is a single spike on an invisible frame
+(a super-elastic bounce changes velocity while the pixels are still identical; a pendulum's
+angular momentum reverses a frame before the arc turns) paints its whole magnitude where
+nobody can see it and reads as `0.00` on every frame that shows anything. Where nothing is
+hidden the carry is the identity, so a shaped intervention keeps its rise and fall rather
+than becoming a running maximum.
 
 **Step 5 — the temporal profile.** `severity_t[t] = max_b s(b,t)`, stored in
 `timelines.npz`. This is the 1-D curve a temporal model regresses; `severity_map` is the 3-D
@@ -1118,14 +1140,15 @@ Ordered by when it runs; the first four catch real bugs.
   `active[T]` is exactly their rasterisation; `t_event ≤ t_observable ≤ t_end`;
   `severity_t[t] == severity_map[t].max()`.
 - **`tests/test_mask_union.py`** — for `permanence`-vanish and `continuity`-teleport clips,
-  `violation_mask` is **non-empty** during the active window. This is the test that would
+  `violation_mask` is **non-empty** on every frame that is active **and** observable, and
+  empty on active frames where nothing is observable. This is the test that would
   catch the naive invalid-only footprint rule.
 - **Visual check, every phase, before scaling.** `physviol viz overlay <clip>` burns the
   violation mask, the severity heatmap, the window bar and all three clocks onto the RGB and
   writes an mp4; `contact_sheet` builds an HTML gallery. Never trust a metric built on an
   unviewed label.
 - **`physviol validate`** — jsonschema over every `meta.json`, plus cross-checks: mask
-  non-empty while active, `causal_body_ids` present in `seg.npz`, every asset carries a
+  non-empty while active *and* observable, `causal_body_ids` present in `seg.npz`, every asset carries a
   license string, `prefix_identical_verified` true, `family`/`domain` consistent with
   `taxonomy.py`, and `(scenario, family)` present in the compatibility matrix.
 - **Difficulty calibration (end of Phase 1)** — V-JEPA-2 surprise, a VLM prompt, and a
