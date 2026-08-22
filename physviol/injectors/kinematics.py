@@ -476,11 +476,7 @@ class Newton1Inertia(Injector):
             magnitude_unit="dv_over_g_dt", severity_bin=severity_bin,
             notes={"mode": mode, "radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "speed_at_event": speed,
-                   # This family fires where nothing is touching the body, so
-                   # the momentum residual is only meaningful there. See the
-                   # note in laws.linear_momentum.
-                   "ignore_contact_frames": True})
+                   "speed_at_event": speed})
 
     def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
         out = self._clone(traj)

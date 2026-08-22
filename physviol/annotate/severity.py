@@ -44,11 +44,33 @@ class NoiseFloor:
 
     @staticmethod
     def calibrate(valid_residuals: Sequence[np.ndarray]) -> "NoiseFloor":
+        """Median and a MAD-derived sigma, not mean and standard deviation.
+
+        The floor is meant to capture the *typical* residual a lawful clip
+        carries -- solver error, finite-difference noise -- so it has to survive
+        rare enormous spikes, and lawful clips are full of them. Kubric reports
+        a contact force rather than an impulse, so the momentum balance never
+        closes on a real landing: a perfectly legal `ball_drop` reads 208 on the
+        frame it hits the floor. Averaged in, that put mu at 20.9 against a
+        family reference of 5.5 -- a negative denominator -- and a clean
+        phantom-impulse signal of 5.4 scored as exactly zero.
+
+        Gating those frames out instead was the first attempt and it was worse:
+        it fixed the airborne scenarios and silently zeroed every family staged
+        on a body that rests on a table or slides down a ramp, which is in
+        contact on every frame it exists. A robust estimator fixes both without
+        anyone having to declare which frames to trust.
+
+        1.4826 is the constant that makes the MAD a consistent estimator of the
+        standard deviation for normally distributed data.
+        """
         if not len(valid_residuals):
             return NoiseFloor(0.0, 0.0, 0)
         flat = np.concatenate([np.asarray(r, np.float64).ravel()
                                for r in valid_residuals])
-        return NoiseFloor(float(flat.mean()), float(flat.std()), int(flat.size))
+        mu = float(np.median(flat))
+        mad = float(np.median(np.abs(flat - mu)))
+        return NoiseFloor(mu, 1.4826 * mad, int(flat.size))
 
 
 def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float) -> np.ndarray:

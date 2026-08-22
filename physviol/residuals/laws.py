@@ -148,25 +148,6 @@ def linear_momentum(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     denom = max(m * float(np.linalg.norm(g)) * dt, 1e-9)
     out = (np.linalg.norm(resid, axis=1) / denom).astype(np.float64)
 
-    if ctx.get("ignore_contact_frames"):
-        # Kubric reports a contact *force* rather than an impulse, so the
-        # momentum balance never closes on a real bounce: a lawful ball_drop
-        # spikes to 208 on the frame it lands. Averaged into the noise floor
-        # that put mu at 20.9 against a reference of 5.5 -- a negative
-        # denominator, and a clean phantom-impulse signal of 5.4 scored as
-        # exactly zero.
-        #
-        # Families that fire *away* from contact ask for this gate; the ones
-        # whose whole subject is a collision (newton2, newton3) must not, which
-        # is why it is opt-in per injector rather than always on.
-        touching = np.zeros((traj.num_frames,), bool)
-        if len(c):
-            for k in range(len(c)):
-                f = int(c.frame[k])
-                if 0 <= f < traj.num_frames and bid in (int(c.body_a[k]),
-                                                        int(c.body_b[k])):
-                    touching[max(0, f - 1):f + 2] = True
-        out = out * (~touching).astype(np.float64)
     return out
 
 
