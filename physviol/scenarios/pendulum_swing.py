@@ -61,7 +61,11 @@ class PendulumSwing(Scenario):
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), post, rod, bob],
+            # Bob before rod: `_primary` takes the first actor, and a family
+            # that removes or resizes "the pendulum" should act on the weight,
+            # not on the stick holding it. Both stay actors because
+            # `angular_momentum` re-solves the whole assembly.
+            bodies=[C.ground(cx, self.SEG_FLOOR), post, bob, rod],
             lights=C.lights(cx, look_at=(0, 0, 1.4)),
             camera_position=(0.2, -6.8, 1.9), camera_look_at=(0.0, 0.0, 1.5),
             floor_level=0.0, complexity=complexity,

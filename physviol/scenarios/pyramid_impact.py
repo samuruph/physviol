@@ -63,7 +63,15 @@ class PyramidImpact(Scenario):
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"radius": r, "apex_z": apex_z, "drop_height": drop,
-                   "pyramid_ids": list(self.SEG_BALLS)})
+                   "pyramid_ids": list(self.SEG_BALLS),
+                   # The falling cube is the actor, but it is not the
+                   # interesting body to break. What a video generator gets
+                   # wrong here is the *scatter*: a struck sphere driven
+                   # through the ground or through its neighbour. The apex goes
+                   # first because it takes the impact directly.
+                   "family_targets": {
+                       "solidity": [self.SEG_BALLS[3], self.SEG_BALLS[0],
+                                    self.SEG_BALLS[1], self.SEG_BALLS[2]]}})
 
 
 register(PyramidImpact())

@@ -36,6 +36,44 @@ def _tops(spec):
     return sorted(out, key=lambda r: -r[0])
 
 
+def _boxes(spec):
+    """Static cubes that stand up in the world, as (centre, half-extents, id).
+
+    Slabs the bodies rest *on* are handled by `_ground`; this is for the ones
+    they run into. A cube taller than it is thin in some horizontal direction
+    is a wall, not a floor.
+    """
+    out = []
+    for b in spec.bodies:
+        if not b.static or b.kind != "cube":
+            continue
+        sx, sy, sz = (float(x) for x in b.scale)
+        if sz <= min(sx, sy):
+            continue                       # lies flat: it is a floor
+        out.append((np.asarray(b.position, np.float64),
+                    np.array([sx, sy, sz]), int(b.segmentation_id)))
+    return out
+
+
+def _box_hit(box, point, radius):
+    """Outward unit normal if the sphere overlaps the box, else (None, None)."""
+    centre, half, seg = box
+    d = np.asarray(point, np.float64) - centre
+    clamped = np.clip(d, -half, half)
+    delta = d - clamped
+    dist = float(np.linalg.norm(delta))
+    if dist > radius:
+        return None, None
+    if dist > 1e-9:
+        return delta / dist, seg
+    # Centre inside the box: push out along the shallowest axis.
+    slack = half - np.abs(d)
+    axis = int(np.argmin(slack))
+    n = np.zeros(3)
+    n[axis] = 1.0 if d[axis] >= 0 else -1.0
+    return n, seg
+
+
 def _ground(tops, x, y, floor_level):
     for top, cx, cy, hx, hy, seg in tops:
         if abs(x - cx) <= hx and abs(y - cy) <= hy:
@@ -51,6 +89,7 @@ def roll(spec, scenario=None) -> Trajectory:
     h = dt / SUBSTEPS
     g = np.asarray(spec.gravity, np.float64)
     tops = _tops(spec)
+    boxes = _boxes(spec)
 
     pos = np.zeros((T, B, 3), np.float64)
     quat = np.zeros((T, B, 4), np.float64)
@@ -87,6 +126,21 @@ def roll(spec, scenario=None) -> Trajectory:
                     if abs(v[i, 2]) < 0.06:
                         v[i, 2] = 0.0
                     note(f, seg[i], sid, [0.0, 0.0, 1.0], p[i].tolist())
+                # Sphere against a static box, treated as axis-aligned. Needed
+                # because a scenario whose central event the mock cannot
+                # produce is a blind spot in the only test that covers every
+                # cell: without it `barrier_pass` never touches its wall, and
+                # `solidity` there quietly falls back to sinking through the
+                # floor -- exactly the failure that scenario exists to avoid.
+                for box in boxes:
+                    n, sid_b = _box_hit(box, p[i], r[i])
+                    if n is None:
+                        continue
+                    vn = float(np.dot(v[i], n))
+                    if vn >= 0.0:
+                        continue
+                    v[i] -= (1.0 + float(bodies[i].restitution)) * vn * n
+                    note(f, seg[i], sid_b, n.tolist(), p[i].tolist())
             for i in range(B):
                 for j in range(i + 1, B):
                     if not (free[i] and free[j]):

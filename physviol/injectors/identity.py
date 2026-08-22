@@ -201,8 +201,14 @@ class Fission(Injector):
 
     family = "fission"
     persistent = True
-    SEPARATION_BY_BIN = {"weak": 0.7, "medium": 1.6, "strong": 2.8}   # m/s
-    HALF_SCALE = 2.0 ** (-1.0 / 3.0)     # halves the volume, keeps the shape
+    SEPARATION_BY_BIN = {"weak": 1.2, "medium": 2.4, "strong": 3.8}   # m/s
+    #: Linear scale each half takes. Volume-conserving (2^-1/3) at the weak end,
+    #: and deliberately *not* at the strong end. The claim this family makes is
+    #: about object **count**, not about mass -- and two halves that each shrank
+    #: to 79% and stayed close together read as one blurry object at 128 px,
+    #: which is exactly how the occluded case came out looking like nothing had
+    #: happened. Legibility of the count wins over conservation of the volume.
+    SCALE_BY_BIN = {"weak": 2.0 ** (-1.0 / 3.0), "medium": 0.88, "strong": 1.0}
 
     def strong_residual_reference(self, spec) -> float:
         return 1.0                       # exactly one extra body exists
@@ -213,17 +219,27 @@ class Fission(Injector):
         if actor is None or twin is None:
             return None
         T = traj.num_frames
-        t0 = _geom.default_event_frame(spec, T)
-        if t0 is None or t0 >= T - 1:
+        # Fire at the *start* of an occlusion rather than its middle, so the
+        # halves have the whole hidden stretch to separate and are unmistakably
+        # two objects by the time they re-emerge. One frame in, because the
+        # geometric occlusion test can be off by a frame at either edge.
+        occ_run = spec.notes.get("occluded_frames") or []
+        if len(occ_run) >= 3:
+            t0 = int(occ_run[0]) + 1
+        else:
+            t0 = _geom.default_event_frame(spec, T)
+        if t0 is None or not (1 <= t0 < T - 1):
             return None
 
         heading = float(rng.uniform(0.0, 2.0 * np.pi))
         unit = np.array([np.cos(heading), np.sin(heading), 0.0])
         twin_spec = [actor, twin]
+        half_scale = self.SCALE_BY_BIN[severity_bin]
         strongest = unit * self.SEPARATION_BY_BIN["strong"]
         scale, _ = self._fit_to_frame(
             spec, traj, twin_spec, t0, strongest,
-            lambda k: self._split(spec, traj, actor, twin, t0, strongest * k))
+            lambda k: self._split(spec, traj, actor, twin, t0, strongest * k,
+                                  self.SCALE_BY_BIN["strong"]))
         push_v = unit * self.SEPARATION_BY_BIN[severity_bin] * scale
         speed = float(np.linalg.norm(push_v))
         push = push_v.tolist()
@@ -233,7 +249,7 @@ class Fission(Injector):
             causal_body_ids=[int(actor.segmentation_id),
                              int(twin.segmentation_id)],
             params={"type": "split_body", "separation_speed": speed,
-                    "push": push, "scale_factor": self.HALF_SCALE,
+                    "push": push, "scale_factor": half_scale,
                     "frame_fit_scale": scale},
             magnitude=2.0, magnitude_unit="count_ratio",
             severity_bin=severity_bin,
@@ -244,11 +260,11 @@ class Fission(Injector):
                                    int(twin.segmentation_id)],
                    "occluded_at_event": bool(t0 in occ)})
 
-    def _split(self, spec, traj, actor, twin, t0: int, push) -> Trajectory:
+    def _split(self, spec, traj, actor, twin, t0: int, push,
+               k: float) -> Trajectory:
         out = self._clone(traj)
         ai = traj.index_of(int(actor.segmentation_id))
         ti = traj.index_of(int(twin.segmentation_id))
-        k = self.HALF_SCALE
         push = np.asarray(push, np.float64)
 
         out.present[t0:, ti] = True
@@ -271,7 +287,8 @@ class Fission(Injector):
         actor = self._primary(spec)
         twin = next(b for b in spec.bodies if b.dormant)
         out = self._split(spec, traj, actor, twin, plan.t_event,
-                          np.asarray(plan.params["push"], np.float64))
+                          np.asarray(plan.params["push"], np.float64),
+                          float(plan.params["scale_factor"]))
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"

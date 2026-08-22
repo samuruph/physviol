@@ -41,11 +41,35 @@ def available():
 def penetration(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """Solidity: how far the body's surface is inside another solid, in radii.
 
-    Zero when clear of the surface. `ctx` needs `surface_top`; the body radius
-    comes from the trajectory.
+    Two cases, because "inside" means different things depending on what it is
+    inside of. Against a static surface it is depth below the surface plane;
+    against another *moving* body it is the overlap of the two along the line
+    of centres, which is the quantity that actually goes to zero when two balls
+    are merely touching and grows as one passes through the other. Measuring a
+    ball-ball pass-through as height below a floor would report nothing at all.
     """
+    r = max(float(traj.radius[b]), 1e-9)
+    partner = ctx.get("partner_id")
+    if partner is not None and ctx.get("pass_through"):
+        try:
+            j = traj.index_of(int(partner))
+        except KeyError:
+            j = None
+        if j is not None:
+            # Overlap along the collision axis. Projecting onto the contact
+            # normal rather than using centre distance is what makes one
+            # expression cover both a ball entering another ball and a ball
+            # entering a wall: the second has no meaningful centre distance,
+            # and its "depth below the top face" is a height in mid-air.
+            n = np.asarray(ctx.get("contact_normal", (0.0, 0.0, 1.0)), np.float64)
+            nn = float(np.linalg.norm(n))
+            n = n / nn if nn > 1e-9 else np.array([0.0, 0.0, 1.0])
+            delta = (traj.pos[:, b, :].astype(np.float64)
+                     - traj.pos[:, j, :].astype(np.float64))
+            gap = np.abs(delta @ n)
+            reach = float(ctx.get("partner_extent", traj.radius[j]))
+            return np.maximum(0.0, r + reach - gap) / r
     top = float(ctx["surface_top"])
-    r = float(traj.radius[b])
     lowest = traj.pos[:, b, 2] - r
     depth = np.maximum(0.0, top - lowest)
     return (depth / max(r, 1e-9)).astype(np.float64)

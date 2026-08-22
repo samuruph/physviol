@@ -254,7 +254,16 @@ class Injector:
             return 0
         pts = traj.pos[from_frame:, idx, :]
         vis = _geom.in_frame(spec, pts)
-        return int((vis.mean(axis=1) < visible_fraction).sum())
+        # Only bodies that are actually in the scene count. A dormant
+        # understudy is parked far below the world until something summons it,
+        # so including it made the *valid* baseline "half the culprits are off
+        # camera on every frame" -- which set the budget so high that `fission`
+        # passed any separation at all and flung its halves clean out of frame.
+        here = np.asarray(traj.present[from_frame:, idx], bool)
+        counted = here.sum(axis=1)
+        seen = (vis & here).sum(axis=1)
+        frac = np.where(counted > 0, seen / np.maximum(counted, 1), 1.0)
+        return int((frac < visible_fraction).sum())
 
     def _fit_to_frame(self, spec, traj: Trajectory, bodies, t0: int, knob,
                       build, tolerance: int = 1,

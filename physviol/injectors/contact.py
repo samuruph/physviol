@@ -16,6 +16,23 @@ from . import _geom
 from .base import Injector, InterventionPlan, register
 
 
+def _extent_along(spec, partner_id: int, normal) -> float:
+    """How far the partner reaches from its centre along the contact normal.
+
+    A sphere's answer is its radius whichever way you ask; a wall's depends
+    entirely on the direction, and using its bounding radius instead would
+    claim a thin slab is a metre thick.
+    """
+    body = next((b for b in spec.bodies
+                 if int(b.segmentation_id) == int(partner_id)), None)
+    if body is None:
+        return 0.0
+    if body.kind == "cube":
+        return float(np.abs(np.asarray(body.scale, np.float64)
+                            * np.asarray(normal, np.float64)).sum())
+    return float(body.bounding_radius)
+
+
 def _top_of_partner(spec, traj, partner_id: int, frame: int) -> float:
     """World z of the top of whatever the actor just landed on.
 
@@ -35,21 +52,53 @@ def _top_of_partner(spec, traj, partner_id: int, frame: int) -> float:
     return float(traj.pos[f, bi, 2] + traj.radius[bi])
 
 
-def _contact_event(spec, traj, actor) -> Optional[Tuple[int, int, bool]]:
-    """(frame, partner_id, partner_is_static) for the actor's first collision.
+def candidates_for(spec, family: str):
+    """Bodies a family should prefer to act on, in order.
 
-    Falls back to geometry when the simulator reported nothing -- which happens
-    when the actor is already resting or rolling at frame 0 and there is no
-    *arrival* to latch onto. In that case the violation becomes "it sank through
-    the floor while rolling", which is just as real a solidity failure.
+    A scenario may declare `notes["family_targets"][family]` when the obvious
+    culprit is the wrong one. `pyramid_impact` is the case that forced it: the
+    actor is the falling cube, but the interesting solidity failure is a
+    *struck ball* driven through the ground, which is what the same collision
+    looks like when a video generator gets it wrong.
+
+    This stays inside the composition rule. The scenario declares a fact about
+    itself, in the same `notes` dict it already uses for occlusion intervals and
+    light directions; no injector learns a scenario's name, and a family with no
+    declared preference falls back to the primary actor as before.
+    """
+    want = (spec.notes.get("family_targets") or {}).get(family)
+    by_id = {int(b.segmentation_id): b for b in spec.bodies}
+    if want:
+        return [by_id[int(i)] for i in want if int(i) in by_id]
+    return []
+
+
+def _contact_event(spec, traj, actor):
+    """(frame, partner_id, partner_is_static, normal) for the first collision.
+
+    Prefers a real *impact* -- a contact the body is moving into -- and only
+    falls back to any recorded contact, then to geometry. The ordering matters
+    for a body that starts at rest: a pyramid sphere touches its neighbours from
+    frame 0, so "first contact" is a nudge between two things standing still,
+    while the event worth breaking is the one the falling cube causes.
     """
     dormant = tuple(int(b.segmentation_id) for b in spec.bodies if b.dormant)
+    impact = _geom.first_impact(traj, int(actor.segmentation_id), exclude=dormant)
+    if impact is not None and impact[0] >= 1:
+        partner = next((b for b in spec.bodies
+                        if int(b.segmentation_id) == impact[1]), None)
+        return (int(impact[0]), int(impact[1]),
+                bool(partner is not None and partner.static),
+                np.asarray(impact[2], np.float64))
+
     hit = _geom.first_contact_any(traj, int(actor.segmentation_id),
                                   exclude=dormant)
     if hit is not None and hit[0] >= 1:
         partner = next((b for b in spec.bodies
                         if int(b.segmentation_id) == hit[1]), None)
-        return int(hit[0]), int(hit[1]), bool(partner is not None and partner.static)
+        return (int(hit[0]), int(hit[1]),
+                bool(partner is not None and partner.static),
+                np.array([0.0, 0.0, 1.0]))
 
     surface, _ = _geom.support_under(spec, actor)
     if surface is None:
@@ -63,8 +112,9 @@ def _contact_event(spec, traj, actor) -> Optional[Tuple[int, int, bool]]:
         t = traj.num_frames // 3
         if not (1 <= t < traj.num_frames - 1):
             return None
-        return int(t), int(surface.segmentation_id), True
-    return int(below[0]), int(surface.segmentation_id), True
+        return int(t), int(surface.segmentation_id), True, np.array([0.0, 0.0, 1.0])
+    return (int(below[0]), int(surface.segmentation_id), True,
+            np.array([0.0, 0.0, 1.0]))
 
 
 class Solidity(Injector):
@@ -105,21 +155,55 @@ class Solidity(Injector):
     # ------------------------------------------------------------------ #
     def plan(self, spec, traj: Trajectory, rng: np.random.RandomState,
              severity_bin: str) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
-        if actor is None:
+        choices = candidates_for(spec, self.family) or [self._primary(spec)]
+        actor = event = None
+        for body in choices:
+            if body is None:
+                continue
+            found = _contact_event(spec, traj, body)
+            if found is not None and 1 <= found[0] < traj.num_frames - 1:
+                actor, event = body, found
+                break
+        if actor is None or event is None:
             return None
-        event = _contact_event(spec, traj, actor)
-        if event is None:
-            return None
-        t_contact, partner_id, partner_static = event
-        if not (1 <= t_contact < traj.num_frames - 1):
-            return None
+        t_contact, partner_id, partner_static, normal = event
 
         radius = actor.bounding_radius
         depth_r = self.DEPTH_BY_BIN[severity_bin]
         n_window = self._window_len(self.FRAMES_BY_BIN[severity_bin],
                                     t_contact, traj.num_frames)
         t_end = t_contact + n_window - 1
+
+        # The mode follows the contact *geometry*, not whether the partner is
+        # static. Landing on something (near-vertical normal) can be expressed
+        # as a prescribed depth below its top face; running into something --
+        # a wall, another ball -- cannot, and trying to sink a body below the
+        # top of a wall it hit side-on lifts it into the air instead.
+        head_on = abs(float(normal[2])) < 0.6
+        mode = "pass_through" if (head_on or not partner_static) else "sink"
+
+        notes = {"radius": float(radius),
+                 "surface_top": _top_of_partner(spec, traj, partner_id, t_contact),
+                 "partner_id": int(partner_id),
+                 "partner_static": bool(partner_static),
+                 "partner_dynamic": bool(not partner_static),
+                 "contact_normal": [float(x) for x in normal],
+                 "pass_through": bool(mode == "pass_through"),
+                 "partner_extent": _extent_along(spec, partner_id, normal),
+                 "t_contact": int(t_contact),
+                 "passes_through": bool(depth_r >= 1.0)}
+        if mode == "pass_through":
+            # Against another moving body there is no surface to place the
+            # actor a prescribed depth below. Suppressing the pair's response
+            # for the window is both simpler and closer to what the family
+            # claims -- "disable a collision pair" -- and it produces the thing
+            # video generators actually get wrong: two objects occupying the
+            # same space and coming out the other side.
+            strong = self._passed_through(
+                spec, traj, actor, partner_id, t_contact,
+                self.FRAMES_BY_BIN["strong"])
+            notes["r_strong"] = self._measure(
+                strong, int(actor.segmentation_id), "penetration", notes)
 
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t_contact,
@@ -128,24 +212,65 @@ class Solidity(Injector):
             params={"type": "disable_collision_pair",
                     "pair": [int(actor.segmentation_id), int(partner_id)],
                     "frames_disabled": int(n_window),
+                    "mode": mode,
                     "target_depth_radii": depth_r},
             magnitude=float(depth_r * radius),
             magnitude_unit="m_penetration_depth",
             severity_bin=severity_bin,
-            notes={"radius": float(radius),
-                   "surface_top": _top_of_partner(spec, traj, partner_id, t_contact),
-                   "partner_id": int(partner_id),
-                   "partner_static": bool(partner_static),
-                   "t_contact": int(t_contact),
-                   "passes_through": bool(depth_r >= 1.0)},
+            notes=notes,
         )
+
+    def _passed_through(self, spec, traj, actor, partner_id, t0, n_win):
+        """Both bodies ignore each other for `n_win` frames, then resume.
+
+        Neither is teleported: each simply carries on with the velocity it had
+        the frame before contact, so they interpenetrate at the closing speed
+        the scene already had and separate again when the pair is restored.
+        """
+        out = self._clone(traj)
+        partner = next(b for b in spec.bodies
+                       if int(b.segmentation_id) == int(partner_id))
+        t1 = min(traj.num_frames - 1, t0 + n_win - 1)
+        for body in (actor, partner):
+            if body.static:
+                continue          # a wall does not get out of the way
+            bi = traj.index_of(int(body.segmentation_id))
+            v_pre = traj.lin_vel[t0 - 1, bi].astype(np.float64)
+            self._rewrite_from(spec, traj, out, body, t0, v0=v_pre)
+            if t1 + 1 < traj.num_frames:
+                # Contact resumes: carry on from wherever the pass-through left
+                # it, rather than snapping back onto the lawful path.
+                self._rewrite_from(spec, out, out, body, t1 + 1,
+                                   v0=out.lin_vel[t1, bi].astype(np.float64))
+        c = out.contacts
+        pair = {int(actor.segmentation_id), int(partner_id)}
+        if len(c):
+            drop = np.array([(t0 <= int(f) <= t1) and ({int(a), int(b)} == pair)
+                             for f, a, b in zip(c.frame, c.body_a, c.body_b)], bool)
+            keep = ~drop
+            out.contacts = type(c)(c.frame[keep], c.body_a[keep], c.body_b[keep],
+                                   c.point[keep], c.normal[keep], c.impulse[keep],
+                                   c.penetration[keep])
+        return out
 
     # ------------------------------------------------------------------ #
     def apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
-        out = self._clone(traj)
-        actor = self._primary(spec)
-        bi = traj.index_of(int(actor.segmentation_id))
+        actor_id = int(plan.causal_body_ids[0])
+        actor = next(b for b in spec.bodies
+                     if int(b.segmentation_id) == actor_id)
         t0, t1 = plan.windows[0]
+
+        if plan.params.get("mode") == "pass_through":
+            out = self._passed_through(spec, traj, actor,
+                                       int(plan.notes["partner_id"]), t0,
+                                       t1 - t0 + 1)
+            out.meta = dict(traj.meta)
+            out.meta["intervention"] = plan.to_dict()
+            out.meta["label"] = "invalid"
+            return out
+
+        out = self._clone(traj)
+        bi = traj.index_of(actor_id)
         n_win = t1 - t0 + 1
 
         radius = float(plan.notes["radius"])
