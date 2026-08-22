@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 
 from physviol.annotate import windows as win
@@ -54,3 +55,38 @@ def test_occlusion_lag_is_reported_when_the_culprit_is_hidden():
     assert not obs[:9].any(), "must not be observable while hidden"
     assert obs[9:].all()
     assert win.to_windows(obs) == [(9, T - 1)]
+
+
+def test_severity_is_attributed_to_the_frame_it_becomes_visible():
+    """A residual spike on an invisible frame must not annotate as harmless.
+
+    `superelastic` changes a body's velocity at the contact frame while its
+    pixels are still identical in both twins, so the whole magnitude lands on a
+    frame that shows nothing. Carrying it to the next observable frame is what
+    keeps the severity field honest about how bad the violation was.
+    """
+    from physviol.annotate.severity import carry_to_visible
+
+    active = np.array([0, 0, 1, 1, 1, 1, 0, 0], bool)
+    observable = np.array([0, 0, 0, 1, 1, 1, 1, 1], bool)
+    s = np.array([0.0, 0.0, 0.9, 0.2, 0.3, 0.1, 0.0, 0.0])
+    out = carry_to_visible(s, active, observable)
+    assert out[2] == 0.0, "an invisible frame must not carry severity"
+    assert out[3] == pytest.approx(0.9), "the spike must surface where it can be seen"
+    assert out[4] == pytest.approx(0.3)
+    assert not out[~active].any(), "severity outside the window"
+
+
+def test_carry_to_visible_is_the_identity_when_nothing_is_hidden():
+    """Which is most cells -- and it is what keeps a shaped intervention shaped.
+
+    A running maximum over the window would flatten `antigravity`'s ramp-up and
+    release into a monotone step, losing exactly the time variation the
+    severity field exists to express.
+    """
+    from physviol.annotate.severity import carry_to_visible
+
+    active = np.array([0, 1, 1, 1, 1, 0], bool)
+    s = np.array([0.0, 0.5, 1.0, 1.0, 0.5, 0.0])
+    out = carry_to_visible(s, active, np.ones(6, bool))
+    assert out == pytest.approx(s * active)

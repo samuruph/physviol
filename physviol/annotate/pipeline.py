@@ -108,7 +108,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # only a fair question while nothing is holding it up. Without this gate a
     # perfectly legal bounce registers as a violation, and the noise floor
     # measured on the valid arm inherits the same spikes -- which then swamps
-    # the real signal on the easy bin.
+    # the real signal on the weak bin.
     #
     # Resting on the floor is not enough of a test. A bounce completes *between*
     # sampled frames, so the actor can be airborne on both neighbours while its
@@ -182,14 +182,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # Every dynamic culprit is painted, not just the primary. `global_gravity`
     # acts on the whole scene and `fission` on both halves; painting one body
     # would leave the severity field describing a fraction of the violation.
-    smap = sev_mod.paint(seg_i, {int(b): s_invalid for b in dynamic_ids or [primary_id]},
+    s_visible = sev_mod.carry_to_visible(s_invalid, active, observable)
+    smap = sev_mod.paint(seg_i, {int(b): s_visible for b in dynamic_ids or [primary_id]},
                          active=visible)
     # The union rule can mark pixels the culprit does not occupy in the invalid
     # render (it vanished / moved). Those carry the same score.
     extra = vmask & (smap == 0)
     if extra.any():
         smap = smap.astype(np.float32)
-        broadcast = np.broadcast_to(s_invalid.astype(np.float32)[:, None, None],
+        broadcast = np.broadcast_to(s_visible.astype(np.float32)[:, None, None],
                                     smap.shape)
         smap = np.where(extra, broadcast, smap).astype(np.float16)
     sev_t = sev_mod.temporal_profile(smap)

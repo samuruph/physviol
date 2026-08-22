@@ -7,7 +7,7 @@ its own window bar, because the severity bins have different windows.
     +-------------------------------------------------------------+
     | scenario / family                                    f 7/12  |
     +----------------+----------------+----------------+----------+
-    | VALID          | easy      [o]  | medium    [o]  | hard [o] |
+    | VALID          | weak      [o]  | medium    [o]  | strong [o] |
     | RGB            | RGB            | RGB            | RGB      |
     +----------------+----------------+----------------+----------+
     | (no mask)      | + MASK         | + MASK         | + MASK   |
@@ -22,6 +22,7 @@ mp4 only -- no image files are written.
 from __future__ import annotations
 
 import glob
+import math
 import json
 import os
 from typing import Dict, List, Optional
@@ -169,7 +170,7 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
 
 
 def coverage(release_root: str, out_path: Optional[str] = None,
-             cell: int = 200, cols: int = 3) -> Dict[str, object]:
+             cell: Optional[int] = None, cols: Optional[int] = None) -> Dict[str, object]:
     """One video tiling every invalid clip in a release: RGB with the violation
     mask and the reference outline, captioned with scenario / family / lag.
 
@@ -200,8 +201,16 @@ def coverage(release_root: str, out_path: Optional[str] = None,
     if not clips:
         raise ValueError("no invalid clips under %s" % release_root)
 
+    # Lay out roughly square and shrink the tiles as the release grows. A
+    # fixed three-column grid was fine for nine cells and produces a 3800px
+    # column for forty-eight, which no player will show you all of at once.
+    n = len(clips)
+    if cols is None:
+        cols = max(3, int(math.ceil(math.sqrt(n))))
+    if cell is None:
+        cell = 200 if n <= 16 else (160 if n <= 36 else 128)
     T = min(int(c["meta"]["num_frames"]) for c in clips)
-    rows = (len(clips) + cols - 1) // cols
+    rows = (n + cols - 1) // cols
     cap = 30
     W = cols * cell + (cols + 1) * PAD
     H = HEADER + rows * (cell + cap + PAD) + PAD

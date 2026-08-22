@@ -221,9 +221,18 @@ def replay(spec, objs, traj: Trajectory) -> None:
     scale_mul = traj.scale_mul
     for j, b in enumerate(spec.bodies):
         obj = objs[b.name]
-        # The dome is a background asset with its own scale; resizing it would
-        # resize the world.
-        resize = b.kind != "dome" and float(np.abs(scale_mul[:, j, :] - 1.0).max()) > 1e-6
+        # Scale is keyframed on EVERY body, every frame, whether or not this
+        # trajectory changes it. One worker run renders several families through
+        # the same scene object, and a keyframe nobody overwrites simply stays:
+        # without this, `immutability`'s resize leaked into every family
+        # rendered after it in the same run and silently enlarged the actor in
+        # clips that had nothing to do with size. It surfaced as a *negative*
+        # observability lag -- the twins differing before the event -- which is
+        # the one thing that cannot happen honestly.
+        #
+        # The dome is the exception: a background asset with its own scale,
+        # which resizing would turn into resizing the world.
+        resize = b.kind != "dome"
         for f in range(traj.num_frames):
             if present is not None and not bool(present[f, j]):
                 obj.position = (0.0, 0.0, GONE_Z)

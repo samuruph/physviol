@@ -157,7 +157,8 @@ The rasterised form of the windows, so consumers never expand intervals themselv
 | file | dtype / shape | notes |
 |---|---|---|
 | `seg.npz` | uint16 `[T,H,W]` | instance ids; `causal_body_ids` index into these |
-| **`violation_mask.npz`** | bool `[T,H,W]` | **the primary annotation** — culprit pixels while active |
+| **`violation_mask.npz`** | bool `[T,H,W]` | **the primary annotation** — culprit pixels while the violation is active *and visible* |
+| **`reference_mask.npz`** | bool `[T,H,W]` | where the culprit *should* be: its footprint in the valid twin, ungated in time. Shipped on **both** clips of a pair |
 | `causal_mask.npz` | uint8 `[T,H,W]` | `0` = none, `1` = primary culprit, `k ≥ 2` = consequence `k−1` |
 | `divergence_map.npz` | f16 `[T,H,W]` | **NOT the violation region** — see below |
 
@@ -166,6 +167,20 @@ The rasterised form of the windows, so consumers never expand intervals themselv
 > masks for `permanence`-vanish (the body has no invalid-side pixels precisely because it
 > vanished) and correct two-lobed masks for `continuity`-teleport. It is well-defined only
 > because the twins are pixel-aligned and share instance indexing.
+
+> **The visibility gate.** The mask is gated on `active AND observable`, not on `active`
+> alone, because it answers *where can this be seen*. The two differ on real frames: a
+> super-elastic bounce is unlawful the instant the contact resolves, but the body is still in
+> exactly the same place in both twins, so that frame contains no evidence. Marking pixels
+> there would ask a model to localise something the image does not contain. `timelines.active`
+> remains the ground-truth timeline, and the gap between the two *is* the observability lag.
+
+> **`reference_mask` is the counterfactual, not a violation.** It says where the lawful
+> trajectory would have put the culprit, with no claim that anything is wrong — which is why
+> it ships on the valid clip too, and why it is ungated in time. For a vanished body it is the
+> only mask with any pixels at all, and it is what makes the union rule legible rather than
+> mysterious. Visualisers draw it as an outline *on top of* the violation mask; drawing it
+> underneath lets the filled mask hide it in exactly the cases that matter.
 
 > **`divergence_map` warning.** This is `|valid − invalid|` in pixel space. After `t_event` a
 > twin pair diverges *everywhere* downstream — shadows, contact chains, secondary collisions
@@ -176,7 +191,7 @@ The rasterised form of the windows, so consumers never expand intervals themselv
 
 | file | dtype / shape | notes |
 |---|---|---|
-| `severity_map.npz` | f16 `[T,H,W]` | bounded score `s` painted into the culprit's mask |
+| `severity_map.npz` | f16 `[T,H,W]` | bounded score `s` painted into every dynamic culprit, under the same visibility gate as the mask |
 | `residuals.npz` | f32 `[T, n_bodies, n_laws]` × 3 | `r` (physical units), `z` (vs noise floor), `s` (bounded `[0,1]`) |
 
 Three representations, all shipped: `r` for interpretability, `z` for calibration against the

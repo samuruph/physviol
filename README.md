@@ -4,8 +4,9 @@
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
 — all derived from the simulator, not from human annotation.
 
-> **Status: Phase 0 built.** `ball_drop` × `solidity` runs end to end at all three severity
-> levels, with prefix identity verified and 21 tests green. Design doc: [docs/PLAN.md](docs/PLAN.md).
+> **Status: all 48 build cells runnable.** 13 scenarios × 17 violation families compose
+> through the trajectory seam; `physviol generate` walks the whole matrix.
+> Design doc: [docs/PLAN.md](docs/PLAN.md).
 
 ---
 
@@ -30,111 +31,98 @@ bash scripts/fetch_refs.sh
 
 ---
 
-## 2. Generate some clips
+## 2. The three things you will actually run
+
+Everything below is `python -m physviol.cli <command>`, with `conda activate physviol` first.
+
+### a. Debug loop — one cell, fastest possible
 
 ```bash
-conda activate physviol
-
-# One cell. Defaults to a single `strong` variant -- while checking coverage,
-# breadth is what you want to look at, not three strengths of the same thing.
-python -m physviol.cli generate --debug -n 1 \
+python -m physviol.cli generate --debug --complexity L0 \
     --scenario occluder_pass --family permanence --seed 777
-
-# the whole severity ladder (weak/medium/strong) in ONE container run
-python -m physviol.cli generate --debug -n 1 --severity all \
-    --scenario ball_drop --family solidity
-
-# uniform violation duration, so families are comparable side by side
-python -m physviol.cli generate --debug -n 1 --window 4 \
-    --scenario ball_drop --family antigravity
-
-# every runnable cell, plus a comparison grid per pair
-#   args: complexity tier seed severity window
-bash scripts/generate_sample.sh L1 D 777 strong 4
-
-# plain solid background (no network, faster)
-python -m physviol.cli generate --debug -n 1 --complexity L0
-
-# the publishable tier (256px, 25 frames)
-python -m physviol.cli generate --tier A -n 1 --seed 91731
 ```
 
-Implemented cells right now — any scenario × any compatible family, no
-per-combination code:
+`--debug` is Tier D: 128², 13 frames, 16 spp. `--complexity L0` is a solid background with a
+sun lamp, which needs no network and renders ~4.6× faster than the photographic L1. Roughly
+**8 s per pair**. This is the loop to iterate in — a bug found at Tier D is fixed for all
+three tiers.
 
-| scenario | families available |
-|---|---|
-| `ball_drop` | `solidity`, `antigravity`, `continuity`, `permanence` |
-| `projectile_toss` | `antigravity`, `continuity` |
-| `occluder_pass` | `permanence`, `continuity`, `solidity` |
-
-`occluder_pass` is the one that produces a **non-zero observability lag**: the violation
-fires while the actor is hidden behind the screen, so `t_observable > t_event`.
-
-Output lands in `out/release/clips/<release>/<scenario>/<seed>/{valid,invalid_<family>_a}/`
-(gitignored, so it never enters version control).
-
-**Look at the result** — `overlay.mp4` is a five-panel visualiser: RGB, RGB+mask, severity
-heatmap with a live 0..1 scale, causal mask, and the divergence map (labelled as *not*
-ground truth). Plus a red dot whenever the violation is active on that frame, and a timeline
-showing the violation window (red), observable window (amber), the three clocks and a
-playhead:
+### b. Small subset — every family, one scenario, or a slice of the matrix
 
 ```bash
-xdg-open out/release/clips/physviol_v0/occluder_pass/0777/invalid_permanence_a/overlay.mp4
+# every family that ball_drop supports (9 cells) -- one container run, one valid render
+python -m physviol.cli generate --debug --complexity L0 --scenario ball_drop --seed 777
+
+# one family everywhere it is meaningful
+python -m physviol.cli generate --debug --complexity L0 --family solidity --seed 777
+
+# the whole matrix, but stop after 6 cells
+python -m physviol.cli generate --debug --complexity L0 -n 6 --seed 777
+
+# the whole matrix, one randomisation each: 48 cells, ~13 min at L0/Tier D
+bash scripts/generate_sample.sh L0 D 777 strong 4
+```
+
+`--keep-going` carries on past a cell that fails and lists the failures at the end, which is
+what you want for a sweep.
+
+### c. The full dataset
+
+```bash
+# Tier A (256px, 25 frames), photographic backgrounds, 6 randomisations per cell.
+# 48 cells x 6 = 288 pairs = 576 clips.
+python -m physviol.cli generate --tier A --complexity L1 \
+    --variants 6 --seed 100000 --severity strong --keep-going \
+    --outdir out/physviol_v0
+
+# ...or the full severity ladder as well (weak/medium/strong -> 3x the invalid clips,
+# but the valid twin and the scene build are shared, so it is far cheaper than 3x)
+python -m physviol.cli generate --tier A --complexity L1 \
+    --variants 6 --severity all --seed 100000 --keep-going \
+    --outdir out/physviol_v0
+
+python -m physviol.cli validate out/physviol_v0
+```
+
+**`--variants N` is the randomisation knob.** Each variant is a fresh seed, and a seed drives
+every free parameter a scenario has: sizes, speeds, drop heights, restitution, colours, the
+HDRI environment at L1, the camera position and aim, the lamp direction, and — where it is
+physically neutral — whether the actor is a sphere or a cube. So six variants of `ball_drop ×
+solidity` are six visibly different clips of the same violation, not one clip with a
+different random number in the filename.
+
+Use `--variants 1` while debugging and `--variants 5`–`8` for a release.
+
+**Running it in parallel.** Clip-level parallelism measured **1.92×** at width 4 on this box.
+Split by scenario, since one worker run covers all families of one scenario anyway:
+
+```bash
+for s in ball_drop projectile_toss occluder_pass ball_collision; do
+  python -m physviol.cli generate --tier A --complexity L1 --variants 6 \
+      --scenario "$s" --seed 100000 --outdir out/physviol_v0 &
+done; wait
 ```
 
 ---
 
-## 3. The other commands
+## 3. Look at what came out
+
+**Nothing writes image files.** The container has no ffmpeg, so it writes arrays and every
+mp4 is encoded host-side by `physviol/viz/video.py`.
 
 ```bash
-# Print the taxonomy: 7 domains, 16 families, 13 scenarios, 40 build cells
-python -m physviol.cli taxonomy
-python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
+# five-panel annotated video for ONE clip
+python -m physviol.cli overlay out/release/clips/physviol_v0/ball_drop/0777/invalid_solidity_strong
 
-# Re-annotate an existing worker output without re-rendering
-python -m physviol.cli annotate out/work/ball_drop/4200 --outdir out/release
+# the valid clip beside every severity bin of one family
+python -m physviol.cli grid out/release/clips/physviol_v0/ball_drop/0777 --family solidity
 
-# Rebuild just the overlay video for one clip
-python -m physviol.cli overlay out/release/clips/.../invalid_solidity_medium
-
-# Comparison grid: the real clip beside every severity, annotated
-python -m physviol.cli grid out/release/clips/physviol_v0/ball_drop/0777 \
-    --family solidity
-
-# Schema + cross-checks over a whole release
-python -m physviol.cli validate out/release
-
-# Tests
-python -m pytest tests/ -q
+# ONE video tiling every invalid clip in the release -- the coverage check
+python -m physviol.cli coverage out/release
 ```
 
-### Running a worker in the container directly
-
-```bash
-# throughput probe (no assets downloaded, pure render cost)
-bash docker/kubric.sh physviol/render/worker_smoke.py --resolution 256 --frames 8
-
-# the real worker: simulate + inject + render both twins
-bash docker/kubric.sh physviol/render/worker.py \
-    --scenario ball_drop --seed 91731 --tier D \
-    --family solidity --severity medium --outdir out/work
-```
-
-`docker/kubric.sh` mounts the repo at `/kubric`, runs as your uid so output is not
-root-owned, and prefers the pinned digest over `:latest`.
-
----
-
-### Two videos per result
-
-- **`overlay.mp4`** (one per invalid clip) — five panels for *one* variant: RGB, +mask,
-  severity, causal mask, divergence.
-- **`grid_<family>.mp4`** (one per scenario/seed/family) — the **valid clip beside every
-  severity bin**, three rows deep (RGB / +mask / severity), each column with its own
-  magnitude, red ACTIVE dot and window bar. This is the one for checking that the severity
-  ladder behaves.
+`coverage.mp4` is the one to open first after a sweep: every cell at once, each tile captioned
+with its scenario, family and observability lag, so a broken cell is obvious at a glance.
 
 ### Reading the overlay
 
@@ -145,15 +133,67 @@ root-owned, and prefers the pinned digest over `:latest`.
 | **MASK** | red = `violation_mask` (the annotation); **green outline** = `reference_mask`, where the object *should* be per the valid twin |
 | **SEVERITY MAP** | the residual painted into the culprit, with a live 0..1 scale |
 | **CAUSAL MASK** | red = primary culprit, blue = other participants |
-| **DIVERGENCE** | `\|valid - invalid\|` -- shipped for analysis, **not** ground truth |
-| red bar, timeline | `violation_windows` -- when the law is actually broken |
-| amber bar, timeline | `observable_windows` -- when there is visual evidence |
+| **DIVERGENCE** | `\|valid - invalid\|` — shipped for analysis, **not** ground truth |
+| red bar, timeline | `violation_windows` — when the law is actually broken |
+| amber bar, timeline | `observable_windows` — when there is visual evidence |
 | `t_event` / `t_obs` / `t_end` | the three clocks; they merge into one label when they coincide |
 
-If `t_obs > t_event` the violation happened while the culprit was hidden -- that gap is the
+If `t_obs > t_event` the violation happened while the culprit was hidden — that gap is the
 occlusion lag, and `occluder_pass` is the scenario built to produce it.
 
-## 4. What a clip contains
+---
+
+## 4. Every command
+
+```bash
+# Taxonomy: 7 domains, 17 families, 14 scenarios, 48 build cells
+python -m physviol.cli taxonomy
+python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
+
+# Generate (see section 2 for the flags that matter)
+python -m physviol.cli generate --debug --complexity L0 --scenario ball_drop
+#   --tier D|A|B      --complexity L0|L1     --severity weak|medium|strong|all
+#   --variants N      --window N             --scenario X   --family Y
+#   -n / --limit N    --keep-going           --no-overlay   --outdir / --workdir
+
+# Re-annotate an existing worker output without re-rendering
+python -m physviol.cli annotate out/work/ball_drop/0777 --outdir out/release
+
+# Rebuild one overlay / one grid / the coverage tiling
+python -m physviol.cli overlay out/release/clips/.../invalid_solidity_strong
+python -m physviol.cli grid    out/release/clips/physviol_v0/ball_drop/0777 --family solidity
+python -m physviol.cli coverage out/release
+
+# Schema + cross-checks over a whole release (13 structural checks)
+python -m physviol.cli validate out/release
+
+# Tests -- including one that plans and applies all 48 cells without docker
+python -m pytest tests/ -q
+python -m pytest tests/test_all_cells.py -q
+```
+
+### Running a worker in the container directly
+
+```bash
+# throughput probe (no assets downloaded, pure render cost)
+bash docker/kubric.sh physviol/render/worker_smoke.py --resolution 256 --frames 8
+
+# the real worker: simulate + inject + render both twins.
+# --family takes a comma list; they share one scene build and one valid render.
+bash docker/kubric.sh physviol/render/worker.py \
+    --scenario ball_drop --seed 777 --tier D --complexity L0 \
+    --family solidity,antigravity --severity strong --outdir out/work
+```
+
+`docker/kubric.sh` mounts the repo at `/kubric`, runs as your uid so output is not
+root-owned, and prefers the pinned digest over `:latest`.
+
+---
+
+## 5. What a clip contains
+
+Output lands in `out/release/clips/<release>/<scenario>/<seed>/{valid,invalid_<family>_<bin>}/`
+(gitignored, so it never enters version control).
 
 ```
 meta.json            labels, taxonomy, violation windows, severity, provenance
@@ -173,52 +213,85 @@ traj.npz             the seam file: poses, velocities, contacts
 
 Field reference: [docs/schema.md](docs/schema.md).
 
-**Two warnings before training on anything:**
+**Three things to know before training on any of it:**
 
 - **`divergence_map` is not the violation region.** It is `|valid − invalid|` in pixel space
   and it diverges *everywhere* downstream of the event. Use `violation_mask` and
   `severity_map`.
+- **`violation_mask` is gated on visibility, not just on the window.** It answers "where can
+  this be seen", so it is empty on frames where the violation is active but the culprit is
+  hidden — or where the intervention has not yet moved a pixel. `timelines.active` is the
+  ground-truth timeline; the gap between them is the observability lag, and it is the point.
 - **Check `provenance.prefix_identical_verified`** rather than assuming twins are
   pixel-aligned.
 
 ---
 
-## 5. How it is organised
+## 6. How it is organised
 
 Four levels — `python -m physviol.cli taxonomy` prints the live version:
 
 ```
 DOMAIN     7   which physical law is at stake      identity, kinematics, contact,
                                                    dynamics, equilibrium, optical, global
-FAMILY    16   the specific way it breaks          solidity, non_parabolic, newton3_reaction, ...
-SCENARIO  13   the staged scene                    ball_drop, occluder_pass, granular_pour, ...
-               (3 built: ball_drop, projectile_toss, occluder_pass)
+FAMILY    17   the specific way it breaks          solidity, fission, newton3_reaction, ...
+SCENARIO  14   the staged scene                    ball_drop, occluder_pass, granular_pour, ...
+               (13 built; clutter_toss is deferred)
 INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 ```
+
+| scenario | what it stages | why it is in the set |
+|---|---|---|
+| `ball_drop` | sphere or cube falls and bounces | simplest scenario with a real contact instant |
+| `ball_collision` | two spheres roll together | two bodies that both *ought* to respond |
+| `projectile_toss` | ballistic arc, no contact | the clean control: `t_event == t_observable` |
+| `spin_toss` | cube tumbling in free flight | a sphere cannot show rotation |
+| `occluder_pass` | body passes behind a screen | the only source of observability lag |
+| `ramp_slide` | block slides down an incline | sustained contact + friction |
+| `rolling_ramp` | cube tumbles off a raised ramp | contact, then a short free flight |
+| `stack_topple` | marginally stable stack | *surprising but lawful* — the control for false positives |
+| `pyramid_impact` | cube dropped on a sphere pyramid | multi-body contact chain |
+| `pendulum_swing` | bob on a rigid rod | constrained periodic motion (scripted; Kubric has no joints) |
+| `resting_table` | bodies at rest on a table | static equilibrium; any motion is the violation |
+| `shadow_track` | object translating under a key light | the only violation whose mask is not on the object |
+| `granular_pour` | 40 grains falling into an open box | **granular, never "fluid"** — see below |
 
 Two orthogonal augmentation axes:
 
 - **severity** — `weak` / `medium` / `strong`, set by the *intervention magnitude*, which is
   exact by construction. Named for how hard the law is bent, not for how hard the clip is to
-  classify -- those are different things and conflating them is how difficulty splits go bad.
-- **complexity** — `L0`..`L4`, mirroring the MOVi ladder. **L0 (solid background) and L1
-  (photographic HDRI environment + dome ground) are built; L1 is the default.** L2-L4 add
-  GSO objects, distractors and camera motion, and **raise if requested** rather than
-  silently degrading. GSO (1033 objects) and HDRI Haven (509 environments) are verified
-  reachable from the pinned container, so those levels need scenario code only.
+  classify — those are different things, and conflating them is how difficulty splits go bad.
+- **complexity** — `L0`..`L4`, mirroring the MOVi ladder. **L0 (solid background + sun) and
+  L1 (photographic HDRI environment + dome ground) are built; L1 is the default.** L2–L4 add
+  GSO objects, distractors and camera motion, and **raise if requested** rather than silently
+  degrading. GSO (1033 objects) and HDRI Haven (509 environments) are verified reachable from
+  the pinned container, so those levels need scenario code only.
 
-**All three severity bins are produced in one container run.** The valid rollout, scene build
-and HDRI load are shared across the variants, which matters because an L1 render costs ~4.6x
-an L0 one — see the timing table below.
+**Why 19 files and not 238.** Scenarios and injectors are orthogonal and compose through the
+trajectory seam — an injector edits `traj.npz`, per-body poses and velocities, which knows
+nothing about the scene that produced it. So the project needs 13 scenario files + 6 injector
+files (one per domain) + one shared geometry helper, not one file per scenario × family pair.
+`antigravity` written once runs on every airborne scenario; adding a scenario makes every
+compatible family available in it for free.
 
-**Why 20 files and not 208.** Scenarios and injectors compose through the trajectory seam —
-an injector edits `traj.npz`, which knows nothing about the scene that produced it. So the
-project needs 13 scenario files + 7 injector files (one per domain), not one per
-scenario × family pair. `antigravity` written once runs on every airborne scenario.
+The corollary is that injectors must never branch on a scenario's *name*. They branch on
+**state** — is this body moving, is it in contact, is it hidden — or on a **constraint the
+scenario declares** in `spec.notes`. `newton1_inertia` halts a sliding block and shoves a
+resting mug from one code path; `angular_momentum` asks the scenario to re-solve its own
+pendulum arc rather than knowing what a pendulum is.
+
+### No fluid at v0, and why
+
+Tested rather than assumed: Blender 2.93.4 in the pinned image ships Mantaflow, but headless
+scripted baking fails (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no
+fluid object, and a liquid's per-frame mesh state does not fit a pose-based trajectory seam.
+`granular_pour` is the v0 stand-in — a few dozen rigid grains that stream, pile and break up —
+and it is labelled `physics_medium: "granular"`. `physviol validate` rejects any clip
+claiming `"fluid"`. Real fluid and cloth are **Phase 3**, behind a newer Blender.
 
 ---
 
-## 6. Tiers
+## 7. Tiers
 
 | | Tier D (debug) | Tier A (`physviol_v0`) | Tier B (`physviol_v1`) |
 |---|---|---|---|
@@ -228,9 +301,8 @@ scenario × family pair. `antigravity` written once runs on every airborne scena
 | render cost | ~0.44 s/frame | ~1.75 s/frame | ~7.16 s/frame |
 | published | never | yes | yes |
 
-Frame counts are all `4k+1` so the token-grid reduction aligns exactly with a video-DiT
-VAE's 4× temporal binning. **Tier D is the default** — debug there, since a bug found at
-Tier D is fixed for all three.
+Frame counts are all `4k+1` so the token-grid reduction aligns exactly with a video-DiT VAE's
+4× temporal binning. **Tier D is the default** — debug there.
 
 **Rendering is CPU and stays that way.** Frame time fits `T = 1.29 + 0.0074·spp` at 256², so
 only ~26% is sampling — the only part OptiX would accelerate, capping a GPU build at ~1.37×
@@ -239,7 +311,7 @@ by Amdahl. Clip-level parallelism measures **1.92×** at width 4, for free. Deta
 
 ---
 
-## 7. Repo layout
+## 8. Repo layout
 
 ```
 docs/PLAN.md          the design document -- start here
@@ -251,20 +323,22 @@ scripts/fetch_refs.sh pinned read-only Kubric checkout -> refs/
 physviol/
   taxonomy.py         Part 2 as data: domains, families, scenarios, compatibility
   scenarios/          seeded scene samplers (declarative SceneSpec, no Kubric import)
-                      _common.py ground/lights/colour; _hdri.py environment ids
+                      _common.py ground/lights/ramps/understudies; _hdri.py environments
   sim/trajectory.py   THE SEAM -- container writes it, host reads it
   injectors/          trajectory-level interventions, one file per domain
-  residuals/laws.py   physical-law residuals
-  render/worker.py    container-side: simulate + inject + render both twins
+                      _geom.py the shared vocabulary they ask questions in
+  residuals/laws.py   physical-law residuals, one per family
+  render/worker.py    container-side: simulate + inject + render every variant
   annotate/           windows, masks, severity, grids, meta -> the released layout
-  viz/                overlay.mp4 and the shared video encoder
+  viz/                overlay.mp4, grid.mp4, coverage.mp4, one shared encoder
   schema/validate.py  cross-checks
   cli.py
-tests/                prefix identity, mask union, windows, grids, taxonomy
+tests/                prefix identity, mask union, windows, grids, taxonomy,
+                      mockroll.py + test_all_cells.py (all 48 cells, no docker)
 out/                  all generated output (gitignored)
 ```
 
-## 8. Papers
+## 9. Papers
 
 [IntPhys 2](https://arxiv.org/abs/2506.09849) · [LikePhys](https://arxiv.org/abs/2510.11512) ·
 [Kubric](https://github.com/google-research/kubric). PDFs of the first two live in

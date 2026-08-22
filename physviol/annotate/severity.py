@@ -84,6 +84,42 @@ def paint(seg: np.ndarray, score_by_body: Dict[int, np.ndarray],
     return out.astype(np.float16)
 
 
+def carry_to_visible(score: np.ndarray, active: np.ndarray,
+                     observable: np.ndarray) -> np.ndarray:
+    """Attribute severity to the frame where the evidence for it arrives.
+
+    Some violations are a single spike in the residual, on a frame that shows
+    nothing. A super-elastic bounce changes the velocity at the contact frame
+    while the body is still in exactly the same place in both twins; a
+    pendulum's angular momentum reverses one frame before the arc visibly
+    turns. Painting severity strictly per-frame puts the whole magnitude on an
+    invisible frame and leaves every visible one reading ~0 -- a strong
+    violation annotated as harmless.
+
+    So within each violation window, severity accumulated while nothing was
+    observable is carried to the next observable frame. The physical reading:
+    inside an active window, what you can see cannot be less severe than what
+    has already happened and not yet been shown. Windows never carry into each
+    other, and where nothing is hidden -- which is most cells -- this is exactly
+    the identity, so a shaped intervention like `antigravity` keeps its rise and
+    fall rather than being flattened into a running maximum.
+    """
+    s = np.asarray(score, np.float64)
+    act = np.asarray(active, bool)
+    obs = np.asarray(observable, bool)
+    out = np.zeros_like(s)
+    carried = 0.0
+    for t in range(s.shape[0]):
+        if not act[t]:
+            carried = 0.0
+            continue
+        carried = max(carried, float(s[t]))
+        if obs[t]:
+            out[t] = carried
+            carried = 0.0
+    return out
+
+
 def temporal_profile(severity_map: np.ndarray) -> np.ndarray:
     """Step 5. severity_t[t] == severity_map[t].max() -- a schema guarantee."""
     T = severity_map.shape[0]
