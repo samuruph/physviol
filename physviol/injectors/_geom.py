@@ -292,7 +292,7 @@ def contact_free_run(traj, body_id: int, min_len: int = 2) -> Optional[Tuple[int
 
 
 def support_under_any(spec, body, traj=None, frame: int = 0):
-    """Like `support_under`, but a *moving* body counts as support too.
+    """(body, top) like `support_under`, but a *moving* body counts too.
 
     `support_under` deliberately ignores dynamic bodies because it feeds the
     integrators, and bouncing off something that is itself falling is not a
@@ -306,7 +306,7 @@ def support_under_any(spec, body, traj=None, frame: int = 0):
         lowest = float(traj.pos[frame, bi, 2] - traj.radius[bi]) + 1e-3
     else:
         lowest = float(body.position[2]) - float(body.bounding_radius) + 1e-3
-    best_top = None
+    best, best_top = None, None
     for other in spec.bodies:
         if other is body or other.dormant:
             continue
@@ -318,8 +318,10 @@ def support_under_any(spec, body, traj=None, frame: int = 0):
         else:
             t = float(other.position[2]) + float(other.bounding_radius)
         if t <= lowest and (best_top is None or t > best_top):
-            best_top = t
-    return float(spec.floor_level) if best_top is None else float(best_top)
+            best, best_top = other, t
+    if best_top is None:
+        return None, float(spec.floor_level)
+    return best, float(best_top)
 
 
 def path_sample(pos: np.ndarray, u: np.ndarray) -> np.ndarray:

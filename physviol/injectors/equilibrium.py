@@ -48,7 +48,7 @@ class Support(Injector):
             return None
         clearance_r = self.CLEARANCE_RADII[severity_bin]
         radius = float(actor.bounding_radius)
-        top = _geom.support_under_any(spec, actor, traj, 0)
+        _, top = _geom.support_under_any(spec, actor, traj, 0)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],

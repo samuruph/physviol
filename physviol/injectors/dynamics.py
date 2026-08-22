@@ -67,7 +67,11 @@ class PhantomImpulse(Injector):
             magnitude_unit="impulse_over_m_vtyp", severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "delta_v_ms": dv})
+                   "delta_v_ms": dv,
+                   # This family fires where nothing is touching the body, so
+                   # the momentum residual is only meaningful there. See the
+                   # note in laws.linear_momentum.
+                   "ignore_contact_frames": True})
 
     def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
         out = self._clone(traj)

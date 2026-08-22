@@ -81,3 +81,34 @@ def test_cell_magnitude_is_ordered(scenario, family):
         mags.append(abs(plan.magnitude))
     assert mags == sorted(mags), "%s x %s magnitudes not ordered: %s" % (
         scenario, family, mags)
+
+
+@pytest.mark.parametrize("scenario,family", CELLS,
+                         ids=["%s.%s" % (s, f) for s, f in CELLS])
+def test_only_declared_culprits_are_edited(scenario, family):
+    """Whatever `apply` touches, `plan` must have declared.
+
+    The invariant that catches plan/apply divergence, which is silent by
+    construction: `antigravity` chose its target one way in `plan` and another
+    way in `apply`, so it bent a body nobody was annotating and left the
+    annotated one alone. The clip came out identical to its valid twin with a
+    full set of labels attached, and every existing check passed.
+    """
+    spec, traj, inj, plan = _prepare(scenario, family)
+    assert plan is not None
+    invalid = inj.apply(spec, traj, plan)
+    declared = {int(i) for i in plan.causal_body_ids}
+
+    moved = set()
+    for j, body in enumerate(spec.bodies):
+        for attr in ("pos", "quat", "scale_mul"):
+            a = getattr(traj, attr)[:, j]
+            b = getattr(invalid, attr)[:, j]
+            if float(np.abs(a - b).max()) > 1e-6:
+                moved.add(int(body.segmentation_id))
+        if not np.array_equal(traj.present[:, j], invalid.present[:, j]):
+            moved.add(int(body.segmentation_id))
+
+    undeclared = sorted(moved - declared)
+    assert not undeclared, "edited bodies %s that are not causal" % undeclared
+    assert moved, "declared culprits but edited nothing"

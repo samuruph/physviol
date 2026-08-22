@@ -83,8 +83,14 @@ def _contact_event(spec, traj, actor):
     while the event worth breaking is the one the falling cube causes.
     """
     dormant = tuple(int(b.segmentation_id) for b in spec.bodies if b.dormant)
+    # An event needs room after it: a violation that fires two frames from the
+    # end has nowhere to show its consequences, and on `stack_topple` the first
+    # real impact is the blocks hitting the ground as the tower finishes
+    # falling -- long after the interesting moment, which is the top block
+    # sinking into the one below while the stack is still standing.
+    latest = traj.num_frames - 3
     impact = _geom.first_impact(traj, int(actor.segmentation_id), exclude=dormant)
-    if impact is not None and impact[0] >= 1:
+    if impact is not None and 1 <= impact[0] <= latest:
         partner = next((b for b in spec.bodies
                         if int(b.segmentation_id) == impact[1]), None)
         return (int(impact[0]), int(impact[1]),
@@ -93,18 +99,22 @@ def _contact_event(spec, traj, actor):
 
     hit = _geom.first_contact_any(traj, int(actor.segmentation_id),
                                   exclude=dormant)
-    if hit is not None and hit[0] >= 1:
+    if hit is not None and 1 <= hit[0] <= latest:
         partner = next((b for b in spec.bodies
                         if int(b.segmentation_id) == hit[1]), None)
         return (int(hit[0]), int(hit[1]),
                 bool(partner is not None and partner.static),
                 np.array([0.0, 0.0, 1.0]))
 
-    surface, _ = _geom.support_under(spec, actor)
+    # Whatever is directly beneath, moving or not. Restricting this to *static*
+    # surfaces meant a block resting on another block had no supporting surface
+    # at all -- the search skipped the block under it and found the floor two
+    # bodies down, which it is nowhere near -- so `stack_topple` could not host
+    # a solidity violation despite being made of things stacked on each other.
+    surface, top = _geom.support_under_any(spec, actor, traj, 0)
     if surface is None:
         return None
     bi = traj.index_of(int(actor.segmentation_id))
-    top = _geom.top_of(spec, surface)
     below = np.flatnonzero((traj.pos[:, bi, 2] - traj.radius[bi]) <= top + 1e-4)
     if not below.size:
         return None

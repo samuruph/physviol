@@ -156,14 +156,27 @@ class Injector:
                + zlib.crc32(self.family.encode())) % (2 ** 31 - 1)
         return np.random.RandomState(key)
 
-    @staticmethod
-    def _primary(spec):
+    def _primary(self, spec):
         """The one body most families act on. `None` if the scenario has no actor.
+
+        A scenario may override the choice per family through
+        `notes["family_targets"]`, which is how a scene says something about
+        itself that the injector could not work out: `pyramid_impact` points
+        `solidity` at a struck sphere rather than the falling cube, and
+        `granular_pour` points every single-grain family at the grains that
+        start highest, because any other grain spends the clip buried and its
+        violation would be perfectly scored and completely invisible.
 
         Dormant understudies are skipped: they exist in the scene graph so
         `fission` has something to switch on, and until it does they are not
         part of the scene.
         """
+        want = (spec.notes.get("family_targets") or {}).get(self.family)
+        if want:
+            by_id = {int(b.segmentation_id): b for b in spec.bodies}
+            preferred = [by_id[int(i)] for i in want if int(i) in by_id]
+            if preferred:
+                return preferred[0]
         live = [b for b in _geom.actors(spec) if not b.dormant]
         return live[0] if live else None
 

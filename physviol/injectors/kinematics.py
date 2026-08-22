@@ -67,8 +67,12 @@ class _GravityScale(Injector):
     def _targets(self, spec):
         return self._all_actors(spec)
 
+    def _choose(self, spec, traj):
+        """Which bodies to bend, given the rollout. Overridden by `antigravity`."""
+        return self._targets(spec)
+
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        targets = self._targets(spec)
+        targets = self._choose(spec, traj)
         if len(targets) < self.MIN_BODIES:
             return None
         t0 = _event_frame(spec, traj, targets[0], traj.num_frames)
@@ -130,8 +134,15 @@ class _GravityScale(Injector):
 
     def apply(self, spec, traj, plan) -> Trajectory:
         t0, t1 = plan.windows[0]
+        # The bodies the PLAN named, never a fresh choice. `_choose` picks the
+        # most airborne actor while `_targets` picks a random one, so
+        # re-deriving here bent a different grain than the plan had annotated
+        # -- and since the annotated grain was then untouched, the clip came out
+        # byte-identical to its valid twin with a full set of labels attached.
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        targets = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
         out = self._rollout(spec, traj, t0, t1,
-                            float(plan.params["alpha_peak"]), self._targets(spec))
+                            float(plan.params["alpha_peak"]), targets)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
         return out
@@ -171,17 +182,41 @@ class AntiGravity(_GravityScale):
     family = "antigravity"
 
     def _targets(self, spec):
-        """One actor, chosen per scene rather than per severity bin.
-
-        Picking `actors[0]` would always bend the same body, so a multi-object
-        release would show the violation on one object and never on its
-        neighbours; picking from the plan's rng would bend a different body in
-        each bin, so the three would not be the same clip at three strengths.
-        """
         live = self._all_actors(spec)
         if not live:
             return []
         return [live[self._instance_rng(spec).randint(len(live))]]
+
+    def _choose(self, spec, traj):
+        """One actor, and one that is actually in the air.
+
+        Bending gravity for a body resting on the floor produces almost nothing
+        to measure: `free_fall` is gated on the frames where a body is
+        unsupported, so a grain sitting in a pile has its residual zeroed for
+        the whole window however hard gravity is reversed. That is how
+        `granular_pour x antigravity` came out with a clean-looking plan and a
+        severity of exactly zero -- it had picked a grain that had already
+        landed.
+
+        Preferring the longest airborne run also keeps the choice deterministic
+        and stable across severity bins, since it depends only on the valid
+        rollout. The instance rng breaks ties, so a scene where every actor is
+        equally airborne still varies which one is bent.
+        """
+        live = self._all_actors(spec)
+        if not live:
+            return []
+        jitter = self._instance_rng(spec)
+        best, best_score = None, None
+        for body in live:
+            bi = traj.index_of(int(body.segmentation_id))
+            run = _geom.longest_airborne_run(
+                traj, bi, _geom.surface_top(spec, body))
+            span = 0 if run is None else (run[1] - run[0] + 1)
+            score = (span, float(jitter.rand()))
+            if best_score is None or score > best_score:
+                best, best_score = body, score
+        return [best]
 
 
 class GlobalGravity(_GravityScale):
@@ -441,7 +476,11 @@ class Newton1Inertia(Injector):
             magnitude_unit="dv_over_g_dt", severity_bin=severity_bin,
             notes={"mode": mode, "radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "speed_at_event": speed})
+                   "speed_at_event": speed,
+                   # This family fires where nothing is touching the body, so
+                   # the momentum residual is only meaningful there. See the
+                   # note in laws.linear_momentum.
+                   "ignore_contact_frames": True})
 
     def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
         out = self._clone(traj)

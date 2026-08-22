@@ -42,7 +42,11 @@ class GranularPour(Scenario):
         r = float(rng.uniform(0.070, 0.085))
         hue = float(rng.uniform(0, 1))
 
-        half, wall_t, wall_h = 0.82, 0.05, 0.34
+        # Low walls, and a camera high enough to see over the near one.
+        # At 0.34 the front wall hid the entire pile: a grain sinking
+        # through the floor was behind it in both twins, so the violation
+        # was active, correctly scored and completely unobservable.
+        half, wall_t, wall_h = 0.82, 0.05, 0.24
         walls = []
         for i, (cx_, cy_, sx, sy) in enumerate([
                 (0.0, half, half + wall_t, wall_t),
@@ -56,15 +60,16 @@ class GranularPour(Scenario):
                 color=(0.34, 0.35, 0.40), segmentation_id=self.SEG_WALLS[i],
                 role="prop"))
 
-        grains = []
+        grains, heights = [], []
         for i in range(n_grains):
             rad = float(rng.uniform(0.7, 1.0)) * 0.45
             ang = float(rng.uniform(0.0, 6.283185))
+            z0 = float(rng.uniform(0.55, 2.25))
+            heights.append((z0, SEG_GRAIN_BASE + i))
             grains.append(BodySpec(
                 name="grain_%03d" % i, kind="sphere",
                 position=(rad * float(rng.uniform(-1, 1)),
-                          rad * float(rng.uniform(-1, 1)),
-                          float(rng.uniform(0.55, 2.25))),
+                          rad * float(rng.uniform(-1, 1)), z0),
                 scale=(r,) * 3,
                 velocity=(0.0, 0.0, float(rng.uniform(-0.4, 0.0))),
                 mass=0.12, friction=0.5, restitution=0.2,
@@ -76,12 +81,22 @@ class GranularPour(Scenario):
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR)] + walls + grains,
             lights=C.lights(cx, look_at=(0, 0, 0.3)),
-            camera_position=(1.9, -3.0, 1.9), camera_look_at=(0.0, 0.0, 0.3),
+            camera_position=(1.7, -3.2, 3.0), camera_look_at=(0.0, 0.0, 0.15),
             floor_level=0.0, complexity=complexity, physics_medium="granular",
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"n_grains": n_grains, "grain_radius": r,
                    "box_half_width": half,
-                   "grain_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)]})
+                   "grain_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)],
+                   # Single-grain families act on the grains that start
+                   # HIGHEST, because those land last and end up on top of the
+                   # pile. Any other grain spends the clip buried: its
+                   # footprint is identical in both twins, so the violation is
+                   # active, correctly scored, and completely unobservable --
+                   # a clip with a maximal residual and an empty mask.
+                   "family_targets": {
+                       fam: [i for _, i in sorted(heights, reverse=True)[:6]]
+                       for fam in ("solidity", "permanence", "phantom_impulse",
+                                   "immutability", "superelastic")}})
 
 
 register(GranularPour())
