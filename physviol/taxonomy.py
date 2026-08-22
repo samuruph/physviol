@@ -192,8 +192,12 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
     "superelastic":     {"ball_drop": BUILD, "ball_collision": BUILD,
                          "pyramid_impact": BUILD, "clutter_toss": DEFER,
                          "granular_pour": DEFER},
-    "newton3_reaction": {"ball_collision": BUILD, "pyramid_impact": BUILD,
-                         "clutter_toss": DEFER},
+    # Not on `pyramid_impact`: a cube and a sphere are plainly different
+    # objects, so "the cube is heavy" is a lawful reading of the clip and there
+    # is no violation left for a viewer to see. Both Newton families need two
+    # bodies that look the same.
+    "newton3_reaction": {"ball_collision": BUILD,
+                         "pyramid_impact": DEFER, "clutter_toss": DEFER},
     "phantom_impulse":  {"ball_collision": BUILD, "projectile_toss": BUILD,
                          "resting_table": BUILD, "spin_toss": BUILD,
                          "ball_drop": DEFER,
@@ -201,8 +205,9 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
                          "stack_topple": DEFER, "pendulum_swing": DEFER,
                          "rolling_ramp": DEFER, "clutter_toss": DEFER,
                          "granular_pour": DEFER},
-    "newton2_mass":     {"ball_collision": BUILD, "pyramid_impact": BUILD,
-                         "ball_drop": DEFER, "ramp_slide": DEFER},
+    "newton2_mass":     {"ball_collision": BUILD,
+                         "pyramid_impact": DEFER, "ball_drop": DEFER,
+                         "ramp_slide": DEFER},
     "angular_momentum": {"spin_toss": BUILD, "pendulum_swing": BUILD,
                          "rolling_ramp": BUILD, "ball_collision": DEFER,
                          "ramp_slide": DEFER, "projectile_toss": DEFER},
@@ -212,12 +217,19 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
                          "resting_table": DEFER, "granular_pour": DEFER},
     "shadow":           {"shadow_track": BUILD, "ball_drop": DEFER,
                          "projectile_toss": DEFER, "resting_table": DEFER},
-    "global_gravity":   {"ball_drop": BUILD, "projectile_toss": BUILD,
-                         "granular_pour": BUILD, "ball_collision": DEFER,
+    # Only where at least two bodies move. With one object on screen, scaling
+    # gravity for the scene and scaling it for that object render identically,
+    # so a single-body `global_gravity` cell is an `antigravity` clip with a
+    # different label. `plan()` enforces the same rule and returns None below
+    # two, so these are not merely unscheduled -- they are unbuildable until
+    # the population axis puts more movers in the frame.
+    "global_gravity":   {"ball_collision": BUILD, "pyramid_impact": BUILD,
+                         "stack_topple": BUILD, "resting_table": BUILD,
+                         "granular_pour": BUILD,
+                         "ball_drop": DEFER, "projectile_toss": DEFER,
                          "ramp_slide": DEFER, "occluder_pass": DEFER,
-                         "stack_topple": DEFER, "pyramid_impact": DEFER,
-                         "pendulum_swing": DEFER, "resting_table": DEFER,
-                         "rolling_ramp": DEFER, "clutter_toss": DEFER},
+                         "pendulum_swing": DEFER, "rolling_ramp": DEFER,
+                         "spin_toss": DEFER, "clutter_toss": DEFER},
 }
 
 SEVERITY_BINS: Tuple[str, ...] = ("weak", "medium", "strong")

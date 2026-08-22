@@ -398,20 +398,22 @@ class SuperElastic(Injector):
         return out
 
 
-class _MutedResponse(Injector):
-    """Shared base: a collision one body under-responds to.
+class _CollisionEdit(Injector):
+    """Shared machinery for the two ways a collision can come out wrong.
 
-    `newton3_reaction` is the limit case of `newton2_mass` -- an effective mass
-    ratio of infinity is a body that does not respond at all -- so they are one
-    mechanism with one parameter, and giving them separate implementations
-    would only create two places for the collision-finding logic to drift.
+    Both need the same thing -- the first contact between two bodies that both
+    ought to respond -- and differ only in what outcome they substitute, so the
+    collision-finding lives here and each subclass supplies `_outcome`.
+
+    The normal is taken as the line of centres at the contact frame rather than
+    from the recorded contact. That is exact for spheres, close enough for a
+    cube landing on one, and it sidesteps the orientation question entirely:
+    `Contacts.normal` points from `body_a` toward `body_b`, so using it
+    correctly means knowing which of the two you are looking at, and getting
+    that backwards silently mirrors the collision.
     """
 
-    RATIO_BY_BIN = {"weak": 2.0, "medium": 5.0, "strong": 12.0}
-    STRONG_REFERENCE = 3.0            # |dv| / (g*dt) the victim fails to show
-
-    def _ratio(self, severity_bin: str) -> float:
-        return float(self.RATIO_BY_BIN[severity_bin])
+    STRONG_REFERENCE = 3.0            # |dv| / (g*dt) that the pair fails to show
 
     def strong_residual_reference(self, spec) -> float:
         return self.STRONG_REFERENCE
@@ -425,61 +427,79 @@ class _MutedResponse(Injector):
         t0, id_a, id_b = hit
         if not (1 <= t0 < traj.num_frames - 1):
             return None
-        if actor_id is None:
+        if actor_id is None or actor_id not in (id_a, id_b):
             actor_id = id_a
-        # The victim is whichever body is not the actor, so the scenario's
-        # protagonist keeps behaving lawfully and the anomaly is unambiguous.
-        victim_id = id_b if id_a == actor_id else id_a
-        other_id = id_a if victim_id == id_b else id_b
-        victim = next(b for b in spec.bodies
-                      if int(b.segmentation_id) == victim_id)
+        other_id = id_b if actor_id == id_a else id_a
 
-        bi = traj.index_of(victim_id)
-        dv = float(np.linalg.norm(traj.lin_vel[t0, bi] - traj.lin_vel[t0 - 1, bi]))
+        ia, ib = traj.index_of(actor_id), traj.index_of(other_id)
+        normal = traj.pos[t0, ib] - traj.pos[t0, ia]
+        mag = float(np.linalg.norm(normal))
+        if mag < 1e-6:
+            return None
+        normal = (normal / mag).astype(np.float64)
+
+        ratio = float(self.RATIO_BY_BIN[severity_bin])
+        preview = self._edited(spec, traj, actor_id, other_id, t0, normal, ratio)
+        strong = self._edited(spec, traj, actor_id, other_id, t0, normal,
+                              float(self.RATIO_BY_BIN["strong"]))
+        r_strong = max(
+            self._measure(strong, cid, "linear_momentum", {})
+            for cid in (actor_id, other_id))
+        del preview
+
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
-        ratio = self._ratio(severity_bin)
+        dv = float(np.linalg.norm(traj.lin_vel[t0, ib] - traj.lin_vel[t0 - 1, ib]))
         t1 = min(traj.num_frames - 1, t0 + 1)
-
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0, windows=[(t0, t1)],
-            causal_body_ids=[victim_id, other_id],
-            params=dict(self._params(ratio), victim=victim_id, partner=other_id,
-                        collision_frame=int(t0)),
-            magnitude=float(dv * (1.0 - 1.0 / ratio) / max(g_dt, 1e-9)),
+            causal_body_ids=self._causal_order(actor_id, other_id),
+            params=dict(self._params(ratio), collision_frame=int(t0),
+                        actor=actor_id, other=other_id),
+            magnitude=float(dv * abs(1.0 - 1.0 / ratio) / max(g_dt, 1e-9)),
             magnitude_unit=self.magnitude_unit, severity_bin=severity_bin,
-            notes={"radius": float(victim.bounding_radius),
-                   "surface_top": _geom.surface_top(spec, victim),
-                   "effective_mass_ratio": ratio,
-                   "victim_id": victim_id, "lawful_dv": dv})
+            notes={"radius": float(traj.radius[ia]),
+                   "surface_top": _geom.surface_top(spec, actor),
+                   "ratio": ratio, "actor_id": actor_id, "other_id": other_id,
+                   "normal": [float(x) for x in normal],
+                   "r_strong": float(r_strong), "lawful_dv": dv})
 
     def apply(self, spec, traj, plan) -> Trajectory:
-        out = self._clone(traj)
-        victim = next(b for b in spec.bodies
-                      if int(b.segmentation_id) == int(plan.notes["victim_id"]))
-        bi = traj.index_of(int(victim.segmentation_id))
-        t0 = int(plan.params["collision_frame"])
-        ratio = float(plan.notes["effective_mass_ratio"])
-
-        v_pre = traj.lin_vel[t0 - 1, bi].astype(np.float64)
-        v_post = traj.lin_vel[t0, bi].astype(np.float64)
-        v_muted = v_pre + (v_post - v_pre) / ratio
-        self._rewrite_from(spec, traj, out, victim, t0, v0=v_muted)
-
+        n = plan.notes
+        out = self._edited(spec, traj, int(n["actor_id"]), int(n["other_id"]),
+                           int(plan.params["collision_frame"]),
+                           np.asarray(n["normal"], np.float64), float(n["ratio"]))
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
         return out
 
+    # ------------------------------------------------------------------ #
+    def _edited(self, spec, traj, actor_id, other_id, t0, normal, ratio):
+        out = self._clone(traj)
+        for body_id, v_new in self._outcome(traj, actor_id, other_id, t0,
+                                            normal, ratio).items():
+            body = next(b for b in spec.bodies
+                        if int(b.segmentation_id) == int(body_id))
+            self._rewrite_from(spec, traj, out, body, t0, v0=v_new)
+        return out
 
-class Newton3Reaction(_MutedResponse):
+    @staticmethod
+    def _split(v, normal):
+        """Velocity as (normal component, tangential vector)."""
+        vn = float(np.dot(v, normal))
+        return vn, v - vn * normal
+
+
+class Newton3Reaction(_CollisionEdit):
     """In a collision, only one body responds.
 
     The struck body carries straight on as though nothing hit it, while its
     partner rebounds normally -- so the pair's total momentum changes with no
-    external force. Implemented as a very large effective mass ratio rather than
-    an exactly infinite one so the victim still shows a sliver of response; a
-    perfectly rigid non-response reads as a rendering glitch rather than as
-    physics going wrong.
+    external force. **Momentum is not conserved, and that is the whole claim.**
+
+    Implemented as a very large but finite suppression rather than a total one,
+    so the victim still shows a sliver of response; a perfectly rigid
+    non-response reads as a rendering glitch rather than as physics going wrong.
     """
 
     family = "newton3_reaction"
@@ -490,22 +510,84 @@ class Newton3Reaction(_MutedResponse):
     def _params(ratio):
         return {"type": "suppress_reaction", "response_fraction": 1.0 / ratio}
 
+    @staticmethod
+    def _causal_order(actor_id, other_id):
+        # The victim leads: it is the body whose behaviour is wrong, and
+        # `causal_body_ids[0]` is what the residual is measured on.
+        return [int(other_id), int(actor_id)]
 
-class Newton2Mass(_MutedResponse):
-    """Two identical-looking bodies respond differently to the same impulse.
+    def _outcome(self, traj, actor_id, other_id, t0, normal, ratio):
+        """The victim keeps almost all of its incoming velocity."""
+        bi = traj.index_of(other_id)
+        v_pre = traj.lin_vel[t0 - 1, bi].astype(np.float64)
+        v_post = traj.lin_vel[t0, bi].astype(np.float64)
+        return {other_id: v_pre + (v_post - v_pre) / ratio}
 
-    The violation is not that a heavy thing moves less -- that is lawful -- but
-    that nothing in the image says it is heavy. This is the family where the
-    valid twin does the most work: without it, "that ball barely moved" is not
-    evidence of anything.
+
+class Newton2Mass(_CollisionEdit):
+    """Two identical-looking bodies collide as though their masses differed.
+
+    The distinction from `newton3_reaction` is the one that makes both families
+    worth having. **Both bodies respond, and the exchange is exactly what a
+    lawful collision between masses `k*m` and `m` would produce** -- the
+    velocity changes come out in the ratio `1:k`, the restitution is the one
+    the valid twin used, and the whole outcome is internally consistent. The
+    only thing wrong is that the two bodies are visually identical, so nothing
+    in the image justifies the mass ratio the collision implies.
+
+    Worth being precise about what is *not* claimed here, because the obvious
+    formulation is self-contradicting: this does not conserve momentum for the
+    bodies' true masses. It cannot. An outcome inconsistent with equal masses
+    and an outcome that conserves equal-mass momentum are the same constraint,
+    so "wrong mass ratio but momentum still conserved" describes nothing. What
+    separates the two families is how many bodies react: here both do, in a
+    fixed and self-consistent ratio; under `newton3_reaction` one simply does
+    not react at all.
+
+    That makes it the family most dependent on its valid twin -- "that ball
+    barely moved" is not evidence of anything on its own -- and it is why
+    `ball_collision` samples both balls with the same radius and the same
+    colour. It is also why the family is not offered on `pyramid_impact`: a cube
+    and a sphere are plainly different objects, so "the cube is heavy" is a
+    lawful reading and there is no violation left to see.
     """
 
     family = "newton2_mass"
     magnitude_unit = "effective_mass_ratio"
+    RATIO_BY_BIN = {"weak": 3.0, "medium": 8.0, "strong": 25.0}
 
     @staticmethod
     def _params(ratio):
         return {"type": "effective_mass_scale", "mass_ratio": ratio}
+
+    @staticmethod
+    def _causal_order(actor_id, other_id):
+        return [int(actor_id), int(other_id)]
+
+    def _outcome(self, traj, actor_id, other_id, t0, normal, ratio):
+        """Re-solve the collision for effective masses (ratio*m, m).
+
+        Standard one-dimensional restitution along the line of centres, with the
+        tangential components untouched. The restitution is recovered from the
+        lawful rollout so the invalid clip differs from its twin in the mass
+        ratio and nothing else.
+        """
+        ia, ib = traj.index_of(actor_id), traj.index_of(other_id)
+        ua, ta = self._split(traj.lin_vel[t0 - 1, ia].astype(np.float64), normal)
+        ub, tb = self._split(traj.lin_vel[t0 - 1, ib].astype(np.float64), normal)
+        va, _ = self._split(traj.lin_vel[t0, ia].astype(np.float64), normal)
+        vb, _ = self._split(traj.lin_vel[t0, ib].astype(np.float64), normal)
+
+        approach = ua - ub
+        e = 0.5 if abs(approach) < 1e-6 else float(np.clip((vb - va) / approach,
+                                                           0.0, 1.0))
+        ma, mb = ratio * float(traj.mass[ia]), float(traj.mass[ib])
+        total = ma + mb
+        p = ma * ua + mb * ub
+        va_new = (p + mb * e * (ub - ua)) / total
+        vb_new = (p + ma * e * (ua - ub)) / total
+        return {actor_id: ta + va_new * normal,
+                other_id: tb + vb_new * normal}
 
 
 register(Solidity())

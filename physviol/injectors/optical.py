@@ -30,6 +30,11 @@ class Shadow(Injector):
     """
 
     family = "shadow"
+    # A shadow that has come loose stays loose: the window runs to the end of
+    # the clip and `--window` is ignored. Truncating it left `apply` offsetting
+    # the shadow for every frame after `t1` while `active` claimed those frames
+    # were lawful -- a violation the clip showed and the annotation denied.
+    persistent = True
     OFFSET_RADII = {"weak": 1.2, "medium": 3.0, "strong": 5.5}
 
     def strong_residual_reference(self, spec) -> float:

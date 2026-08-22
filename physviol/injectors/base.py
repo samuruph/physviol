@@ -16,6 +16,7 @@ py3.9-compatible: runs inside the container.
 from __future__ import annotations
 
 import copy
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -82,7 +83,17 @@ class Injector:
     #: continuity law is broken only at the jump.
     window_frames: Optional[int] = None
 
+    #: The violation is a *state*, not an event: once it starts it holds to the
+    #: end of the clip and `--window` does not apply. A detached shadow does not
+    #: reattach; a hovering body does not settle; a body that split stays split.
+    #: Truncating the window on these families does not shorten the violation,
+    #: it just stops annotating the tail of it -- which is how `shadow` came to
+    #: ship a detached shadow across frames `active` said were lawful.
+    persistent: bool = False
+
     def _window_len(self, default: int, t0: int, num_frames: int) -> int:
+        if self.persistent:
+            return max(1, num_frames - t0)
         n = self.window_frames or default
         return max(1, min(int(n), num_frames - t0))
 
@@ -131,6 +142,20 @@ class Injector:
         return out
 
     # -- who the intervention acts on -------------------------------------
+    def _instance_rng(self, spec) -> np.random.RandomState:
+        """A generator keyed to the *scene*, not to the severity bin.
+
+        `plan()` is handed an rng seeded per (family, severity) so that adding a
+        family to a batched run cannot perturb the others. That is right for
+        anything the bin should vary, and wrong for anything it must not: a
+        choice like "does this body grow or shrink" has to come out the same for
+        weak, medium and strong, or the three bins of one cell are three
+        different violations and their magnitudes stop being comparable.
+        """
+        key = (int(spec.seed) * 2654435761
+               + zlib.crc32(self.family.encode())) % (2 ** 31 - 1)
+        return np.random.RandomState(key)
+
     @staticmethod
     def _primary(spec):
         """The one body most families act on. `None` if the scenario has no actor.
@@ -267,6 +292,29 @@ class Injector:
                 return scale, candidate
         return ladder[-1], candidate
 
+    def _fit_window_to_frame(self, spec, traj: Trajectory, bodies, t0: int,
+                             n_win: int, build, tolerance: int = 1,
+                             floor: int = 3) -> int:
+        """Shorten a window until the culprit stays in shot, keeping its strength.
+
+        The counterpart to `_fit_to_frame`, and the right one whenever the bin
+        is a *qualitative* claim. Weakening the knob to keep a body on screen
+        turns "gravity reverses" into "gravity is slightly reduced" -- the clip
+        no longer shows what its label says, which is the failure the user
+        reported on `antigravity`. Shortening the window keeps the reversal and
+        just gives it less time to carry the body out of frame.
+
+        Never goes below `floor` frames, because `_pulse` needs a ramp on each
+        side and a plateau between them: shorter than three and the profile
+        degenerates into a step, losing the shape that makes `severity_map` a
+        field rather than a flag.
+        """
+        budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
+        for n in range(int(n_win), floor - 1, -1):
+            if self._offscreen_frames(spec, build(n), bodies, t0) <= budget:
+                return n
+        return floor
+
     # ------------------------------------------------------------------ #
     def _rewrite_from(self, spec, traj: Trajectory, out: Trajectory, body,
                       t0: int, v0=None, p0=None, g_per_frame=None,
@@ -314,9 +362,16 @@ class Injector:
         """
         if n <= 1:
             return np.full((max(n, 1),), peak, np.float64)
+        # The plateau is the load-bearing part and must never vanish: a profile
+        # that only *passes through* its peak applies a mean effect of about
+        # (base + peak) / 2, which is half what the bin advertises. The old
+        # clamp kept a ramp frame on each side at all costs, so a 2-frame
+        # window came out as two ramp values and never reached `peak` at all --
+        # which only became reachable once the frustum fit started shortening
+        # windows instead of weakening them.
         n_ramp = max(1, int(round((1.0 - hold) * n / 2.0)))
-        if 2 * n_ramp >= n:
-            n_ramp = max(1, (n - 1) // 2)
+        while n_ramp > 0 and 2 * n_ramp >= n:
+            n_ramp -= 1
         n_hold = n - 2 * n_ramp
         # Ramp values are strictly *between* base and peak: every frame inside
         # the window must actually be violating, or `active[t]` would mark

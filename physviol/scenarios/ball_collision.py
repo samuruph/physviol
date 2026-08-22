@@ -24,8 +24,15 @@ class BallCollision(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        r_a = float(rng.uniform(0.28, 0.36))
-        r_b = float(rng.uniform(0.28, 0.36))
+        # The two balls are deliberately IDENTICAL -- same radius, same colour.
+        # `newton2_mass` stages a collision whose outcome would be lawful for
+        # masses in some ratio k:1, and the only thing that makes it a violation
+        # is that nothing in the image justifies that ratio. Give the balls
+        # different sizes and "the big one is heavier" becomes a perfectly good
+        # reading, and the family stops testing anything.
+        radius = float(rng.uniform(0.28, 0.36))
+        r_a = r_b = radius
+        hue = float(rng.uniform(0, 1))
         speed = float(rng.uniform(2.0, 2.6))
         flight = tier.num_frames / float(tier.fps)
         # Meet at ~45% of the clip: late enough that the lawful approach is
@@ -42,7 +49,7 @@ class BallCollision(Scenario):
                 # rather than sliding: omega_y = vx / r.
                 angular_velocity=(0.0, vx / radius, 0.0),
                 mass=1.0, friction=0.05, restitution=0.75,
-                color=C.hue_rgb(float(rng.uniform(0, 1))),
+                color=C.hue_rgb(hue),
                 segmentation_id=seg, role="actor")
 
         return SceneSpec(
@@ -54,7 +61,8 @@ class BallCollision(Scenario):
             camera_position=(0.6, -6.4, 1.8), camera_look_at=(0.0, 0.0, 0.4),
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
-            notes={"radius_a": r_a, "radius_b": r_b, "speed": speed})
+            notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,
+                   "identical_actors": True})
 
 
 register(BallCollision())

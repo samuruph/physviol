@@ -91,7 +91,14 @@ def test_antigravity_intervention_varies_over_time(spec):
     assert alpha[0] != alpha[len(alpha) // 2], "must ramp, not step"
     assert min(alpha) < 0.0, "strong bin should reverse gravity at its peak"
     peak = min(alpha)
-    assert sum(1 for a in alpha if abs(a - peak) < 1e-9) >= 2, "needs a plateau"
+    assert sum(1 for a in alpha if abs(a - peak) < 1e-9) >= 1, "needs a plateau"
+    # The property the plateau exists for: the *mean* applied effect has to be
+    # most of the way to the advertised peak. A profile that merely passes
+    # through its peak delivers about half of it, which is how a raised cosine
+    # made the strongest bin look like the weakest.
+    mean_effect = (1.0 - float(np.mean(alpha))) / (1.0 - peak)
+    assert mean_effect > 0.6, (
+        "mean alpha is only %.0f%% of the way to the peak" % (100 * mean_effect))
 
 
 def test_severity_bins_are_visibly_different_not_just_numerically(spec):
@@ -173,3 +180,78 @@ def test_bounce_gate_does_not_eat_the_antigravity_signal():
     bounce_low[1:] = ((vz[:-1] < -1e-3) & (vz[1:] > 1e-3)
                       & (at_floor_low[:-1] | at_floor_low[1:]))
     assert bounce_low.any(), "a reversal at the floor is a bounce"
+
+
+def _collision_traj():
+    """Two equal spheres closing head-on, with a lawful elastic exchange."""
+    import mockroll
+    from physviol import scenarios
+    sc = scenarios.get("ball_collision")
+    spec = sc.sample(4242, TIERS["D"], "L0")
+    return spec, mockroll.roll(spec, sc)
+
+
+def _dv_along(traj, invalid, body_id, t0, normal):
+    """How much this body's velocity changed across the collision, along the
+    line of centres. Tangential and gravity terms are excluded so the number
+    reflects the collision and nothing else."""
+    bi = traj.index_of(body_id)
+    dv = (invalid.lin_vel[t0, bi].astype(float)
+          - traj.lin_vel[t0 - 1, bi].astype(float))
+    return abs(float(np.dot(dv, normal)))
+
+
+def test_newton2_and_newton3_break_different_things():
+    """The property that makes both families worth having.
+
+    They shipped looking identical because both simply suppressed one body's
+    response. They are now distinguished by *how many bodies react*:
+
+    * `newton3_reaction` -- the struck body does not react at all while its
+      partner rebounds normally, so the pair's momentum changes with no
+      external force.
+    * `newton2_mass` -- both react, in the fixed ratio a lawful collision
+      between masses `k*m` and `m` would give. Internally consistent; a
+      violation only because the bodies look identical.
+    """
+    spec, traj = _collision_traj()
+    ids = [b.segmentation_id for b in spec.bodies if b.role == "actor"]
+
+    inj = injectors.get("newton3_reaction")
+    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+    assert plan is not None
+    invalid = inj.apply(spec, traj, plan)
+    t0 = int(plan.params["collision_frame"])
+    n = np.asarray(plan.notes["normal"], float)
+    victim = int(plan.notes["other_id"])
+    partner = int(plan.notes["actor_id"])
+    dv_victim = _dv_along(traj, invalid, victim, t0, n)
+    dv_partner = _dv_along(traj, invalid, partner, t0, n)
+    assert dv_victim < 0.2 * dv_partner, (
+        "newton3's victim must barely react: %.3f vs %.3f"
+        % (dv_victim, dv_partner))
+
+    inj = injectors.get("newton2_mass")
+    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+    assert plan is not None
+    invalid = inj.apply(spec, traj, plan)
+    t0 = int(plan.params["collision_frame"])
+    n = np.asarray(plan.notes["normal"], float)
+    ratio = float(plan.notes["ratio"])
+    heavy = _dv_along(traj, invalid, int(plan.notes["actor_id"]), t0, n)
+    light = _dv_along(traj, invalid, int(plan.notes["other_id"]), t0, n)
+    assert heavy > 1e-3 and light > 1e-3, "both bodies must react"
+    # dv_heavy / dv_light == m_light / m_heavy == 1 / ratio
+    assert abs(heavy / light - 1.0 / ratio) < 0.25 / ratio + 0.05, (
+        "responses should be in the implied mass ratio: %.3f vs 1/%.0f"
+        % (heavy / light, ratio))
+
+
+def test_newton2_needs_visually_identical_bodies():
+    """The scenario has to hold up its end: same radius, same colour."""
+    from physviol import scenarios
+    for seed in (1, 777, 4242):
+        spec = scenarios.get("ball_collision").sample(seed, TIERS["D"], "L0")
+        a, b = [x for x in spec.bodies if x.role == "actor"]
+        assert a.scale == b.scale, seed
+        assert a.color == b.color, seed

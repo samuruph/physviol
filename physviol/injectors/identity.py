@@ -42,8 +42,15 @@ class Permanence(Injector):
             return None
 
         frac = self.GONE_FRACTION[severity_bin]
-        n_win = self._window_len(max(1, int(round(frac * (T - t0)))), t0, T)
-        t1 = min(T - 1, t0 + n_win - 1)
+        if frac >= 1.0:
+            # `strong` means the body never comes back, so it outranks
+            # `--window`. Letting the flag truncate it did two bad things at
+            # once: the object reappeared, and all three bins collapsed to the
+            # same short absence while `magnitude` still claimed 1.0.
+            t1 = T - 1
+        else:
+            n_win = self._window_len(max(1, int(round(frac * (T - t0)))), t0, T)
+            t1 = min(T - 1, t0 + n_win - 1)
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
@@ -70,23 +77,49 @@ class Permanence(Injector):
 
 
 class Immutability(Injector):
-    """The body changes size between one frame and the next, and stays changed.
+    """The body swells or shrinks over a few frames, and stays the wrong size.
 
     Sustained rather than instant, and the distinction is not pedantic: the
-    resize happens at one instant, but the body being the wrong size is an
+    resize *starts* at one instant, but the body being the wrong size is an
     ongoing contradiction of its own identity, not a downstream consequence of
     it. Compare `continuity`, where the teleport is the breach and the body
     being somewhere else afterwards is merely what follows.
 
-    Growing rather than shrinking, because a shrinking body's mask collapses
-    toward nothing exactly as the violation peaks.
+    **Eased over several frames rather than switched.** A body that changes size
+    between two consecutive frames reads as a cut between two different shots;
+    one that visibly swells reads as physics going wrong, which is the thing
+    being annotated. The scale ramps over `RAMP_FRAMES` and then holds, so the
+    residual rises with it and the severity field has a shape.
+
+    Direction is drawn per instance. Shrinking is the harder case -- the mask
+    contracts toward nothing just as the violation peaks -- so it is worth
+    having in the set rather than shipping a release of nothing but balloons,
+    and the floor on `SHRINK_TO` keeps the body from becoming a few pixels.
     """
 
     family = "immutability"
+    persistent = True
+    #: Linear scale factor. Below 1.0 shrinks, above grows; the seed picks a
+    #: direction so a release is not all balloons.
     SCALE_BY_BIN = {"weak": 1.30, "medium": 1.75, "strong": 2.30}
+    #: Frames the resize eases over. A body that snaps to a new size between two
+    #: frames reads as a cut; one that swells reads as physics going wrong.
+    RAMP_FRAMES = 5
+    #: Floor on the shrink factor, so a shrinking body stays big enough to have
+    #: a mask worth annotating at 128 squared.
+    SHRINK_TO = 0.42
+
+    def _factor(self, severity_bin: str, grow: bool) -> float:
+        k = self.SCALE_BY_BIN[severity_bin]
+        return k if grow else max(self.SHRINK_TO, 1.0 / k)
 
     def strong_residual_reference(self, spec) -> float:
-        return abs(self.SCALE_BY_BIN["strong"] ** 3 - 1.0)
+        # Direction-aware, because shrinking cannot reach the volume ratio that
+        # growing can: |2.3^3 - 1| is 11.2 but the strongest shrink is 0.92.
+        # Scoring a shrink against the grow reference reports a maximal
+        # violation as severity 0.08.
+        grow = bool(self._instance_rng(spec).rand() < 0.55)
+        return abs(self._factor("strong", grow) ** 3 - 1.0)
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
         actor = self._primary(spec)
@@ -96,18 +129,28 @@ class Immutability(Injector):
         t0 = _geom.default_event_frame(spec, T)
         if t0 is None:
             return None
-        k = self.SCALE_BY_BIN[severity_bin]
+        # Direction is a property of the instance, not of the bin -- see
+        # `_instance_rng`. Drawing it from `rng` would let weak grow while
+        # strong shrinks, which makes the three bins three different violations.
+        grow = bool(self._instance_rng(spec).rand() < 0.55)
+        k = self._factor(severity_bin, grow)
+        ramp = max(2, min(self.RAMP_FRAMES, T - t0))
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, T - 1)],
             causal_body_ids=[int(actor.segmentation_id)],
-            params={"type": "scale_set", "scale_factor": k,
-                    "volume_ratio": k ** 3},
-            magnitude=float(k ** 3), magnitude_unit="volume_ratio",
+            params={"type": "scale_ramp", "scale_factor": k,
+                    "volume_ratio": k ** 3, "ramp_frames": int(ramp),
+                    "direction": "grow" if grow else "shrink"},
+            # The knob is how far the volume ends up from where it started, so
+            # shrinking to 1/k and growing to k report the same magnitude and
+            # the bins stay ordered in both directions.
+            magnitude=float(abs(k ** 3 - 1.0)), magnitude_unit="volume_ratio",
             severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "scale_factor": k,
+                   "scale_factor": k, "ramp_frames": int(ramp),
+                   "r_strong": abs(self._factor("strong", grow) ** 3 - 1.0),
                    "occluded_at_event": bool(t0 in occ)})
 
     def apply(self, spec, traj, plan) -> Trajectory:
@@ -116,15 +159,23 @@ class Immutability(Injector):
         bi = traj.index_of(int(actor.segmentation_id))
         t0 = plan.t_event
         k = float(plan.notes["scale_factor"])
-        out.scale_mul[t0:, bi, :] = k
+        ramp = int(plan.notes["ramp_frames"])
+        T = traj.num_frames
+
+        # Ease in over `ramp` frames, then hold. Smoothstep rather than linear
+        # so the change has no visible corner at either end.
+        n = T - t0
+        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
+        factor = 1.0 + (k - 1.0) * (u * u * (3.0 - 2.0 * u))
+        out.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
 
         # A body that grows while resting on a surface would grow *into* it.
         # Lifting it keeps the clip to one violation: the size is wrong, the
-        # floor is still solid.
+        # floor is still solid. Per frame, because the size now changes per
+        # frame -- lifting by the final radius would make it hover on the way.
         top = float(plan.notes["surface_top"])
-        r_new = float(traj.radius[bi]) * k
-        z = out.pos[t0:, bi, 2]
-        out.pos[t0:, bi, 2] = np.maximum(z, top + r_new)
+        r_t = float(traj.radius[bi]) * factor
+        out.pos[t0:, bi, 2] = np.maximum(out.pos[t0:, bi, 2], top + r_t)
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
@@ -149,6 +200,7 @@ class Fission(Injector):
     """
 
     family = "fission"
+    persistent = True
     SEPARATION_BY_BIN = {"weak": 0.7, "medium": 1.6, "strong": 2.8}   # m/s
     HALF_SCALE = 2.0 ** (-1.0 / 3.0)     # halves the volume, keeps the shape
 

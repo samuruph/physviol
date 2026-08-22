@@ -56,8 +56,9 @@ class _GravityScale(Injector):
     across both, so the only thing the label distinguishes is what it claims to.
     """
 
-    ALPHA_BY_BIN = {"weak": 0.30, "medium": -1.2, "strong": -2.8}
+    ALPHA_BY_BIN = {"weak": -0.6, "medium": -1.6, "strong": -2.8}
     WINDOW_FRACTION = 0.55
+    MIN_BODIES = 1
     spatial_extent = "local"
 
     def strong_residual_reference(self, spec) -> float:
@@ -68,35 +69,37 @@ class _GravityScale(Injector):
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
         targets = self._targets(spec)
-        if not targets:
+        if len(targets) < self.MIN_BODIES:
             return None
         t0 = _event_frame(spec, traj, targets[0], traj.num_frames)
         if t0 is None:
             return None
 
         n_left = traj.num_frames - t0
-        n_win = self._window_len(max(2, int(round(self.WINDOW_FRACTION * n_left))),
-                                 t0, traj.num_frames)
-        t1 = min(traj.num_frames - 1, t0 + n_win - 1)
-
-        # Keep the bodies on screen. The bin constants are picked for how they
-        # read on a typical clip, but "typical" is a per-seed claim: the same
-        # reversed gravity that makes a nicely rising ball at one drop height
-        # throws it out of the top of the frame at another.
-        nominal = self.ALPHA_BY_BIN[severity_bin]
+        n_want = self._window_len(max(2, int(round(self.WINDOW_FRACTION * n_left))),
+                                  t0, traj.num_frames)
+        alpha = self.ALPHA_BY_BIN[severity_bin]
         strongest = self.ALPHA_BY_BIN["strong"]
-        scale, _ = self._fit_to_frame(
-            spec, traj, targets, t0, strongest,
-            lambda k: self._rollout(spec, traj, t0, t1,
-                                    1.0 + (strongest - 1.0) * k, targets))
-        alpha = 1.0 + (nominal - 1.0) * scale
+
+        # Keep the bodies on screen by **shortening the window**, not by
+        # weakening the intervention. The bin is a qualitative claim -- gravity
+        # reverses and the body climbs -- and scaling alpha back until the body
+        # fits turns that into "gravity is slightly reduced", which is a
+        # different violation wearing this one's label. Fitted on the strongest
+        # bin so all three share a window and stay comparable.
+        n_win = self._fit_window_to_frame(
+            spec, traj, targets, t0, n_want,
+            lambda n: self._rollout(spec, traj, t0,
+                                    min(traj.num_frames - 1, t0 + n - 1),
+                                    strongest, targets))
+        t1 = min(traj.num_frames - 1, t0 + n_win - 1)
 
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "gravity_scale", "alpha_peak": alpha,
-                    "alpha_nominal": nominal, "frame_fit_scale": scale,
                     "profile": "trapezoid", "frames": int(t1 - t0 + 1),
+                    "frames_requested": int(n_want),
                     "extent": self.spatial_extent},
             magnitude=abs(1.0 - alpha),
             magnitude_unit="gravity_scale_deviation",
@@ -151,14 +154,34 @@ class AntiGravity(_GravityScale):
       again. So the residual, and with it `severity_map`, traces a curve over
       time instead of sitting at a single value for the rest of the clip.
 
-    Bin values are chosen so the three are *visually* distinct on a falling
-    body: weak falls noticeably slowly, medium hangs and drifts back up, strong
-    reverses outright and climbs. Capped so the actor stays inside the frustum;
-    a body that leaves frame has an empty mask for the rest of the clip, which
-    is a worse annotation than a less spectacular one.
+    **Every bin reverses the actor's direction**; they differ in how hard. A
+    bin whose only effect is that things fall a bit slower is indistinguishable
+    from a shutter-speed change, so all three are qualitative claims -- the body
+    turns around and comes back -- and severity is how violently. When the
+    geometry cannot host that, the *window* shortens rather than the reversal
+    weakening (see `_fit_window_to_frame`).
+
+    **It acts on exactly one body, never the whole scene.** That is the entire
+    difference from `global_gravity`, and it is invisible unless something else
+    in the frame is still falling normally -- which is why the compatibility
+    matrix pairs the two with different scenarios, and why both only become
+    fully legible at `--population multi`.
     """
 
     family = "antigravity"
+
+    def _targets(self, spec):
+        """One actor, chosen per scene rather than per severity bin.
+
+        Picking `actors[0]` would always bend the same body, so a multi-object
+        release would show the violation on one object and never on its
+        neighbours; picking from the plan's rng would bend a different body in
+        each bin, so the three would not be the same clip at three strengths.
+        """
+        live = self._all_actors(spec)
+        if not live:
+            return []
+        return [live[self._instance_rng(spec).randint(len(live))]]
 
 
 class GlobalGravity(_GravityScale):
@@ -170,13 +193,22 @@ class GlobalGravity(_GravityScale):
     That makes it the hardest family in the taxonomy and the one where a
     per-pixel mask is least informative -- the mask is every moving body.
 
-    Weak and medium stay inside the "this is a different planet" regime.
-    Strong deliberately leaves it and reverses, because `strong` is the debug
-    default and a strongest bin nobody can see is not worth generating.
+    Weak and medium stay inside the "this is a different planet" regime, which
+    is the signature of a *global* constant being wrong: everything falls in
+    slow motion together, and no object contradicts another. Strong leaves that
+    regime and reverses, because `strong` is the development default and a
+    strongest bin nobody can see is not worth generating.
+
+    **Needs at least two moving bodies, and `plan` returns None below that.**
+    With one object on screen, scaling gravity for the scene and scaling it for
+    that object produce identical pixels -- the clip would be an `antigravity`
+    clip with a different label, and the two families would be
+    indistinguishable everywhere the dataset used them.
     """
 
     family = "global_gravity"
-    ALPHA_BY_BIN = {"weak": 0.50, "medium": 0.15, "strong": -0.9}
+    ALPHA_BY_BIN = {"weak": 0.45, "medium": 0.05, "strong": -1.2}
+    MIN_BODIES = 2
     spatial_extent = "global"
 
     def _targets(self, spec):
@@ -246,26 +278,37 @@ class Continuity(Injector):
 
 
 class NonParabolic(Injector):
-    """Free flight that no parabola fits.
+    """Free flight that snakes: no parabola fits it, and nothing jumps.
 
-    Distinct from `antigravity` in a way that matters: the *mean* acceleration
-    over the window is still g, so a model that only checks the average fall
-    rate sees nothing wrong. What is wrong is the shape -- the arc wobbles and
-    returns to where the parabola would have put it, so the intervention leaves
-    no lasting displacement and the body is lawful again afterwards.
+    The point of the family is to be wrong in a way the other two kinematic
+    families are not. `antigravity` gets the *rate* of fall wrong; `continuity`
+    puts the body somewhere it could not have travelled to. This one keeps both
+    right -- the mean acceleration over the flight is still g, and the path is
+    continuous with a continuous derivative everywhere -- and gets the *shape*
+    wrong. A model that only checks how fast things fall sees nothing.
 
-    The residual is fitted against the *airborne* frames only, which the plan
-    records. Fitting across a bounce would compare the arc to a parabola through
-    two arcs and report a large residual on a perfectly lawful clip.
+    Earlier this was a single sine bump over five frames, and it read as a
+    teleport: at 12 fps a one-cycle wobble large enough to notice is a body
+    appearing a body-width away and coming back. The fix is more cycles over
+    more frames at a smaller amplitude -- a visible snake rather than a
+    displacement.
+
+    **The wobble is laid out in the camera's image plane**, using the same basis
+    the frustum test uses. Perturbing a world axis is a gamble on where the
+    camera happens to be: the same offset that snakes across the frame from one
+    viewpoint is pure depth from another, and depth on a uniformly lit primitive
+    is nearly invisible.
     """
 
     family = "non_parabolic"
-    AMPLITUDE_RADII = {"weak": 0.7, "medium": 1.8, "strong": 3.4}
-    DEFAULT_FRAMES = 5
+    #: Peak lateral excursion in body radii. Small on purpose -- legibility here
+    #: comes from the number of cycles, not from the size of each one.
+    AMPLITUDE_RADII = {"weak": 0.5, "medium": 0.9, "strong": 1.5}
+    CYCLES = 2.5
 
     def strong_residual_reference(self, spec) -> float:
-        # The least-squares parabola absorbs part of a short wobble, so the
-        # peak measured deviation lands a little under the amplitude asked for.
+        # The least-squares parabola absorbs a little of a symmetric wobble, so
+        # the peak measured deviation lands just under the amplitude asked for.
         return float(self.AMPLITUDE_RADII["strong"]) * 0.9
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
@@ -275,12 +318,13 @@ class NonParabolic(Injector):
         bi = traj.index_of(int(actor.segmentation_id))
         top = _geom.surface_top(spec, actor)
         run = _geom.longest_airborne_run(traj, bi, top)
-        if run is None or run[1] - run[0] < 3:
+        if run is None or run[1] - run[0] < 4:
             return None
-        t0 = max(run[0] + 1, min(run[1] - 2, traj.num_frames // 4))
-        n_win = self._window_len(self.DEFAULT_FRAMES, t0, traj.num_frames)
-        t1 = min(run[1], t0 + n_win - 1)
-        if t1 <= t0:
+        # The whole airborne stretch, not a slice of it: a serpentine needs room
+        # for several cycles, and the residual is fitted over exactly these
+        # frames so a parabola through two arcs never enters the comparison.
+        t0, t1 = int(run[0]) + 1, int(run[1])
+        if t1 - t0 < 3:
             return None
 
         radius = float(actor.bounding_radius)
@@ -288,8 +332,9 @@ class NonParabolic(Injector):
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(actor.segmentation_id)],
-            params={"type": "path_warp", "profile": "one_cycle_sine",
-                    "amplitude_m": amp, "frames": int(t1 - t0 + 1)},
+            params={"type": "path_warp", "profile": "serpentine",
+                    "amplitude_m": amp, "cycles": self.CYCLES,
+                    "frames": int(t1 - t0 + 1)},
             magnitude=float(amp), magnitude_unit="m_rms_from_parabola",
             severity_bin=severity_bin,
             notes={"radius": radius, "surface_top": top,
@@ -302,21 +347,26 @@ class NonParabolic(Injector):
         t0, t1 = plan.windows[0]
         n = t1 - t0 + 1
         amp = float(plan.params["amplitude_m"])
+        cycles = float(plan.params["cycles"])
         top = float(plan.notes["surface_top"])
         radius = float(plan.notes["radius"])
 
-        # One full sine cycle across the window: the offset and its slope are
-        # both zero at each end, so the body rejoins its lawful arc smoothly and
-        # the frames outside the window stay untouched.
+        _, _, right, up = _geom.camera_basis(spec)
+        # A Hann envelope holds the offset and its slope at zero on both ends,
+        # so the body joins and leaves its lawful arc without a corner and the
+        # frames outside the window stay untouched.
         u = (np.arange(n, dtype=np.float64) + 1.0) / (n + 1.0)
-        wob = amp * np.sin(2.0 * np.pi * u)
-        lateral = 0.55 * amp * np.sin(np.pi * u)
+        envelope = np.sin(np.pi * u) ** 2
+        phase = 2.0 * np.pi * cycles * u
+        offset = (amp * envelope * np.sin(phase))[:, None] * up[None, :] \
+            + (0.6 * amp * envelope * np.cos(phase))[:, None] * right[None, :]
 
-        pos = traj.pos[t0:t1 + 1, bi, :].astype(np.float64).copy()
-        pos[:, 2] = np.maximum(pos[:, 2] + wob, top + radius)
-        pos[:, 0] = pos[:, 0] + lateral
+        pos = traj.pos[t0:t1 + 1, bi, :].astype(np.float64) + offset
+        pos[:, 2] = np.maximum(pos[:, 2], top + radius)
         out.pos[t0:t1 + 1, bi, :] = pos.astype(np.float32)
+
         vel = out.lin_vel[t0:t1 + 1, bi, :].astype(np.float64)
+        vel[0] = (pos[0] - traj.pos[t0 - 1, bi]) / traj.dt
         vel[1:] = (pos[1:] - pos[:-1]) / traj.dt
         out.lin_vel[t0:t1 + 1, bi, :] = vel.astype(np.float32)
 

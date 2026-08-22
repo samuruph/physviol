@@ -32,6 +32,7 @@ class Support(Injector):
     """
 
     family = "support"
+    persistent = True
     CLEARANCE_RADII = {"weak": 0.8, "medium": 2.0, "strong": 3.6}
 
     def strong_residual_reference(self, spec) -> float:
@@ -95,6 +96,7 @@ class Friction(Injector):
     """
 
     family = "friction"
+    persistent = True
     RATE_BY_BIN = {"weak": 0.35, "medium": 0.0, "strong": -0.6}
 
     def strong_residual_reference(self, spec) -> float:

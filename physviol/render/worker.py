@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import time
+import zlib
 
 sys.path.insert(0, "/kubric")
 
@@ -331,7 +332,14 @@ def main() -> int:
             tag = "%s/%s" % (family, sev)
             # The rng is seeded per (family, severity), not per run, so adding
             # a family to the list cannot change the clips the others produce.
-            rng = np.random.RandomState((a.seed + 7919 + hash(tag)) % (2 ** 31 - 1))
+            #
+            # crc32, never `hash()`. Python randomises string hashing per
+            # process unless PYTHONHASHSEED is set, and it is set nowhere here,
+            # so `hash(tag)` made the same (scenario, seed, family, severity)
+            # render a *different clip on every run*. Nothing in the test suite
+            # noticed, because every check ran against a single generation.
+            rng = np.random.RandomState(
+                (a.seed + 7919 + zlib.crc32(tag.encode())) % (2 ** 31 - 1))
             try:
                 plan = inj.plan(spec, traj_valid, rng, sev)
             except Exception as exc:                       # noqa: BLE001
