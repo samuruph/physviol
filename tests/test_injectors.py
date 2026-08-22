@@ -96,21 +96,30 @@ def test_antigravity_intervention_varies_over_time(spec):
 
 def test_severity_bins_are_visibly_different_not_just_numerically(spec):
     """The strong bin must actually reverse the actor's direction. A bin that is
-    numerically larger but looks the same is useless as a difficulty axis."""
+    numerically larger but looks the same is useless as a difficulty axis.
+
+    Measured against the *lawful twin* at the same frame, not against the
+    actor's own height when the window opened. A window that opens mid-fall can
+    reverse the ball convincingly and still end below where it started, so
+    "did it climb above its starting height" reports 0.00 on a clip that
+    visibly turns around. The honest question is how far the body ends up from
+    where physics would have put it.
+    """
     traj = _valid_traj(spec)
     inj = injectors.get("antigravity")
     bi = traj.index_of(spec.body("ball").segmentation_id)
-    rises = {}
+    lift, turned = {}, {}
     for sev in ("weak", "medium", "strong"):
         plan = inj.plan(spec, traj, np.random.RandomState(0), sev)
         out = inj.apply(spec, traj, plan)
         t0, t1 = plan.windows[0]
-        z = out.pos[t0 - 1:t1 + 1, bi, 2]
-        rises[sev] = float(z.max() - z[0])
-    assert rises["strong"] > 0.25, (
-        "strong antigravity should visibly lift the actor, got %.3f m"
-        % rises["strong"])
-    assert rises["strong"] > rises["medium"], rises
+        lift[sev] = float(out.pos[t1, bi, 2] - traj.pos[t1, bi, 2])
+        turned[sev] = bool((out.lin_vel[t0:t1 + 1, bi, 2] > 0.05).any())
+    assert turned["strong"], "strong antigravity must reverse the fall"
+    assert lift["strong"] > 0.4, (
+        "strong should end well above the lawful twin, got %.3f m"
+        % lift["strong"])
+    assert lift["strong"] > lift["medium"] > lift["weak"], lift
 
 
 def test_severity_bins_are_ordered(spec):

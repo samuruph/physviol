@@ -133,14 +133,21 @@ def validate_clip(cdir: str) -> List[str]:
     if not np.allclose(st, mx, atol=1e-3):
         bad("severity_t != severity_map.max() (max diff %.4g)"
             % float(np.abs(st - mx).max()))
-    # 7. causal ids present in seg
-    seg_p = os.path.join(cdir, "seg.npz")
-    if os.path.exists(seg_p):
-        seg = np.load(seg_p)["seg"]
-        present = set(np.unique(seg).tolist())
+    # 7. every causal id is a body that exists in the scene.
+    #
+    # Deliberately checked against the *declared* assets rather than against
+    # the pixels in seg.npz. A causal body can be invisible for the whole clip
+    # and still be a genuine participant: seven of `granular_pour`'s forty
+    # grains never show a pixel from that camera, and a vanished body has no
+    # pixels precisely because it vanished. Requiring each one to be rendered
+    # would fail exactly the cases the union rule and the observability lag
+    # exist to handle. Whether the violation is *visible* is check 5's job.
+    declared = {int(a["segmentation_id"]) for a in m.get("assets", [])
+                if "segmentation_id" in a}
+    if declared:
         for cid in v.get("causal_body_ids", []):
-            if int(cid) not in present:
-                bad("causal_body_id %d absent from seg.npz" % cid)
+            if int(cid) not in declared:
+                bad("causal_body_id %d is not a body in this scene" % cid)
     return errs
 
 

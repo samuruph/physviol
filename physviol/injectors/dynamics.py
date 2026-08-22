@@ -44,34 +44,43 @@ class PhantomImpulse(Injector):
         if not (1 <= t0 < T - 1):
             return None
 
-        dv = self.DV_BY_BIN[severity_bin]
         heading = float(rng.uniform(0.0, 2.0 * np.pi))
         # Mostly sideways with a little lift: a purely horizontal shove on a
         # resting body is easy to mistake for a nudge from off screen, while a
         # visible hop is unmistakably uncaused.
-        push = [dv * 0.85 * float(np.cos(heading)),
-                dv * 0.85 * float(np.sin(heading)), dv * 0.5]
+        unit = np.array([0.85 * np.cos(heading), 0.85 * np.sin(heading), 0.5])
+        strongest = unit * self.DV_BY_BIN["strong"]
+        scale, _ = self._fit_to_frame(
+            spec, traj, [actor], t0, strongest,
+            lambda k: self._shoved(spec, traj, actor, t0, strongest * k))
+        push = unit * self.DV_BY_BIN[severity_bin] * scale
+        dv = float(np.linalg.norm(push))
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         n_win = self._window_len(2, t0, T)
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0,
             windows=[(t0, min(T - 1, t0 + n_win - 1))],
             causal_body_ids=[int(actor.segmentation_id)],
-            params={"type": "impulse", "delta_v": push},
+            params={"type": "impulse", "delta_v": push.tolist(),
+                    "frame_fit_scale": scale},
             magnitude=float(dv / max(g_dt, 1e-9)),
             magnitude_unit="impulse_over_m_vtyp", severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
                    "delta_v_ms": dv})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
         out = self._clone(traj)
-        actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
-        t0 = plan.t_event
         v0 = (traj.lin_vel[t0 - 1, bi].astype(np.float64)
-              + np.asarray(plan.params["delta_v"], np.float64))
+              + np.asarray(delta_v, np.float64))
         self._rewrite_from(spec, traj, out, actor, t0, v0=v0)
+        return out
+
+    def apply(self, spec, traj, plan) -> Trajectory:
+        actor = self._primary(spec)
+        out = self._shoved(spec, traj, actor, plan.t_event,
+                           np.asarray(plan.params["delta_v"], np.float64))
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -132,11 +141,17 @@ class AngularMomentum(Injector):
         if self._pivot(spec):
             t0 = max(1, T // 2)
         else:
+            # Two frames is enough, and insisting on more is what killed
+            # `rolling_ramp`: the run is padded by a frame either side of every
+            # contact, so a four-frame hop off a ramp offers only two usable
+            # frames and the cell produced no plan at all. Fire at the midpoint
+            # and clamp *into* the run rather than shrinking it from both ends.
             free = _geom.contact_free_run(traj, int(actor.segmentation_id),
-                                          min_len=3)
+                                          min_len=2)
             if free is None:
                 return None
-            t0 = max(free[0] + 1, min(free[1] - 1, (free[0] + free[1]) // 2))
+            lo, hi = free
+            t0 = min(max((lo + hi) // 2, max(1, lo)), hi)
         if not (1 <= t0 < T - 1):
             return None
 

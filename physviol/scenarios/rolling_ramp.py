@@ -32,15 +32,19 @@ class RollingRamp(Scenario):
 
         tilt = float(rng.uniform(0.44, 0.56))
         half_len, thick = 1.5, 0.08
-        centre = (0.0, 0.0, 1.5)
+        # High enough that the drop off the lip lasts ~5 frames. At 1.5 m the
+        # block was airborne for three, and the angular-momentum law excludes a
+        # frame either side of every contact, so the entire flight was gated
+        # away and the cell produced no plan at all.
+        centre = (0.0, 0.0, 2.3)
         half = float(rng.uniform(0.17, 0.22))
         mu = float(rng.uniform(0.25, 0.38))
         v0 = float(rng.uniform(1.9, 2.4))
         d, _ = C.ramp_axes(tilt)
-        # Start close to the lip so the body leaves the slab around the middle
-        # of the clip; starting at the top spends the whole of Tier D sliding
-        # and never reaches the airborne stretch angular_momentum needs.
-        start_along = half_len - float(rng.uniform(1.1, 1.35))
+        # Start close to the lip so the body leaves the slab a third of the way
+        # in; starting at the top spends the whole of Tier D sliding and never
+        # reaches the airborne stretch angular_momentum needs.
+        start_along = half_len - float(rng.uniform(0.60, 0.85))
 
         block = BodySpec(
             name="block", kind="cube",
@@ -59,7 +63,7 @@ class RollingRamp(Scenario):
                     C.ramp(self.SEG_RAMP, tilt, centre, half_len, 0.8, thick, mu),
                     block],
             lights=C.lights(cx, look_at=(0, 0, 1.2)),
-            camera_position=(0.2, -7.0, 2.6), camera_look_at=(0.3, 0.0, 1.2),
+            camera_position=(0.4, -7.6, 2.8), camera_look_at=(0.6, 0.0, 1.4),
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"tilt_rad": tilt, "mu": mu, "lip": list(lip),

@@ -297,7 +297,9 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         "camera": {"motion": "static", "intrinsics": [], "extrinsics_per_frame": []},
         "controls": {"is_surprising_but_valid": False, "is_artifact_probe": False},
         "assets": [{"name": b["name"], "source": "kubric_primitive",
-                    "license": "Apache-2.0"} for b in spec_d["bodies"]],
+                    "license": "Apache-2.0",
+                    "segmentation_id": b["segmentation_id"]}
+                   for b in spec_d["bodies"]],
         "provenance": {
             "generator_commit": os.environ.get("PHYSVIOL_COMMIT", "uncommitted"),
             "kubric_image_digest": _digest(), "blender_version": "2.93.4",

@@ -74,16 +74,28 @@ class _GravityScale(Injector):
         if t0 is None:
             return None
 
-        alpha = self.ALPHA_BY_BIN[severity_bin]
         n_left = traj.num_frames - t0
         n_win = self._window_len(max(2, int(round(self.WINDOW_FRACTION * n_left))),
                                  t0, traj.num_frames)
         t1 = min(traj.num_frames - 1, t0 + n_win - 1)
 
+        # Keep the bodies on screen. The bin constants are picked for how they
+        # read on a typical clip, but "typical" is a per-seed claim: the same
+        # reversed gravity that makes a nicely rising ball at one drop height
+        # throws it out of the top of the frame at another.
+        nominal = self.ALPHA_BY_BIN[severity_bin]
+        strongest = self.ALPHA_BY_BIN["strong"]
+        scale, _ = self._fit_to_frame(
+            spec, traj, targets, t0, strongest,
+            lambda k: self._rollout(spec, traj, t0, t1,
+                                    1.0 + (strongest - 1.0) * k, targets))
+        alpha = 1.0 + (nominal - 1.0) * scale
+
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "gravity_scale", "alpha_peak": alpha,
+                    "alpha_nominal": nominal, "frame_fit_scale": scale,
                     "profile": "trapezoid", "frames": int(t1 - t0 + 1),
                     "extent": self.spatial_extent},
             magnitude=abs(1.0 - alpha),
@@ -93,21 +105,31 @@ class _GravityScale(Injector):
                    "radius": float(targets[0].bounding_radius),
                    "alpha_peak": alpha, "n_targets": len(targets)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
-        out = self._clone(traj)
-        t0, t1 = plan.windows[0]
-        n_win, n_after = t1 - t0 + 1, traj.num_frames - (t1 + 1)
+    def _rollout(self, spec, traj, t0: int, t1: int, alpha_peak: float,
+                 targets) -> Trajectory:
+        """Integrate the targets under a trapezoidal gravity pulse over [t0,t1].
 
+        Shared by `plan` -- which runs it a few times to pick a peak that keeps
+        the bodies in shot -- and by `apply`, so the clip that ships is exactly
+        the one the plan was chosen from.
+        """
+        out = self._clone(traj)
+        n_win, n_after = t1 - t0 + 1, traj.num_frames - (t1 + 1)
         g = traj.gravity.astype(np.float64)
-        alpha = self._pulse(n_win, float(plan.params["alpha_peak"]))
+        alpha = self._pulse(n_win, float(alpha_peak))
         g_seq = np.concatenate([alpha[:, None] * g[None, :],
                                 np.tile(g[None, :], (max(n_after, 0), 1))])
-        for body in self._targets(spec):
+        for body in targets:
             self._rewrite_from(spec, traj, out, body, t0, g_per_frame=g_seq)
-
         out.meta = dict(traj.meta)
-        out.meta["intervention"] = plan.to_dict()
         out.meta["alpha_profile"] = [float(x) for x in alpha]
+        return out
+
+    def apply(self, spec, traj, plan) -> Trajectory:
+        t0, t1 = plan.windows[0]
+        out = self._rollout(spec, traj, t0, t1,
+                            float(plan.params["alpha_peak"]), self._targets(spec))
+        out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
         return out
 
@@ -185,24 +207,38 @@ class Continuity(Injector):
         radius = float(actor.bounding_radius)
         jump_r = self.JUMP_RADII[severity_bin]
         direction = np.array([1.0, 0.0, 0.0]) * float(rng.choice([-1.0, 1.0]))
+        nominal = direction * jump_r * radius
+        # A teleport big enough to leave the frame depicts an object vanishing,
+        # which is `permanence`, not `continuity`. Shorten it until both lobes
+        # of the two-lobed mask are actually in shot -- fitting on the longest
+        # jump so all three bins shrink together and stay ordered.
+        strongest = direction * self.JUMP_RADII["strong"] * radius
+        scale, _ = self._fit_to_frame(
+            spec, traj, [actor], t0, strongest,
+            lambda k: self._teleport(traj, actor, t0, strongest * k))
+        delta = nominal * scale
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0, windows=[(t0, t0)],
             causal_body_ids=[int(actor.segmentation_id)],
-            params={"type": "position_set",
-                    "delta_m": (direction * jump_r * radius).tolist()},
-            magnitude=float(jump_r * radius), magnitude_unit="m_jump_distance",
+            params={"type": "position_set", "delta_m": delta.tolist(),
+                    "frame_fit_scale": scale},
+            magnitude=float(np.linalg.norm(delta)),
+            magnitude_unit="m_jump_distance",
             severity_bin=severity_bin,
             notes={"radius": radius, "jump_radii": jump_r,
                    "surface_top": _geom.surface_top(spec, actor)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _teleport(self, traj, actor, t0: int, delta) -> Trajectory:
         out = self._clone(traj)
-        actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
-        t0 = plan.t_event
-        delta = np.asarray(plan.params["delta_m"], np.float32)
         # Horizontal only, so the teleport cannot smuggle in a floor violation.
-        out.pos[t0:, bi, :] = traj.pos[t0:, bi, :] + delta[None, :]
+        out.pos[t0:, bi, :] = traj.pos[t0:, bi, :] + np.asarray(delta, np.float32)
+        return out
+
+    def apply(self, spec, traj, plan) -> Trajectory:
+        actor = self._primary(spec)
+        out = self._teleport(traj, actor, plan.t_event,
+                             np.asarray(plan.params["delta_m"], np.float32))
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -333,11 +369,17 @@ class Newton1Inertia(Injector):
         else:
             n_win = self._window_len(2, t0, T)
             windows = [(t0, min(T - 1, t0 + n_win - 1))]
-            dv = self.KICK_BY_BIN[severity_bin]
             heading = float(rng.uniform(0.0, 2.0 * np.pi))
-            params = {"type": "velocity_set",
-                      "delta_v": [dv * float(np.cos(heading)),
-                                  dv * float(np.sin(heading)), 0.0]}
+            unit = np.array([np.cos(heading), np.sin(heading), 0.0])
+            nominal = unit * self.KICK_BY_BIN[severity_bin]
+            strongest = unit * self.KICK_BY_BIN["strong"]
+            scale, _ = self._fit_to_frame(
+                spec, traj, [actor], t0, strongest,
+                lambda k: self._shoved(spec, traj, actor, t0, strongest * k))
+            push = nominal * scale
+            dv = float(np.linalg.norm(push))
+            params = {"type": "velocity_set", "delta_v": push.tolist(),
+                      "frame_fit_scale": scale}
 
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         return InterventionPlan(
@@ -350,6 +392,14 @@ class Newton1Inertia(Injector):
             notes={"mode": mode, "radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
                    "speed_at_event": speed})
+
+    def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
+        out = self._clone(traj)
+        bi = traj.index_of(int(actor.segmentation_id))
+        v0 = (traj.lin_vel[t0 - 1, bi].astype(np.float64)
+              + np.asarray(delta_v, np.float64))
+        self._rewrite_from(spec, traj, out, actor, t0, v0=v0)
+        return out
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
@@ -364,9 +414,8 @@ class Newton1Inertia(Injector):
             out.lin_vel[t0:, bi, :] = 0.0
             out.ang_vel[t0:, bi, :] = 0.0
         else:
-            v0 = (traj.lin_vel[t0 - 1, bi].astype(np.float64)
-                  + np.asarray(plan.params["delta_v"], np.float64))
-            self._rewrite_from(spec, traj, out, actor, t0, v0=v0)
+            out = self._shoved(spec, traj, actor, t0,
+                               np.asarray(plan.params["delta_v"], np.float64))
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()

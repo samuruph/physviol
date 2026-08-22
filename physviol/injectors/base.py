@@ -216,6 +216,58 @@ class Injector:
         return pos.astype(np.float32), vel.astype(np.float32)
 
     # ------------------------------------------------------------------ #
+    def _offscreen_frames(self, spec, traj: Trajectory, bodies,
+                          from_frame: int, visible_fraction: float = 0.6) -> int:
+        """How many frames after `from_frame` lose sight of the culprit.
+
+        A frame counts as lost when fewer than `visible_fraction` of the culprit
+        bodies are inside the frustum, so one grain of forty drifting out of a
+        `granular_pour` is not treated the same as the whole pour leaving.
+        """
+        idx = [traj.index_of(int(b.segmentation_id)) for b in bodies]
+        if not idx:
+            return 0
+        pts = traj.pos[from_frame:, idx, :]
+        vis = _geom.in_frame(spec, pts)
+        return int((vis.mean(axis=1) < visible_fraction).sum())
+
+    def _fit_to_frame(self, spec, traj: Trajectory, bodies, t0: int, knob,
+                      build, tolerance: int = 1,
+                      ladder=(1.0, 0.72, 0.52, 0.36, 0.24)):
+        """Weaken `knob` until the culprit stays on screen, and return what stuck.
+
+        The severity bins are chosen for visual legibility on a typical clip,
+        but "typical" is a per-seed claim: the same reversed gravity that makes
+        a nicely rising ball in one sample sends it out of the top of the frame
+        in another with a higher toss. Rather than tuning the constants down
+        until nothing ever escapes -- which makes every clip weaker to fix a
+        few -- each clip keeps the strongest setting its own geometry allows.
+
+        `magnitude` then reports what was actually applied, so it stays exact,
+        and the severity a clip earns honestly reflects the smaller
+        intervention. `build(scale)` returns a candidate trajectory.
+
+        Callers fit on the **strong** bin and apply the resulting scale to
+        whichever bin they are planning. Fitting each bin separately clamps
+        `strong` hardest -- it is the one that overshoots -- and can leave it
+        weaker than `medium`, which would make the bin labels a lie. One scale
+        per clip says something defensible instead: *this* geometry supports at
+        most this fraction of the nominal intervention, and the three bins keep
+        their spacing inside it.
+        """
+        # Measured against the valid twin, not against zero. If the scenario
+        # already lets the actor drift out of shot, weakening the intervention
+        # cannot fix that, and clamping to the floor of the ladder would turn a
+        # framing problem into a violation nobody can see.
+        budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
+        candidate = None
+        for scale in ladder:
+            candidate = build(scale)
+            if self._offscreen_frames(spec, candidate, bodies, t0) <= budget:
+                return scale, candidate
+        return ladder[-1], candidate
+
+    # ------------------------------------------------------------------ #
     def _rewrite_from(self, spec, traj: Trajectory, out: Trajectory, body,
                       t0: int, v0=None, p0=None, g_per_frame=None,
                       restitution=None) -> None:

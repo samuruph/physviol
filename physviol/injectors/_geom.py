@@ -128,23 +128,37 @@ def first_contact_any(traj, body_id: int, exclude=()) -> Optional[Tuple[int, int
     return best
 
 
-def first_dynamic_pair_contact(spec, traj) -> Optional[Tuple[int, int, int]]:
+def first_dynamic_pair_contact(spec, traj, prefer: Optional[int] = None
+                               ) -> Optional[Tuple[int, int, int]]:
     """(frame, id_a, id_b) of the first contact between two *dynamic* bodies.
 
     The event `newton2_mass` and `newton3_reaction` need: two things that both
     ought to respond, so that only one responding is visibly wrong.
+
+    `prefer` is the actor, and contacts involving it win outright rather than
+    merely breaking ties. In `pyramid_impact` the base spheres settle against
+    each other on frame 1, so the earliest dynamic pair is a nudge between two
+    props -- an eventless violation with a one-frame lawful prefix -- while the
+    collision the scenario exists to stage is the cube landing on the apex five
+    frames later.
     """
     dyn = {b.segmentation_id for b in spec.bodies
            if not b.static and not b.dormant}
     c = traj.contacts
-    best = None
+    best, best_with_actor = None, None
     for k in range(len(c)):
         a, b = int(c.body_a[k]), int(c.body_b[k])
-        if a in dyn and b in dyn and a != b:
-            f = int(c.frame[k])
-            if f >= 1 and (best is None or f < best[0]):
-                best = (f, a, b)
-    return best
+        if not (a in dyn and b in dyn and a != b):
+            continue
+        f = int(c.frame[k])
+        if f < 1:
+            continue
+        if best is None or f < best[0]:
+            best = (f, a, b)
+        if prefer is not None and prefer in (a, b):
+            if best_with_actor is None or f < best_with_actor[0]:
+                best_with_actor = (f, a, b)
+    return best_with_actor or best
 
 
 # ------------------------------------------------------------- quaternion --
@@ -323,3 +337,40 @@ def path_sample(pos: np.ndarray, u: np.ndarray) -> np.ndarray:
     i1 = np.minimum(i0 + 1, T - 1)
     f = (u - i0)[:, None]
     return pos[i0].astype(np.float64) * (1.0 - f) + pos[i1].astype(np.float64) * f
+
+
+# ------------------------------------------------------------------ frame --
+# Kubric's PerspectiveCamera defaults: 50 mm lens on a 36 mm sensor, so the
+# half-angle tangent is 18/50. Square renders make the vertical the same.
+TAN_HALF_FOV = 18.0 / 50.0
+
+
+def camera_basis(spec):
+    """(eye, forward, right, up) for the scenario's camera."""
+    eye = np.asarray(spec.camera_position, np.float64)
+    fwd = np.asarray(spec.camera_look_at, np.float64) - eye
+    fwd /= max(float(np.linalg.norm(fwd)), 1e-9)
+    world_up = np.array([0.0, 0.0, 1.0])
+    right = np.cross(fwd, world_up)
+    n = float(np.linalg.norm(right))
+    right = (np.array([1.0, 0.0, 0.0]) if n < 1e-6 else right / n)
+    up = np.cross(right, fwd)
+    return eye, fwd, right, up
+
+
+def in_frame(spec, points: np.ndarray, margin: float = 0.04) -> np.ndarray:
+    """[...] bool: are these world points inside the camera's view?
+
+    Used to keep an intervention's strongest bin from throwing the actor out of
+    shot. A body that leaves frame has an empty mask for the rest of the clip,
+    and the clip then *depicts* an object vanishing while being labelled
+    `antigravity` or `continuity` -- a mislabelled clip, not merely a dull one.
+    """
+    eye, fwd, right, up = camera_basis(spec)
+    p = np.asarray(points, np.float64) - eye
+    z = p @ fwd
+    with np.errstate(divide="ignore", invalid="ignore"):
+        x = (p @ right) / z
+        y = (p @ up) / z
+    lim = TAN_HALF_FOV * (1.0 - margin)
+    return (z > 1e-3) & (np.abs(x) <= lim) & (np.abs(y) <= lim)

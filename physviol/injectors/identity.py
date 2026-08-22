@@ -165,16 +165,24 @@ class Fission(Injector):
         if t0 is None or t0 >= T - 1:
             return None
 
-        speed = self.SEPARATION_BY_BIN[severity_bin]
         heading = float(rng.uniform(0.0, 2.0 * np.pi))
-        push = [speed * float(np.cos(heading)), speed * float(np.sin(heading)), 0.0]
+        unit = np.array([np.cos(heading), np.sin(heading), 0.0])
+        twin_spec = [actor, twin]
+        strongest = unit * self.SEPARATION_BY_BIN["strong"]
+        scale, _ = self._fit_to_frame(
+            spec, traj, twin_spec, t0, strongest,
+            lambda k: self._split(spec, traj, actor, twin, t0, strongest * k))
+        push_v = unit * self.SEPARATION_BY_BIN[severity_bin] * scale
+        speed = float(np.linalg.norm(push_v))
+        push = push_v.tolist()
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, T - 1)],
             causal_body_ids=[int(actor.segmentation_id),
                              int(twin.segmentation_id)],
             params={"type": "split_body", "separation_speed": speed,
-                    "push": push, "scale_factor": self.HALF_SCALE},
+                    "push": push, "scale_factor": self.HALF_SCALE,
+                    "frame_fit_scale": scale},
             magnitude=2.0, magnitude_unit="count_ratio",
             severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
@@ -184,15 +192,12 @@ class Fission(Injector):
                                    int(twin.segmentation_id)],
                    "occluded_at_event": bool(t0 in occ)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _split(self, spec, traj, actor, twin, t0: int, push) -> Trajectory:
         out = self._clone(traj)
-        actor = self._primary(spec)
-        twin = next(b for b in spec.bodies if b.dormant)
         ai = traj.index_of(int(actor.segmentation_id))
         ti = traj.index_of(int(twin.segmentation_id))
-        t0 = plan.t_event
-        k = float(plan.params["scale_factor"])
-        push = np.asarray(plan.params["push"], np.float64)
+        k = self.HALF_SCALE
+        push = np.asarray(push, np.float64)
 
         out.present[t0:, ti] = True
         out.scale_mul[t0:, ai, :] = k
@@ -208,7 +213,13 @@ class Fission(Injector):
         self._rewrite_from(spec, traj, out, actor, t0, v0=v0 + push)
         self._rewrite_from(spec, traj, out, twin, t0, v0=v0 - push,
                            p0=traj.pos[t0 - 1, ai])
+        return out
 
+    def apply(self, spec, traj, plan) -> Trajectory:
+        actor = self._primary(spec)
+        twin = next(b for b in spec.bodies if b.dormant)
+        out = self._split(spec, traj, actor, twin, plan.t_event,
+                          np.asarray(plan.params["push"], np.float64))
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"

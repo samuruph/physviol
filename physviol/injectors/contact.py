@@ -350,14 +350,16 @@ class _MutedResponse(Injector):
         return self.STRONG_REFERENCE
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        hit = _geom.first_dynamic_pair_contact(spec, traj)
+        actor = self._primary(spec)
+        actor_id = int(actor.segmentation_id) if actor is not None else None
+        hit = _geom.first_dynamic_pair_contact(spec, traj, prefer=actor_id)
         if hit is None:
             return None
         t0, id_a, id_b = hit
         if not (1 <= t0 < traj.num_frames - 1):
             return None
-        actor = self._primary(spec)
-        actor_id = int(actor.segmentation_id) if actor is not None else id_a
+        if actor_id is None:
+            actor_id = id_a
         # The victim is whichever body is not the actor, so the scenario's
         # protagonist keeps behaving lawfully and the anomaly is unambiguous.
         victim_id = id_b if id_a == actor_id else id_a
