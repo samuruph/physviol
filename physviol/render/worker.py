@@ -65,8 +65,11 @@ def build_scene(spec: SceneSpec, scratch):
     for b in spec.bodies:
         material = kb.PrincipledBSDFMaterial(color=kb.Color(*b.color),
                                              roughness=0.55, metallic=0.0)
+        # `sim_static`, not `static`: a scripted body is pinned in the
+        # simulator so it neither falls nor generates contacts, and its motion
+        # arrives from the trajectory instead. Downstream it is still dynamic.
         common = dict(name=b.name, position=b.position, quaternion=b.quaternion,
-                      static=b.static, mass=b.mass, friction=b.friction,
+                      static=b.sim_static, mass=b.mass, friction=b.friction,
                       restitution=b.restitution, material=material,
                       segmentation_id=b.segmentation_id)
         if b.kind == "sphere":
@@ -86,14 +89,16 @@ def build_scene(spec: SceneSpec, scratch):
                 dome_blender = obj.linked_objects[renderer]
                 node = dome_blender.data.materials[0].node_tree.nodes["Image Texture"]
                 node.image = bpy.data.images.load(hdri_tex.filename)
+            _set_visibility(renderer, obj, b)
             objs[b.name] = obj
             continue
         else:
             raise ValueError("unknown body kind %r" % b.kind)
-        if not b.static:
+        if not b.sim_static:
             obj.velocity = b.velocity
             obj.angular_velocity = b.angular_velocity
         scene += obj
+        _set_visibility(renderer, obj, b)
         objs[b.name] = obj
 
     for l in spec.lights:
@@ -102,6 +107,29 @@ def build_scene(spec: SceneSpec, scratch):
     scene += kb.PerspectiveCamera(name="camera", position=spec.camera_position,
                                   look_at=spec.camera_look_at)
     return scene, simulator, renderer, objs
+
+
+def _set_visibility(renderer, obj, body) -> None:
+    """Cycles ray visibility for one body.
+
+    `shadow_track` needs it: the actor's own cast shadow is switched off so the
+    scripted shadow body is the only one in frame. Blender moved these flags
+    from `cycles_visibility` onto the object in 2.92, and the pinned image is
+    2.93.4, but the fallback costs two lines and removes a version dependency
+    from a path that silently produces two shadows if it breaks.
+    """
+    if body.visible_camera and body.visible_shadow:
+        return
+    bobj = obj.linked_objects.get(renderer)
+    if bobj is None:
+        return
+    for attr, want in (("visible_camera", body.visible_camera),
+                       ("visible_shadow", body.visible_shadow)):
+        if hasattr(bobj, attr):
+            setattr(bobj, attr, bool(want))
+        elif hasattr(bobj, "cycles_visibility"):
+            setattr(bobj.cycles_visibility, attr.replace("visible_", ""),
+                    bool(want))
 
 
 # --------------------------------------------------------------------------
@@ -153,10 +181,19 @@ def simulate(spec, scene, simulator, objs) -> Trajectory:
         np.zeros((n,), np.float32),
     )
 
+    # A dormant understudy is in the scene graph but not in the scene: absent
+    # from frame 0, so it renders as nothing at all until `fission` switches it
+    # on. `is_static` follows `static`, not `sim_static`, so a scripted actor
+    # still gets residuals computed for it.
+    present = np.ones((T, B), bool)
+    for j, b in enumerate(spec.bodies):
+        if b.dormant:
+            present[:, j] = False
+
     return Trajectory(
         body_ids=np.asarray([seg_of[n_] for n_ in order], np.int32),
         body_names=list(order),
-        pos=pos, quat=quat, lin_vel=lvel, ang_vel=avel,
+        pos=pos, quat=quat, lin_vel=lvel, ang_vel=avel, present=present,
         mass=np.asarray([b.mass for b in spec.bodies], np.float32),
         radius=np.asarray([b.bounding_radius for b in spec.bodies], np.float32),
         is_static=np.asarray([b.static for b in spec.bodies], bool),
@@ -181,8 +218,12 @@ def replay(spec, objs, traj: Trajectory) -> None:
     (see refs/kubric/kubric/simulator/pybullet.py), so this is a supported path.
     """
     present = traj.present
+    scale_mul = traj.scale_mul
     for j, b in enumerate(spec.bodies):
         obj = objs[b.name]
+        # The dome is a background asset with its own scale; resizing it would
+        # resize the world.
+        resize = b.kind != "dome" and float(np.abs(scale_mul[:, j, :] - 1.0).max()) > 1e-6
         for f in range(traj.num_frames):
             if present is not None and not bool(present[f, j]):
                 obj.position = (0.0, 0.0, GONE_Z)
@@ -191,6 +232,10 @@ def replay(spec, objs, traj: Trajectory) -> None:
             obj.quaternion = tuple(float(x) for x in traj.quat[f, j])
             obj.keyframe_insert("position", f)
             obj.keyframe_insert("quaternion", f)
+            if resize:
+                obj.scale = tuple(float(b.scale[k] * scale_mul[f, j, k])
+                                  for k in range(3))
+                obj.keyframe_insert("scale", f)
 
 
 def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
@@ -231,7 +276,9 @@ def main() -> int:
     ap.add_argument("--scenario", default="ball_drop")
     ap.add_argument("--seed", type=int, default=91731)
     ap.add_argument("--tier", default="D", choices=sorted(scenarios.TIERS))
-    ap.add_argument("--family", default="solidity")
+    ap.add_argument("--family", default="solidity",
+                    help="one family, or a comma list -- every family named "
+                         "shares this run's single valid render")
     ap.add_argument("--severity", default="all",
                     help="one of weak|medium|strong, 'all', or a comma list")
     ap.add_argument("--complexity", default="L0")
@@ -257,44 +304,58 @@ def main() -> int:
     # re-paying it per severity was most of the wall clock.
     scene, simulator, renderer, objs = build_scene(spec, scratch)
     traj_valid = simulate(spec, scene, simulator, objs)
+    # Constrained scenarios write their own motion over the solved rollout --
+    # a pendulum arc PyBullet cannot produce without joints. Before any
+    # injector runs, so the seam's guarantees are untouched.
+    scenarios.get(a.scenario).script(spec, traj_valid)
     traj_valid.save(os.path.join(outdir, "traj_valid.npz"))
 
     replay(spec, objs, traj_valid)
     t_valid, shapes = render_and_save(renderer, scene, spec, objs, outdir, "valid")
 
-    inj = injectors.get(a.family)
-    inj.window_frames = a.window
+    families = [f.strip() for f in a.family.split(",") if f.strip()]
     variants, timings = [], {"valid": round(t_valid, 2)}
-    for sev in severities:
-        rng = np.random.RandomState(a.seed + 7919)
-        plan = inj.plan(spec, traj_valid, rng, sev)
-        if plan is None:
-            variants.append({"severity": sev, "ok": False,
-                             "error": "injector produced no plan"})
-            continue
-        traj_invalid = inj.apply(spec, traj_valid, plan)
+    for family in families:
+        inj = injectors.get(family)
+        inj.window_frames = a.window
+        for sev in severities:
+            tag = "%s/%s" % (family, sev)
+            # The rng is seeded per (family, severity), not per run, so adding
+            # a family to the list cannot change the clips the others produce.
+            rng = np.random.RandomState((a.seed + 7919 + hash(tag)) % (2 ** 31 - 1))
+            try:
+                plan = inj.plan(spec, traj_valid, rng, sev)
+            except Exception as exc:                       # noqa: BLE001
+                variants.append({"family": family, "severity": sev, "ok": False,
+                                 "error": "plan raised: %r" % (exc,)})
+                continue
+            if plan is None:
+                variants.append({"family": family, "severity": sev, "ok": False,
+                                 "error": "injector produced no plan"})
+                continue
+            traj_invalid = inj.apply(spec, traj_valid, plan)
 
-        ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
-        if not ok:
-            variants.append({"severity": sev, "ok": False,
-                             "error": "trajectory prefix differs: %s" % why})
-            continue
+            ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
+            if not ok:
+                variants.append({"family": family, "severity": sev, "ok": False,
+                                 "error": "trajectory prefix differs: %s" % why})
+                continue
 
-        vdir = os.path.join(outdir, "variants", "%s_%s" % (a.family, sev))
-        os.makedirs(vdir, exist_ok=True)
-        traj_invalid.save(os.path.join(vdir, "traj_invalid.npz"))
-        with open(os.path.join(vdir, "plan.json"), "w") as fh:
-            json.dump({"pair_uid": pair_uid, "spec": spec.to_dict(),
-                       "plan": plan.to_dict()}, fh, indent=2, sort_keys=True)
+            vdir = os.path.join(outdir, "variants", "%s_%s" % (family, sev))
+            os.makedirs(vdir, exist_ok=True)
+            traj_invalid.save(os.path.join(vdir, "traj_invalid.npz"))
+            with open(os.path.join(vdir, "plan.json"), "w") as fh:
+                json.dump({"pair_uid": pair_uid, "spec": spec.to_dict(),
+                           "plan": plan.to_dict()}, fh, indent=2, sort_keys=True)
 
-        replay(spec, objs, traj_invalid)
-        dt, _ = render_and_save(renderer, scene, spec, objs, vdir, "invalid")
-        timings[sev] = round(dt, 2)
-        variants.append({"severity": sev, "ok": True, "dir": vdir,
-                         "kind": plan.kind,
-                         "t_event": plan.t_event, "windows": plan.windows,
-                         "magnitude": plan.magnitude,
-                         "magnitude_unit": plan.magnitude_unit})
+            replay(spec, objs, traj_invalid)
+            dt, _ = render_and_save(renderer, scene, spec, objs, vdir, "invalid")
+            timings[tag] = round(dt, 2)
+            variants.append({"family": family, "severity": sev, "ok": True,
+                             "dir": vdir, "kind": plan.kind,
+                             "t_event": plan.t_event, "windows": plan.windows,
+                             "magnitude": plan.magnitude,
+                             "magnitude_unit": plan.magnitude_unit})
 
     print("PHASE0 " + json.dumps({
         "ok": any(v.get("ok") for v in variants),

@@ -172,6 +172,29 @@ def shape_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     return np.abs(vol / max(float(vol[0]), 1e-9) - 1.0)
 
 
+@register("object_count")
+def object_count(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
+    """Fission: how many bodies exist where one should.
+
+    Counted over a declared sibling group -- the body and any understudy that
+    could stand in for it -- and reported relative to frame 0, so one becoming
+    two scores 1.0. Like `mass_continuity` this is discrete by construction:
+    an object either split or it did not, and the severity bins vary how far
+    the halves fly apart rather than how true the residual is.
+    """
+    ids = [int(i) for i in ctx.get("sibling_ids", [])] or [int(traj.body_ids[b])]
+    idx = []
+    for i in ids:
+        try:
+            idx.append(traj.index_of(i))
+        except KeyError:
+            continue
+    if not idx:
+        return np.zeros((traj.num_frames,), np.float64)
+    n = traj.present[:, idx].sum(axis=1).astype(np.float64)
+    return np.abs(n / max(float(n[0]), 1.0) - 1.0)
+
+
 @register("angular_momentum")
 def angular_momentum(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """Spin that changed with nothing to change it.

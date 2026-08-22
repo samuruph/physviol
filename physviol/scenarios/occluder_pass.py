@@ -23,10 +23,10 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 class OccluderPass(Scenario):
     name = "occluder_pass"
-    SEG_FLOOR, SEG_SCREEN, SEG_BALL = 1, 3, 2
+    SEG_FLOOR, SEG_SCREEN, SEG_BALL, SEG_SPLIT = 1, 3, 2, 4
 
-    def sample(self, seed: int, tier: Tier,
-               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+    def _sample(self, seed: int, tier: Tier,
+                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         if not cx.implemented:
@@ -57,7 +57,8 @@ class OccluderPass(Scenario):
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), screen, ball],
+            bodies=[C.ground(cx, self.SEG_FLOOR), screen, ball,
+                    C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.8)),
             camera_position=cam, camera_look_at=(0.0, 0.4, 0.9),
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,

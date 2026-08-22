@@ -95,8 +95,14 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     static_ids = [i for i in causal_ids if i not in dynamic_ids]
     primary_id = dynamic_ids[0] if dynamic_ids else causal_ids[0]
 
-    surface_top = plan_d["notes"].get("surface_top", spec.floor_level)
-    ctx = {"surface_top": surface_top}
+    # The plan's notes ARE the residual context. Each injector knows what its
+    # law needs -- the surface a body sank through, the frames a parabola should
+    # be fitted over, which bodies count as siblings, where the light is -- and
+    # passing the whole block through means adding a law never means touching
+    # this file.
+    ctx = dict(plan_d.get("notes", {}))
+    surface_top = ctx.get("surface_top", spec.floor_level)
+    ctx["surface_top"] = surface_top
 
     # The free-fall law asks "is this body accelerating like gravity?", which is
     # only a fair question while nothing is holding it up. Without this gate a
@@ -145,7 +151,13 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     r_invalid = law(traj_i, bi_i, dict(ctx, unsupported=_unsupported(traj_i, bi_i)))
 
     floor = sev_mod.NoiseFloor.calibrate([r_valid])
-    r_strong = inj.strong_residual_reference(spec)
+    # Families whose effect depends on the rollout measure their own strong-bin
+    # reference at plan time and record it; the rest can answer from the spec.
+    # Either way it is the *strong* bin's value even on a weak clip, or the
+    # three bins would not be comparable.
+    r_strong = ctx.get("r_strong")
+    if not r_strong:
+        r_strong = inj.strong_residual_reference(spec)
     s_invalid = sev_mod.bounded_score(r_invalid, floor, r_strong)
     s_valid = sev_mod.bounded_score(r_valid, floor, r_strong)
 
@@ -153,14 +165,25 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     plan_windows = [tuple(w) for w in plan_d["violation_windows"]]
     active = win_mod.rasterise(plan_windows, T)
 
+    # Observability is measured on the dynamic causal bodies only -- see the
+    # note in windows.observable_frames -- and it gates the *spatial*
+    # annotations, which answer "where can this be seen" rather than "when is
+    # it happening". `active` remains the ground-truth timeline.
+    observable = win_mod.observable_frames(seg_v, seg_i, dynamic_ids or causal_ids)
+    visible = active & observable
+
     # ---- 3.3 masks (the union rule) --------------------------------------
-    vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, active)
+    vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, visible)
     rmask = masks_mod.reference_mask(seg_v, dynamic_ids)
-    cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, static_ids, active)
+    cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, static_ids, visible)
     dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
 
     # ---- 3.4 steps 4-5: paint, then the temporal profile ------------------
-    smap = sev_mod.paint(seg_i, {primary_id: s_invalid}, active=active)
+    # Every dynamic culprit is painted, not just the primary. `global_gravity`
+    # acts on the whole scene and `fission` on both halves; painting one body
+    # would leave the severity field describing a fraction of the violation.
+    smap = sev_mod.paint(seg_i, {int(b): s_invalid for b in dynamic_ids or [primary_id]},
+                         active=visible)
     # The union rule can mark pixels the culprit does not occupy in the invalid
     # render (it vanished / moved). Those carry the same score.
     extra = vmask & (smap == 0)
@@ -171,10 +194,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         smap = np.where(extra, broadcast, smap).astype(np.float16)
     sev_t = sev_mod.temporal_profile(smap)
 
-    # Observability is measured on the dynamic causal bodies only -- see the
-    # note in windows.observable_frames.
     tinfo = win_mod.build(plan_windows, T, seg_v, seg_i, dynamic_ids or causal_ids,
-                          primary_id, severity_t=sev_t)
+                          primary_id, severity_t=sev_t, observable=observable)
     arrays = tinfo.pop("_arrays")
     arrays["severity_t"] = sev_t
 

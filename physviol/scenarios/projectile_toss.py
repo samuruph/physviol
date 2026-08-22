@@ -15,10 +15,10 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 class ProjectileToss(Scenario):
     name = "projectile_toss"
-    SEG_FLOOR, SEG_BALL = 1, 2
+    SEG_FLOOR, SEG_BALL, SEG_SPLIT = 1, 2, 4
 
-    def sample(self, seed: int, tier: Tier,
-               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+    def _sample(self, seed: int, tier: Tier,
+                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         if not cx.implemented:
@@ -33,20 +33,22 @@ class ProjectileToss(Scenario):
         z0 = float(rng.uniform(0.6, 1.1))
 
         hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
+        kind = "sphere" if rng.rand() < 0.6 else "cube"
         ball = BodySpec(
-            name="ball", kind="sphere", position=(-vx * flight * 0.45, 0.0, z0),
+            name="ball", kind=kind, position=(-vx * flight * 0.45, 0.0, z0),
             scale=(radius,) * 3, velocity=(vx, 0.0, vz), mass=1.0,
             friction=0.4, restitution=0.6, color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BALL, role="actor")
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), ball],
+            bodies=[C.ground(cx, self.SEG_FLOOR), ball,
+                    C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 1.2)),
             camera_position=(0.4, -9.0, 2.6), camera_look_at=(0.0, 0.0, 1.8),
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
             notes={"radius": radius, "v0": [vx, 0.0, vz],
-                   "flight_seconds": flight})
+                   "flight_seconds": flight, "actor_kind": kind})
 
 
 register(ProjectileToss())

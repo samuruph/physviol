@@ -17,8 +17,8 @@ class BallCollision(Scenario):
     name = "ball_collision"
     SEG_FLOOR, SEG_A, SEG_B = 1, 2, 4
 
-    def sample(self, seed: int, tier: Tier,
-               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+    def _sample(self, seed: int, tier: Tier,
+                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         if not cx.implemented:

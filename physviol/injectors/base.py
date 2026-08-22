@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ..sim.trajectory import Trajectory
+from . import _geom
 
 
 @dataclass
@@ -94,10 +95,27 @@ class Injector:
 
     def strong_residual_reference(self, spec) -> float:
         """The residual this family produces at its `strong` bin, in the units of
-        its law. This is `r_hard` in the bounded score of PLAN 3.4 step 3, and
+        its law. This is `r_strong` in the bounded score of PLAN 3.4 step 3, and
         it is what makes severity comparable across families whose physical
-        units are not."""
+        units are not.
+
+        Families whose knob is exact by construction -- a prescribed penetration
+        depth, a gravity scale -- can answer from the spec alone. Families whose
+        effect depends on the rollout (how fast was it going when it stopped?)
+        cannot, so they measure it instead: `plan()` builds the strong-bin edit,
+        runs the law over it, and records the answer as `notes["r_strong"]`,
+        which the annotation pipeline prefers over this method. Measuring it
+        even while planning a *weak* clip is the point -- the reference has to be
+        the same for all three bins or the bins are not comparable.
+        """
         raise NotImplementedError
+
+    def _measure(self, traj: Trajectory, body_id: int, law_name: str,
+                 ctx: Dict[str, Any]) -> float:
+        """Peak residual of `law_name` on this trajectory. See above."""
+        from ..residuals import laws
+        r = laws.get(law_name)(traj, traj.index_of(int(body_id)), dict(ctx))
+        return float(np.max(r)) if r.size else 0.0
 
     # -- helpers shared by subclasses -------------------------------------
     @staticmethod
@@ -107,8 +125,29 @@ class Injector:
         out.quat = traj.quat.copy()
         out.lin_vel = traj.lin_vel.copy()
         out.ang_vel = traj.ang_vel.copy()
+        out.present = traj.present.copy()
+        out.scale_mul = traj.scale_mul.copy()
         out.meta = dict(traj.meta)
         return out
+
+    # -- who the intervention acts on -------------------------------------
+    @staticmethod
+    def _primary(spec):
+        """The one body most families act on. `None` if the scenario has no actor.
+
+        Dormant understudies are skipped: they exist in the scene graph so
+        `fission` has something to switch on, and until it does they are not
+        part of the scene.
+        """
+        live = [b for b in _geom.actors(spec) if not b.dormant]
+        return live[0] if live else None
+
+    @staticmethod
+    def _all_actors(spec):
+        """Every actor, for the families that act on a whole medium rather than
+        on one culprit -- `antigravity` over a pour, `global_gravity` over a
+        scene, an assembly whose parts must move together."""
+        return [b for b in _geom.actors(spec) if not b.dormant]
 
     @staticmethod
     def _ballistic(p0: np.ndarray, v0: np.ndarray, g: np.ndarray,
@@ -121,35 +160,26 @@ class Injector:
 
     @staticmethod
     def _ballistic_with_floor(p0: np.ndarray, v0: np.ndarray, g: np.ndarray,
-                              dt: float, n: int, floor_z: float, radius: float,
+                              dt: float, n: int, floor_z, radius: float,
                               restitution: float, substeps: int = 24):
-        """Free flight that still respects a horizontal plane.
+        """Free flight that still respects the ground.
 
         Needed after a violation window closes: the actor is legal again, so it
         must bounce rather than sink through on a later frame. Sub-steps so the
         bounce instant is not quantised to the frame rate.
+
+        `floor_z` may be a callable (x, y) -> z. Scenarios with a raised surface
+        need it: a mug kicked off a table must fall to the floor once it clears
+        the edge, not glide along an infinite plane at table height, which is a
+        solidity violation nobody asked for.
         """
-        p = p0.astype(np.float64).copy()
-        v = v0.astype(np.float64).copy()
-        h = dt / float(substeps)
-        pos = np.zeros((n, 3), np.float64)
-        vel = np.zeros((n, 3), np.float64)
-        for f in range(n):
-            for _ in range(substeps):
-                v = v + g * h
-                p = p + v * h
-                if p[2] - radius <= floor_z and v[2] < 0.0:
-                    p[2] = floor_z + radius
-                    v[2] = -v[2] * restitution
-                    if abs(v[2]) < 0.05:          # settle instead of jittering
-                        v[2] = 0.0
-            pos[f] = p
-            vel[f] = v
-        return pos.astype(np.float32), vel.astype(np.float32)
+        return Injector._integrate_profile(
+            p0, v0, np.tile(np.asarray(g, np.float64)[None, :], (n, 1)),
+            dt, floor_z, radius, restitution, substeps)
 
     @staticmethod
     def _integrate_profile(p0: np.ndarray, v0: np.ndarray, g_per_frame: np.ndarray,
-                           dt: float, floor_z: float, radius: float,
+                           dt: float, floor_z, radius: float,
                            restitution: float, substeps: int = 24):
         """Integrate under a *time-varying* gravity, respecting a ground plane.
 
@@ -167,21 +197,52 @@ class Injector:
         v = np.asarray(v0, np.float64).copy()
         n = int(g_per_frame.shape[0])
         h = dt / float(substeps)
+        ground = floor_z if callable(floor_z) else (lambda x, y: float(floor_z))
         pos = np.zeros((n, 3), np.float64)
         vel = np.zeros((n, 3), np.float64)
         for f in range(n):
-            g = g_per_frame[f].astype(np.float64)
+            g = np.asarray(g_per_frame[f], np.float64)
             for _ in range(substeps):
                 v = v + g * h
                 p = p + v * h
-                if p[2] - radius <= floor_z and v[2] < 0.0:
-                    p[2] = floor_z + radius
+                fz = ground(p[0], p[1])
+                if p[2] - radius <= fz and v[2] < 0.0:
+                    p[2] = fz + radius
                     v[2] = -v[2] * restitution
                     if abs(v[2]) < 0.05:
                         v[2] = 0.0
             pos[f] = p
             vel[f] = v
         return pos.astype(np.float32), vel.astype(np.float32)
+
+    # ------------------------------------------------------------------ #
+    def _rewrite_from(self, spec, traj: Trajectory, out: Trajectory, body,
+                      t0: int, v0=None, p0=None, g_per_frame=None,
+                      restitution=None) -> None:
+        """Re-integrate one body from frame `t0`, on the surface it belongs to.
+
+        The workhorse behind most families: an intervention is usually "change
+        the state at one instant, then let physics resume", and doing that by
+        hand in each injector is how a clip ends up with two violations and one
+        annotation.
+        """
+        bi = traj.index_of(int(body.segmentation_id))
+        n = traj.num_frames - t0
+        if n <= 0:
+            return
+        if g_per_frame is None:
+            g_per_frame = np.tile(traj.gravity.astype(np.float64)[None, :], (n, 1))
+        start_v = traj.lin_vel[t0 - 1, bi] if v0 is None else np.asarray(v0, np.float64)
+        # `p0` exists for `fission`: the understudy has to start from the
+        # *original's* last lawful pose, and writing that into frame t0-1 would
+        # break prefix identity on the frame before the event.
+        start_p = traj.pos[t0 - 1, bi] if p0 is None else np.asarray(p0, np.float64)
+        pos, vel = self._integrate_profile(
+            start_p, start_v, np.asarray(g_per_frame, np.float64),
+            traj.dt, _geom.floor_fn(spec, body), float(traj.radius[bi]),
+            float(body.restitution if restitution is None else restitution))
+        out.pos[t0:, bi, :] = pos
+        out.lin_vel[t0:, bi, :] = vel
 
     @staticmethod
     def _pulse(n: int, peak: float, base: float = 1.0,

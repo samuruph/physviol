@@ -57,43 +57,67 @@ def cmd_generate(a) -> int:
         print("unknown tier %r" % tier, file=sys.stderr)
         return 2
 
-    if a.scenario and a.family:
-        cells = [(a.scenario, a.family)]
-    else:
-        have = set(scen_mod.available())
-        from . import injectors
-        inj = set(injectors.available())
-        cells = [c for c in build_cells() if c[0] in have and c[1] in inj]
-        if not cells:
-            print("no implemented (scenario, family) cells yet", file=sys.stderr)
-            return 2
+    from . import injectors
+    have, inj = set(scen_mod.available()), set(injectors.available())
+    cells = [c for c in build_cells() if c[0] in have and c[1] in inj]
+    if a.scenario:
+        cells = [c for c in cells if c[0] == a.scenario]
+    if a.family:
+        cells = [c for c in cells if c[1] == a.family]
+    if a.scenario and a.family and not cells:
+        cells = [(a.scenario, a.family)]        # force an off-matrix probe
+    if a.limit:
+        cells = cells[:a.limit]
+    if not cells:
+        print("no (scenario, family) cells selected", file=sys.stderr)
+        return 2
 
-    seeds = [a.seed + i for i in range(a.n)]
+    # One worker run per (scenario, seed) covering every family of that
+    # scenario: they share a single scene build, a single HDRI load and a
+    # single valid render. At complexity L1 the environment costs ~4.6x an L0
+    # render, so re-paying it per family was most of the wall clock.
+    by_scenario = {}
+    for scenario, family in cells:
+        by_scenario.setdefault(scenario, []).append(family)
+
     work = a.workdir or os.path.join("out", "work")
     rel = a.outdir or os.path.join("out", "release")
 
-    done, t0 = [], time.perf_counter()
-    for i, seed in enumerate(seeds):
-        scenario, family = cells[i % len(cells)]
-        sev = a.severity
-        rc, info = _run_worker(scenario, seed, tier, family, sev, work,
-                               complexity=a.complexity, window=a.window)
-        if rc != 0:
-            print("worker failed for %s/%d: %s" % (scenario, seed, info),
-                  file=sys.stderr)
-            return rc
-        wd = info["outdir"]
-        produced = [v["dir"] for v in info.get("variants", []) if v.get("ok")]
-        for res in _annotate(wd, rel, overlay=not a.no_overlay, only=produced):
-            done.append(res)
-            print("  %-15s seed=%-5d %-9s %-6s t_event=%-3d lag=%-2d "
-                  "vwin=%-11s peak_s=%.2f"
-                  % (scenario, seed, res["family"], res["severity"], res["t_event"],
-                     res["observability_lag"], str(res["violation_windows"]),
-                     res["peak_score"]))
+    done, failed, t0 = [], [], time.perf_counter()
+    for v in range(a.variants):
+        for scenario, families in sorted(by_scenario.items()):
+            seed = a.seed + v
+            rc, info = _run_worker(scenario, seed, tier, ",".join(families),
+                                   a.severity, work, complexity=a.complexity,
+                                   window=a.window)
+            if rc != 0:
+                print("worker failed for %s/%d: %s"
+                      % (scenario, seed, str(info)[:400]), file=sys.stderr)
+                failed.append((scenario, seed, "worker"))
+                if not a.keep_going:
+                    return rc
+                continue
+            for bad in [x for x in info.get("variants", []) if not x.get("ok")]:
+                failed.append((scenario, bad.get("family"), bad.get("error")))
+                print("  !! %-15s %-17s %-6s %s"
+                      % (scenario, bad.get("family"), bad.get("severity"),
+                         bad.get("error")), file=sys.stderr)
+            produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
+            for res in _annotate(info["outdir"], rel,
+                                 overlay=not a.no_overlay, only=produced):
+                done.append(res)
+                print("  %-15s seed=%-5d %-17s %-6s t_event=%-3d lag=%-2d "
+                      "vwin=%-13s peak_s=%.2f"
+                      % (scenario, seed, res["family"], res["severity"],
+                         res["t_event"], res["observability_lag"],
+                         str(res["violation_windows"])[:13], res["peak_score"]))
     dt = time.perf_counter() - t0
-    print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s" % (len(done), dt,
-                                                        dt / max(len(done), 1), rel))
+    print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
+          % (len(done), dt, dt / max(len(done), 1), rel))
+    if failed:
+        print("%d cell(s) produced nothing:" % len(failed), file=sys.stderr)
+        for row in failed:
+            print("   %s" % (row,), file=sys.stderr)
     return 0
 
 
@@ -168,10 +192,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("generate", help="simulate+render+annotate end to end")
     p.add_argument("--debug", action="store_true", help="Tier D (fast, unpublished)")
     p.add_argument("--tier", default="D")
-    p.add_argument("-n", type=int, default=2, help="number of pairs")
+    p.add_argument("--variants", type=int, default=1,
+                   help="randomisations per cell: each is a fresh seed, so "
+                        "sizes, speeds, colours, camera, HDRI and (where "
+                        "physically neutral) the actor's shape all differ")
+    p.add_argument("-n", "--limit", type=int, default=0,
+                   help="cap the number of cells, for a quick smoke run")
     p.add_argument("--seed", type=int, default=91731)
-    p.add_argument("--scenario")
-    p.add_argument("--family")
+    p.add_argument("--scenario", help="restrict to one scenario")
+    p.add_argument("--family", help="restrict to one family")
+    p.add_argument("--keep-going", action="store_true",
+                   help="carry on past a failing cell and list them at the end")
     p.add_argument("--severity", default="strong",
                    help="weak|medium|strong, or 'all' for the whole ladder in "
                         "one run (default: strong -- one clean variant per "

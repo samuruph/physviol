@@ -221,13 +221,53 @@ class SceneSpec:
         }
 
 
+def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
+    """Per-instance appearance variation: viewpoint, and light direction at L0.
+
+    Drawn from its own generator seeded off the scenario's seed, so adding a
+    variation axis here never shifts the random stream a scenario staged its
+    physics from -- otherwise every existing clip would resample the moment
+    this function grew a line.
+
+    Deliberately small. The camera must still frame the event: a viewpoint that
+    loses the actor produces an empty mask, which is a worse annotation than a
+    boring one. Bigger appearance changes belong on the complexity axis, where
+    they are labelled and can be reported against.
+    """
+    rng = np.random.RandomState((seed * 2654435761 + 0x5EED) % (2 ** 31 - 1))
+    swing = rng.uniform(-1.0, 1.0, size=3) * np.array([0.55, 0.45, 0.28])
+    aim = rng.uniform(-1.0, 1.0, size=3) * 0.10
+    spec.camera_position = tuple(float(a + b) for a, b in
+                                 zip(spec.camera_position, swing))
+    spec.camera_look_at = tuple(float(a + b) for a, b in
+                                zip(spec.camera_look_at, aim))
+    for light in spec.lights:
+        light.position = tuple(float(a + b) for a, b in
+                               zip(light.position,
+                                   rng.uniform(-1.0, 1.0, size=3) * 0.9))
+    return spec
+
+
 class Scenario:
-    """Base class. Subclasses implement `sample`."""
+    """Base class. Subclasses implement `_sample`."""
 
     name: str = "unnamed"
 
     def sample(self, seed: int, tier: Tier,
                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+        """Sample one instance, then vary how it looks. Do not override.
+
+        Level 4 of the taxonomy is the *instance*, and two instances of one
+        scenario should differ in more than their random seed's effect on a
+        radius. Subclasses stage the physics in `_sample`; the appearance
+        variation that is common to all of them -- where the camera stands, how
+        the scene is lit -- is applied here so it cannot drift between thirteen
+        files.
+        """
+        return _vary(self._sample(seed, tier, complexity), seed)
+
+    def _sample(self, seed: int, tier: Tier,
+                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         raise NotImplementedError
 
     def script(self, spec: "SceneSpec", traj) -> None:

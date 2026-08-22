@@ -28,8 +28,8 @@ class PendulumSwing(Scenario):
     name = "pendulum_swing"
     SEG_FLOOR, SEG_BOB, SEG_ROD, SEG_POST = 1, 2, 4, 3
 
-    def sample(self, seed: int, tier: Tier,
-               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+    def _sample(self, seed: int, tier: Tier,
+                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         if not cx.implemented:

@@ -43,10 +43,10 @@ FAMILIES: Dict[str, Family] = {
         "mass_ratio", "instant", "mass_continuity", "permanence", "rigid_body"),
     "immutability": Family(
         "identity", "the body grows or shrinks, ideally behind an occluder",
-        "volume_ratio", "instant", "shape_continuity", "immutability", "rigid_body"),
+        "volume_ratio", "sustained", "shape_continuity", "immutability", "rigid_body"),
     "fission": Family(
         "identity", "one body becomes two, each half the volume",
-        "count_ratio", "instant", "object_count", "permanence", "rigid_body"),
+        "count_ratio", "sustained", "object_count", "permanence", "rigid_body"),
     # -- kinematics --------------------------------------------------------
     "continuity": Family(
         "kinematics", "discontinuous position set",
@@ -60,7 +60,7 @@ FAMILIES: Dict[str, Family] = {
         "gravity_scale_deviation", "sustained", "free_fall", None, "rigid_body"),
     "newton1_inertia": Family(
         "kinematics", "a resting body accelerates, or a sliding body stops unforced",
-        "dv_over_g_dt", "instant", "linear_momentum", None, None),
+        "dv_over_g_dt", "sustained", "linear_momentum", None, None),
     # -- contact -----------------------------------------------------------
     "solidity": Family(
         "contact", "disable a collision pair for N frames",

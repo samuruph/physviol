@@ -71,10 +71,12 @@ def occluded_frames(seg: np.ndarray, body_id: int) -> np.ndarray:
 def build(plan_windows: Sequence[Window], num_frames: int,
           seg_valid: np.ndarray, seg_invalid: np.ndarray,
           causal_ids: Sequence[int], primary_id: int,
-          severity_t: Optional[np.ndarray] = None) -> Dict[str, object]:
+          severity_t: Optional[np.ndarray] = None,
+          observable: Optional[np.ndarray] = None) -> Dict[str, object]:
     """Everything in PLAN 3.2, ready for meta.json + timelines.npz."""
     active = rasterise(plan_windows, num_frames)
-    observable = observable_frames(seg_valid, seg_invalid, causal_ids)
+    if observable is None:
+        observable = observable_frames(seg_valid, seg_invalid, causal_ids)
     occluded = occluded_frames(seg_invalid, primary_id)
 
     obs_windows = to_windows(observable)

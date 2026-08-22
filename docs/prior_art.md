@@ -73,6 +73,7 @@ Optical Consistency, Material Response.
 |---|---|---|---|
 | Permanence | Permanence | Pendulum (bob disappears), Pyramid (holes) / Conservation of Mass | **covered** |
 | Immutability | Immutability | Ball Drop (colour, rescale), Block Slide (dimensions) / Geometric Invariance | **covered** |
+| Fission (one body becomes two) | Permanence (the appearance half) | Cloth Waving "fragments shatter", Faucet "non-coalescing fracture" — both continuum | **covered for rigid bodies**, where neither benchmark stages it |
 | Continuity | Spatio-Temporal Continuity | teleport variants across nearly every scenario / Spatial Continuity | **covered** |
 | Solidity | Solidity | Ball Collision & Ball Drop penetration / Spatial Continuity | **covered** |
 | Anti-gravity (per-body `αg`) | — | Pyramid (negated gravity), Droplet Fall (antigravity) | covered, but **we make it continuous** in α |
@@ -83,7 +84,7 @@ Optical Consistency, Material Response.
 | **Newton-2 / mass–acceleration** | — | none | **new** — no prior benchmark dials effective mass |
 | **Newton-3 / action–reaction** | — | none | **new** — and the only family whose mask must span *two* bodies |
 | **Angular momentum** | — | Pendulum (frequency variation) is adjacent | **new** as a conservation-law family |
-| **Support / static equilibrium** | — | none | **new** — severity = CoM-to-support-polygon distance |
+| **Support / static equilibrium** | — | none | **new** — severity = clearance above the surface actually beneath the body |
 | **Friction inversion** | — | Block Slide is the setting, not the violation | **new** — severity = effective µ vs declared µ |
 | **Shadow / optical** | — | Moving Shadow, Orbit Shadow / Optical Consistency | covered as a category, but **ours is the only one with a mask that is not on the object** |
 | **Global gravity scale** | — | none | **new** — internally consistent, mask is the whole frame, no localized culprit |
@@ -100,8 +101,13 @@ Optical Consistency, Material Response.
 
 ### What this table is claiming
 
-Of the 16 violation families in v0, **5 map cleanly onto prior art** (Permanence,
-Immutability, Continuity, Solidity, Shadow), **3 exist there only as discrete flags** where we
-make them continuous (anti-gravity, phantom impulse, super-elastic), and **8 are new**. The novelty is not primarily
-in the taxonomy anyway — it is that every one of these ships with a mask, three clocks and a
-residual. Re-check this table whenever Part 2 changes.
+Of the 17 violation families in v0, **6 map cleanly onto prior art** (Permanence,
+Immutability, Fission, Continuity, Solidity, Shadow), **3 exist there only as discrete flags**
+where we make them continuous (anti-gravity, phantom impulse, super-elastic), and **8 are
+new**. The novelty is not primarily in the taxonomy anyway — it is that every one of these
+ships with a mask, three clocks and a residual. Re-check this table whenever Part 2 changes.
+
+`fission` is counted as covered rather than new because it is the appearance half of IntPhys
+2's permanence principle — an object arriving where there was none. What is new is staging it
+on a *rigid* body: both benchmarks only break object count in continuum media, where nothing
+they ship can localise which pixels are wrong.

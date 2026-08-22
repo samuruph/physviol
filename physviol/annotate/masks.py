@@ -29,11 +29,20 @@ def footprint(seg: np.ndarray, ids: Sequence[int]) -> np.ndarray:
 def violation_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
                    dynamic_causal_ids: Sequence[int],
                    active: np.ndarray) -> np.ndarray:
-    """The union rule, gated to the frames where the violation is active.
+    """The union rule, gated to the frames where the violation *can be seen*.
 
     Only *dynamic* causal bodies contribute. A static participant (the floor a
     ball sinks through) would otherwise flood the mask with the entire surface;
     it is recorded in `causal_mask` level 2 instead.
+
+    Callers pass `active & observable`, not `active` alone. The two differ on
+    real frames: a super-elastic bounce is unlawful the instant the contact
+    resolves, but the body is still in exactly the same place in both twins, so
+    that frame carries no visual evidence at all. Marking pixels there would ask
+    a model to localise something the image does not contain -- and the three
+    clocks already record that the violation began before it became visible.
+    Where the culprit is fully occluded the two gates agree, because the union
+    of two hidden footprints is empty either way.
     """
     u = footprint(seg_valid, dynamic_causal_ids) | footprint(seg_invalid,
                                                              dynamic_causal_ids)

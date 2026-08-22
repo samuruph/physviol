@@ -17,10 +17,10 @@ class BallDrop(Scenario):
 
     # Segmentation ids are fixed per role so downstream annotation never has to
     # guess which instance is the actor.
-    SEG_FLOOR, SEG_BALL = 1, 2
+    SEG_FLOOR, SEG_BALL, SEG_SPLIT = 1, 2, 4
 
-    def sample(self, seed: int, tier: Tier,
-               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+    def _sample(self, seed: int, tier: Tier,
+                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         if not cx.implemented:
@@ -39,20 +39,23 @@ class BallDrop(Scenario):
         hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
         floor = C.ground(cx, self.SEG_FLOOR)
 
+        # Sphere or cube: both fall and bounce, so the shape is free to vary
+        # and two instances of ball_drop do not look like one clip twice.
+        kind = "sphere" if rng.rand() < 0.6 else "cube"
         ball = BodySpec(
-            name="ball", kind="sphere", position=(0.0, 0.0, drop_height),
+            name="ball", kind=kind, position=(0.0, 0.0, drop_height),
             scale=(radius, radius, radius), velocity=(vx, vy, 0.0),
             mass=1.0, friction=0.4, restitution=restitution,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_BALL, role="actor")
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[floor, ball],
+            bodies=[floor, ball, C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx),
             camera_position=(5.2, -4.4, 2.4), camera_look_at=(0.0, 0.0, 1.0),
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
             notes={"radius": radius, "drop_height": drop_height,
-                   "restitution": restitution},
+                   "restitution": restitution, "actor_kind": kind},
         )
 
 

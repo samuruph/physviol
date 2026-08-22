@@ -17,8 +17,8 @@ class StackTopple(Scenario):
     name = "stack_topple"
     SEG_FLOOR, SEG_TOP, SEG_MID, SEG_BASE = 1, 2, 4, 5
 
-    def sample(self, seed: int, tier: Tier,
-               complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
+    def _sample(self, seed: int, tier: Tier,
+                complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
         rng = self.rng(seed)
         cx = COMPLEXITY[complexity]
         if not cx.implemented:

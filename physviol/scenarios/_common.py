@@ -78,3 +78,25 @@ def on_ramp(center, tilt: float, along: float, half_size: float,
     d, n = ramp_axes(tilt)
     lift = half_size + clearance
     return tuple(float(center[i] + along * d[i] + lift * n[i]) for i in range(3))
+
+
+def understudy(actor: BodySpec, seg_id: int) -> BodySpec:
+    """A dormant duplicate of `actor`, parked out of the render until summoned.
+
+    `fission` needs a second body to spawn, and a body cannot be added to a
+    Kubric scene part-way through a render without perturbing the very render
+    path prefix identity depends on. So the understudy is declared from frame 0,
+    marked `dormant`, and contributes no pixels until an intervention switches
+    it on. It costs one scene asset and nothing at all in the valid twin.
+    """
+    # Parked far below the scene, not at the actor's own position: the
+    # understudy is `static` to the simulator but still a collidable body, and
+    # sharing the actor's start pose made PyBullet report a contact between the
+    # two on frame 0 -- which then became the "first contact" that `solidity`
+    # and `superelastic` hung their violation on.
+    return BodySpec(
+        name=actor.name + "_split", kind=actor.kind, position=(0.0, 0.0, -1000.0),
+        scale=actor.scale, quaternion=actor.quaternion, mass=actor.mass,
+        friction=actor.friction, restitution=actor.restitution,
+        color=actor.color, segmentation_id=seg_id, role="actor",
+        scripted=True, dormant=True)

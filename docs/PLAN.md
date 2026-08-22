@@ -363,8 +363,8 @@ grouping key that a consumer can aggregate or split on.
 
 ```
 Level 1  DOMAIN     ── which physical law is at stake        (7 domains)
-Level 2  FAMILY     ── the specific way it breaks            (16 families)
-Level 3  SCENARIO   ── the staged scene it happens in        (12 scenarios)
+Level 2  FAMILY     ── the specific way it breaks            (17 families)
+Level 3  SCENARIO   ── the staged scene it happens in        (14 scenarios)
 Level 4  INSTANCE   ── scenario × family × seed × severity   (the clip pair)
 ```
 
@@ -378,20 +378,21 @@ fields* (`intphys2_category`, `likephys_domain`) for head-to-head comparability,
 
 | # | domain | the question it tests | families | residual |
 |---|---|---|---|---|
-| 1 | **`identity`** | does the object persist and stay itself? | `permanence`, `immutability` | mass / volume / appearance discontinuity |
+| 1 | **`identity`** | does the object persist and stay itself? | `permanence`, `immutability`, `fission` | mass / volume / object-count discontinuity |
 | 2 | **`kinematics`** | is unsupported motion consistent with `g`? | `continuity`, `non_parabolic`, `antigravity`, `newton1_inertia` | `‖a−g‖/‖g‖`, parabola RMS, jump distance |
 | 3 | **`contact`** | do bodies interact legally when they touch? | `solidity`, `superelastic`, `newton3_reaction` | penetration depth, energy gain ratio, momentum imbalance |
 | 4 | **`dynamics`** | do forces and masses behave? | `phantom_impulse`, `newton2_mass`, `angular_momentum` | `J/(m·v_typ)`, effective-mass ratio, `L` defect |
-| 5 | **`equilibrium`** | do resting and supported bodies behave? | `support`, `friction` | CoM-to-support-polygon distance, effective µ vs declared µ |
+| 5 | **`equilibrium`** | do resting and supported bodies behave? | `support`, `friction` | clearance above the supporting surface, effective µ vs declared µ |
 | 6 | **`optical`** | is light consistent with geometry? | `shadow` | shadow–caster geometric mismatch |
 | 7 | **`global`** | are the scene's constants physical? | `global_gravity` | `\|α − 1\|` on scene gravity |
 
-**The 16 families in full:**
+**The 17 families in full:**
 
 | family | domain | injection | severity unit | kind |
 |---|---|---|---|---|
 | `permanence` | identity | remove / duplicate body, ideally while occluded | occlusion lag (frames), Δmass | instant |
-| `immutability` | identity | swap shape, size, material or colour behind occluder | Δvolume ratio, ΔLab | instant |
+| `immutability` | identity | the body grows or shrinks, ideally behind an occluder | volume ratio | sustained |
+| `fission` | identity | one body becomes two, each half the volume | object-count ratio | sustained |
 | `continuity` | kinematics | discontinuous position set | jump distance (m) | instant |
 | `non_parabolic` | kinematics | replace free-flight arc with a non-`g` curve | RMS deviation from fitted parabola (m) | sustained |
 | `antigravity` | kinematics | per-body gravity scale `g → αg`, `α ∈ [−1, 0.5]` | `‖a−g‖/‖g‖` | sustained |
@@ -503,12 +504,13 @@ plus a granular stand-in for the fluid domain.
 | `ball_collision` | two spheres roll toward each other | approach → collision → separation | no | LikePhys *Ball Collision* |
 | `ramp_slide` | block slides down an incline | sustained contact + friction | no | LikePhys *Block Slide* |
 | `projectile_toss` | body thrown on a ballistic arc | pure free flight, no contact | no | new — parabola control |
+| `spin_toss` | cube tumbling in the air, thrown with heavy spin | free flight with visible rotation | no | new — a uniformly coloured sphere cannot show spin |
 | `occluder_pass` | body travels behind a screen and re-emerges | occlusion interval of known length | **yes** | IntPhys 2 occlusion |
 | `stack_topple` | stacked bodies, marginally stable | static equilibrium → topple | no | IntPhys 2 / LikePhys |
 | `pyramid_impact` | cube dropped onto a sphere pyramid | multi-body contact chain | no | LikePhys *Pyramid Impact* |
 | `pendulum_swing` | bob on a rigid rod | constrained periodic arc | optional | LikePhys *Pendulum* |
 | `resting_table` | several bodies at rest on a surface | sustained static equilibrium | optional | IntPhys 2 permanence |
-| `rolling_ramp` | ball rolls along and up a slope | rolling contact, angular momentum | no | new |
+| `rolling_ramp` | cube tumbles down a raised ramp and off its lip | rolling contact, then a short free flight | no | new |
 | `shadow_track` | object translates under a fixed light | a clean, trackable cast shadow | no | LikePhys *Moving Shadow* |
 | `clutter_toss` | MOVi-style multi-object toss | dense collisions, heavy occlusion | implicit | MOVi baseline |
 | `granular_pour` | ~200 small spheres poured from a spout into a bowl | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
@@ -519,44 +521,48 @@ Not every combination is meaningful — `newton3_reaction` needs a collision, `s
 clean cast shadow, `support` needs something at rest. This matrix is the generator's job
 list; **`●` = build it in v0**, `○` = valid but deferred, blank = not meaningful.
 
-| | drop | coll | ramp | toss | occl | stack | pyr | pend | rest | roll | shad | clut | gran |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `permanence` | ● | ○ | | ○ | ● | ○ | | ○ | ● | | | ○ | ○ |
-| `immutability` | ● | ○ | | ○ | ● | | | | ○ | | | ○ |   |
-| `continuity` | ● | ○ | ○ | ● | ● | | | ○ | ○ | ○ | | ○ | ○ |
-| `non_parabolic` | ● | | | ● | ○ | | | | | | | |   |
-| `antigravity` | ● | | ○ | ● | ○ | | | | ○ | | | ○ | ● |
-| `newton1_inertia` | | ○ | ● | | | | | | ● | ● | | |   |
-| `solidity` | ● | ● | ○ | | ● | ○ | ● | | | ○ | | ○ | ○ |
-| `superelastic` | ● | ● | | | | | ● | | | | | ○ | ○ |
-| `newton3_reaction` | | ● | | | | | ● | | | | | ○ |   |
-| `phantom_impulse` | ○ | ● | ○ | ● | ○ | ○ | | ○ | ● | ○ | | ○ | ○ |
-| `newton2_mass` | ○ | ● | ○ | | | | ● | | | | | |   |
-| `angular_momentum` | | ○ | ○ | ○ | | | | ● | | ● | | |   |
-| `support` | | | | | | ● | ○ | | ● | | | |   |
-| `friction` | | | ● | | | | | | ○ | ● | | | ○ |
-| `shadow` | ○ | | | ○ | | | | | ○ | | ● | |   |
-| `global_gravity` | ● | ○ | ○ | ● | ○ | ○ | ○ | ○ | ○ | ○ | | ○ | ● |
+| | drop | coll | ramp | toss | spin | occl | stack | pyr | pend | rest | roll | shad | clut | gran |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `permanence` | ● | ○ |   | ○ |   | ● | ○ |   | ○ | ● |   |   | ○ | ○ |
+| `immutability` | ● | ○ |   | ● | ○ | ● |   |   |   | ● |   |   | ○ |   |
+| `fission` | ● | ○ |   | ● | ○ | ● |   |   |   |   |   |   | ○ |   |
+| `continuity` | ● | ○ | ○ | ● |   | ● |   |   | ○ | ○ | ○ |   | ○ | ○ |
+| `non_parabolic` | ● |   |   | ● | ● | ○ |   |   |   |   |   |   |   |   |
+| `antigravity` | ● |   | ○ | ● |   | ○ |   |   |   | ○ |   |   | ○ | ● |
+| `newton1_inertia` |   | ○ | ● |   |   |   |   |   |   | ● | ● |   |   |   |
+| `solidity` | ● | ● | ○ |   |   | ● | ○ | ● |   |   | ○ |   | ○ | ○ |
+| `superelastic` | ● | ● |   |   |   |   |   | ● |   |   |   |   | ○ | ○ |
+| `newton3_reaction` |   | ● |   |   |   |   |   | ● |   |   |   |   | ○ |   |
+| `phantom_impulse` | ○ | ● | ○ | ● | ● | ○ | ○ |   | ○ | ● | ○ |   | ○ | ○ |
+| `newton2_mass` | ○ | ● | ○ |   |   |   |   | ● |   |   |   |   |   |   |
+| `angular_momentum` |   | ○ | ○ | ○ | ● |   |   |   | ● |   | ● |   |   |   |
+| `support` |   |   |   |   |   |   | ● | ○ |   | ● |   |   |   |   |
+| `friction` |   |   | ● |   |   |   |   |   |   | ○ | ● |   |   | ○ |
+| `shadow` | ○ |   |   | ○ |   |   |   |   |   | ○ |   | ● |   |   |
+| `global_gravity` | ● | ○ | ○ | ● |   | ○ | ○ | ○ | ○ | ○ | ○ |   | ○ | ● |
 
-That is **40 `●` combinations** across 13 scenarios (the authoritative list is `taxonomy.build_cells()`). At ~7 seeds each, ~300 pairs / 600
-clips — the Phase 2 target, arrived at from the matrix rather than picked as a round number.
+That is **48 `●` combinations** across 13 buildable scenarios (`clutter_toss` is deferred;
+the authoritative list is `taxonomy.build_cells()`). At ~6 randomisations each — different
+sizes, speeds, colours, camera, environment map and, where physically neutral, actor shape —
+that is ~288 pairs / 576 clips, the Phase 2 target, arrived at from the matrix rather than
+picked as a round number.
 `granular_pour` contributes the two cells (`antigravity`, `global_gravity`) that read most
 like LikePhys's fluid violations while staying inside exact rigid-body physics.
 
 ### How much code this actually takes
 
-A natural worry with 13 scenarios × 16 families is that it means 208 generators. It does
+A natural worry with 14 scenarios × 17 families is that it means 238 generators. It does
 not. **Scenarios and injectors are orthogonal and compose through the seam**, because an
 injector edits `traj.npz` — per-body poses and velocities — which knows nothing about which
 scene produced it.
 
 | | count | what each one is |
 |---|---|---|
-| scenario files | **13** | a staged scene: assets, camera, initial state (~50 lines; generic parts live in `scenarios/_common.py`) |
-| injector files | **7** | one per *domain*, holding all its families |
-| per-combination files | **0** | the compatibility matrix selects the 40 meaningful cells |
+| scenario files | **13** | a staged scene: assets, camera, initial state (~60 lines; generic parts live in `scenarios/_common.py`) |
+| injector files | **6** | one per *domain*, holding all its families, plus a shared `_geom.py` |
+| per-combination files | **0** | the compatibility matrix selects the 48 meaningful cells |
 
-**20 files, not 208.** `antigravity` written once runs on `ball_drop`, `projectile_toss` and
+**19 files, not 238.** `antigravity` written once runs on `ball_drop`, `projectile_toss` and
 `occluder_pass` unchanged; `permanence` written once works anywhere there is an actor. Adding
 a scenario makes every compatible family available in it for free, and vice versa — which is
 the practical payoff of decoupling dynamics from rendering, beyond the twin-identity property

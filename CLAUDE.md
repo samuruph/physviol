@@ -20,8 +20,8 @@ beyond `physviol/render/worker_smoke.py`.
   Tier B (`physviol_v1`, later): 512×512, 24 fps, 97 frames. Same generators, one config
   block apart. **Debug at Tier D; a bug found there is fixed for all three.**
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
-  `traj.npz`, which is scenario-agnostic, so 13 scenarios x 16 families needs 13 + 7 files,
-  not 208. `taxonomy.COMPATIBILITY` selects the meaningful cells.
+  `traj.npz`, which is scenario-agnostic, so 14 scenarios x 17 families needs 13 + 6 files,
+  not 238. `taxonomy.COMPATIBILITY` selects the 48 meaningful cells.
 - **No fluid in v0.** Tested: Blender 2.93.4 has Mantaflow but headless baking fails
   (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a
   liquid does not fit the pose-based seam. `granular_pour` (~200 rigid spheres) is the v0
@@ -35,8 +35,9 @@ beyond `physviol/render/worker_smoke.py`.
   residual `r`/`z`/`s` is the measured effect (per body per frame, known *after*, becomes
   `severity_map`). There is no "severity mask": `violation_mask` is binary *where*,
   `severity_map` is continuous *how badly*. PLAN §3.4 works a full numeric example.
-- **Taxonomy is four levels**: domain (7) → family (16) → scenario (12) → instance. Encoded
+- **Taxonomy is four levels**: domain (7) → family (17) → scenario (14) → instance. Encoded
   as data in `physviol/taxonomy.py`, including the scenario × family compatibility matrix.
+  13 scenarios are built; `clutter_toss` is DEFER-only.
 - **`reference_mask` ships on both twins** -- the culprit's lawful footprint, taken from the
   valid render and ungated in time. It is the counterfactual "where it should be", and for a
   vanished body it is the only mask with any pixels. Visualisers draw it as a green outline
