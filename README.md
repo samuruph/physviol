@@ -344,7 +344,14 @@ tests/                prefix identity, mask union, windows, grids, taxonomy,
 out/                  all generated output (gitignored)
 ```
 
-## 9. Papers
+## 9. Evaluating on it
+
+[docs/evaluation.md](docs/evaluation.md) — which axes to report on, the four tasks the
+annotations support, and what the orthogonality guarantee does and does not cover. The short
+version: report **per family**, cross with **severity** and **complexity**, split by
+`scene_id`, and never train on `divergence_map`.
+
+## 10. Papers
 
 [IntPhys 2](https://arxiv.org/abs/2506.09849) · [LikePhys](https://arxiv.org/abs/2510.11512) ·
 [Kubric](https://github.com/google-research/kubric). PDFs of the first two live in

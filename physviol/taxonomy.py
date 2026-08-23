@@ -49,7 +49,7 @@ FAMILIES: Dict[str, Family] = {
         "identity", "one body becomes two, which fly apart",
         "count_ratio", "sustained", "object_count", "permanence", "rigid_body"),
     "fusion": Family(
-        "identity", "two bodies touch and come out as one",
+        "identity", "bodies converge and come out as one, same size",
         "count_ratio", "sustained", "object_count", "permanence", "rigid_body"),
     # -- kinematics --------------------------------------------------------
     "continuity": Family(
@@ -314,10 +314,11 @@ EXCLUSIVE_LAWS: Dict[str, Tuple[str, ...]] = {
     # that the survivor swells to hold both, which `object_count` catches.
     "mass_continuity":     ("permanence",),
     "object_count":        ("fission", "fusion", "permanence"),
-    # Not `fission`: its halves keep their full size precisely so the clip is
-    # about object count and nothing else. `fusion`'s survivor does swell, and
-    # that swelling is what distinguishes a merge from one body vanishing.
-    "shape_continuity":    ("immutability", "fusion"),
+    # Neither `fission` nor `fusion`: both keep every surviving body at its
+    # own size precisely so the clip is about object count and nothing else.
+    # What distinguishes a merge from one body vanishing is the *approach* --
+    # the two visibly converge -- not a size change on the survivor.
+    "shape_continuity":    ("immutability",),
     "shape_anisotropy":    ("deformation", "shadow_shape"),
 }
 

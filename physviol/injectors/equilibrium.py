@@ -20,9 +20,11 @@ from .base import Injector, InterventionPlan, register
 class Support(Injector):
     """A body rises off its support and hangs there.
 
-    Frozen rather than drifting, because the violation is about *equilibrium*:
-    a body at rest with nothing under it. Letting it drift would add a
-    kinematics anomaly on top and blur which law the clip is evidence for.
+    Two shapes, chosen by what the body was doing. One that was at rest hovers
+    where it stood. One that was sliding keeps sliding, along exactly the path
+    it would have taken, lifted clear of the surface -- freezing that one would
+    add a Newton-1 violation on top, and "the box stopped" is a different claim
+    from "the box is not touching the ramp".
 
     The clearance is measured against whatever is directly beneath the body --
     including another moving body. Measuring against the floor instead would
@@ -50,15 +52,21 @@ class Support(Injector):
         clearance_r = self.CLEARANCE_RADII[severity_bin]
         radius = float(actor.bounding_radius)
         _, top = _geom.support_under_any(spec, actor, traj, 0)
+        bi = traj.index_of(int(actor.segmentation_id))
+        speed = float(np.linalg.norm(traj.lin_vel[t0, bi]))
+        # Decided by the body's state, not the scenario's name: a resting body
+        # hovers where it is, a moving one keeps moving with nothing under it.
+        mode = "hover_still" if speed < 0.3 else "hover_moving"
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],
             causal_body_ids=[int(actor.segmentation_id)],
-            params={"type": "hover", "clearance_radii": clearance_r},
+            params={"type": "hover", "clearance_radii": clearance_r,
+                    "mode": mode},
             magnitude=float(clearance_r * radius),
             magnitude_unit="m_support_clearance", severity_bin=severity_bin,
             notes={"radius": radius, "surface_top": float(top),
-                   "clearance_radii": clearance_r})
+                   "clearance_radii": clearance_r, "mode": mode})
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
@@ -68,23 +76,31 @@ class Support(Injector):
         top = float(plan.notes["surface_top"])
         radius = float(plan.notes["radius"])
         lift = float(plan.notes["clearance_radii"]) * radius
-
-        # Eased up over a few frames, not snapped. A body that jumps three
-        # radii between two frames is a *teleport*, so snapping it made every
-        # `support` clip trip the continuity detector as well -- two violations
-        # depicted, one annotated. Rising smoothly and then holding is also what
-        # hovering actually looks like.
         n = traj.num_frames - t0
+
+        # Eased up over a few frames, not snapped. A body that jumps three radii
+        # between two frames is a *teleport*, so snapping it made every
+        # `support` clip trip the continuity detector as well.
         ramp = max(2, min(self.RISE_FRAMES, n))
         u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
         ease = u * u * (3.0 - 2.0 * u)
-
         start = traj.pos[t0 - 1, bi].astype(np.float64)
-        target_z = top + radius + lift
-        held = np.tile(start, (n, 1))
-        held[:, 2] = start[2] + (target_z - start[2]) * ease
+
+        if plan.notes["mode"] == "hover_still":
+            # It was at rest: it stays where it was, only higher.
+            held = np.tile(start, (n, 1))
+            held[:, 2] = start[2] + (top + radius + lift - start[2]) * ease
+        else:
+            # It was moving: it keeps travelling exactly the path it would have
+            # taken, lifted clear of the surface. Freezing a sliding body would
+            # be a *second* violation -- Newton 1 -- on top of this one, and it
+            # is the version the eye reads as "that box is not touching the
+            # ramp" rather than "that box stopped".
+            held = traj.pos[t0:, bi, :].astype(np.float64).copy()
+            held[:, 2] = held[:, 2] + lift * ease
+
         out.pos[t0:, bi, :] = held.astype(np.float32)
-        out.quat[t0:, bi, :] = traj.quat[t0 - 1, bi][None, :]
+        out.quat[t0:, bi, :] = traj.quat[t0:, bi, :]
         out.ang_vel[t0:, bi, :] = 0.0
         self._sync_velocity(traj, out, bi, t0)
 

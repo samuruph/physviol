@@ -165,6 +165,9 @@ class Solidity(Injector):
     # ------------------------------------------------------------------ #
     def plan(self, spec, traj: Trajectory, rng: np.random.RandomState,
              severity_bin: str) -> Optional[InterventionPlan]:
+        group = self._group(spec)
+        if len(group) > 1:
+            return self._plan_group(spec, traj, group, severity_bin)
         choices = candidates_for(spec, self.family) or [self._primary(spec)]
         actor = event = None
         for body in choices:
@@ -230,6 +233,74 @@ class Solidity(Injector):
             notes=notes,
         )
 
+    def _plan_group(self, spec, traj, bodies, severity_bin):
+        """Every body in the group sinks through whatever holds it up, together.
+
+        For a scene made of many interchangeable bodies, one grain dropping
+        through the floor is a few pixels nobody will find. A whole pour going
+        through at once is unmistakable, and it is also the more honest staging
+        of "this surface stopped being solid" -- a floor does not lose its
+        solidity for one grain.
+        """
+        T = traj.num_frames
+        t0 = _geom.default_event_frame(spec, T)
+        if t0 is None:
+            return None
+        depth_r = self.DEPTH_BY_BIN[severity_bin]
+        n_win = self._window_len(self.FRAMES_BY_BIN[severity_bin], t0, T)
+        t_end = min(T - 1, t0 + n_win - 1)
+        lead = bodies[0]
+        return InterventionPlan(
+            family=self.family, kind="sustained", t_event=t0,
+            windows=[(t0, t_end)],
+            causal_body_ids=[int(b.segmentation_id) for b in bodies],
+            params={"type": "disable_collision_pair", "mode": "sink_group",
+                    "frames_disabled": int(n_win),
+                    "target_depth_radii": depth_r},
+            magnitude=float(depth_r * lead.bounding_radius),
+            magnitude_unit="m_penetration_depth", severity_bin=severity_bin,
+            notes={"radius": float(lead.bounding_radius),
+                   "surface_top": _geom.surface_top(spec, lead),
+                   "t_contact": int(t0), "group": True,
+                   "passes_through": bool(depth_r >= 1.0)})
+
+    def _sink_group(self, spec, traj, plan):
+        """Ease every target down through its own support and let it keep going."""
+        out = self._clone(traj)
+        t0, t1 = plan.windows[0]
+        n_win = t1 - t0 + 1
+        depth_r = float(plan.params["target_depth_radii"])
+        frac = np.linspace(1.0 / n_win, 1.0, n_win) ** 1.6
+        for bid in plan.causal_body_ids:
+            body = next(b for b in spec.bodies
+                        if int(b.segmentation_id) == int(bid))
+            bi = traj.index_of(int(bid))
+            radius = float(traj.radius[bi])
+            top = _geom.surface_top(spec, body)
+            p_prev = traj.pos[t0 - 1, bi].astype(np.float64)
+            v_prev = traj.lin_vel[t0 - 1, bi].astype(np.float64)
+            tt = (np.arange(1, n_win + 1, dtype=np.float64) * traj.dt)[:, None]
+            xy = p_prev[None, :2] + v_prev[None, :2] * tt
+            z = top + radius - depth_r * radius * frac
+            out.pos[t0:t1 + 1, bi, 0:2] = xy.astype(np.float32)
+            out.pos[t0:t1 + 1, bi, 2] = z.astype(np.float32)
+            if t1 + 1 < traj.num_frames:
+                n_rest = traj.num_frames - (t1 + 1)
+                p_end = np.array([xy[-1, 0], xy[-1, 1], z[-1]], np.float64)
+                v_end = np.array([v_prev[0], v_prev[1],
+                                  float((z[-1] - z[-2]) / traj.dt)
+                                  if n_win > 1 else v_prev[2]])
+                pos2, vel2 = self._ballistic(
+                    p_end, v_end, traj.gravity.astype(np.float64),
+                    traj.dt, n_rest)
+                out.pos[t1 + 1:, bi, :] = pos2
+                out.lin_vel[t1 + 1:, bi, :] = vel2
+            self._sync_velocity(traj, out, bi, t0)
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
+
     def _passed_through(self, spec, traj, actor, partner_id, t0, n_win):
         """Both bodies ignore each other for `n_win` frames, then resume.
 
@@ -241,6 +312,12 @@ class Solidity(Injector):
         partner = next(b for b in spec.bodies
                        if int(b.segmentation_id) == int(partner_id))
         t1 = min(traj.num_frames - 1, t0 + n_win - 1)
+        # The whole pair, for both bodies. Excluding only the body being
+        # resumed left the *other* one still an obstacle, so a struck ball that
+        # had stayed put all clip got shoved half a metre sideways the moment
+        # the window closed -- the target of a pass-through moving is precisely
+        # what the family says does not happen.
+        pair = [int(actor.segmentation_id), int(partner_id)]
         for body in (actor, partner):
             if body.static:
                 continue          # a wall does not get out of the way
@@ -263,9 +340,7 @@ class Solidity(Injector):
                 self._rewrite_from(
                     spec, out, out, body, t1 + 1,
                     v0=out.lin_vel[t1, bi].astype(np.float64),
-                    obstacles=_geom.Obstacles(
-                        spec, out,
-                        exclude_ids=[body.segmentation_id, int(partner_id)]))
+                    obstacles=_geom.Obstacles(spec, out, exclude_ids=pair))
         c = out.contacts
         pair = {int(actor.segmentation_id), int(partner_id)}
         if len(c):
@@ -284,6 +359,8 @@ class Solidity(Injector):
                      if int(b.segmentation_id) == actor_id)
         t0, t1 = plan.windows[0]
 
+        if plan.params.get("mode") == "sink_group":
+            return self._sink_group(spec, traj, plan)
         if plan.params.get("mode") == "pass_through":
             out = self._passed_through(spec, traj, actor,
                                        int(plan.notes["partner_id"]), t0,
@@ -439,6 +516,12 @@ class SuperElastic(Injector):
         return best
 
     def _targets(self, spec, actor, partner_id):
+        group = self._group(spec)
+        if len(group) > 1:
+            # A scene of interchangeable bodies bounces as a whole. One grain
+            # in forty coming back higher than it should is not something a
+            # viewer -- or a model -- has any way to notice.
+            return group
         out = [actor]
         partner = next((b for b in spec.bodies
                         if int(b.segmentation_id) == int(partner_id)), None)
@@ -684,8 +767,22 @@ class Newton3Reaction(_CollisionEdit):
         return [int(other_id), int(actor_id)]
 
     def _outcome(self, traj, actor_id, other_id, t0, normal, ratio):
-        """The struck body simply never moves."""
-        return {other_id: self.FREEZE}
+        """The struck body never moves; the striker rebounds off it.
+
+        Leaving the striker on its lawful path is not enough, and the clips
+        showed why. Between equal masses at restitution 0.75 the striker keeps
+        only an eighth of its speed -- it nearly stops -- so with the target
+        frozen the two ended up a hair apart and motionless, which reads as
+        them having merged. Reflecting the striker off what is now effectively
+        an immovable object separates them visibly, and it is also the honest
+        outcome: a body that refuses to move is a body of infinite mass.
+        """
+        ai = traj.index_of(actor_id)
+        v_in = traj.lin_vel[t0 - 1, ai].astype(np.float64)
+        n = np.asarray(normal, np.float64)
+        e = float(np.clip(ratio / (ratio + 1.0), 0.55, 0.95))
+        return {other_id: self.FREEZE,
+                actor_id: v_in - (1.0 + e) * float(np.dot(v_in, n)) * n}
 
 
 class Newton2Mass(_CollisionEdit):

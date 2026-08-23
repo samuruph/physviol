@@ -301,91 +301,125 @@ class Fission(Injector):
 
 
 class Fusion(Injector):
-    """Two bodies merge into one, which then carries both their volumes.
+    """Bodies touch and come out as one: the absorbed shrinks into its
+    neighbour and is gone.
 
     The dual of `fission`, and the other half of what video generators do to
-    object count: two things that touch and come out as one. Needs two actors,
-    so `plan` returns None below that rather than inventing a partner.
+    object count.
 
-    Volume *is* conserved here, unlike at fission's strong bin, because the
-    survivor swelling to hold both is what makes the merge readable -- two balls
-    becoming one ball the same size as each would look like one of them simply
-    vanished, which is `permanence`.
+    **The survivor does not change size.** Swelling it to conserve volume was
+    the first attempt and it read badly: at a distance the two never visibly
+    met, so the clip looked like one body vanishing while an unrelated one grew
+    -- `permanence` and `immutability` in the same frame, which is neither.
+    What makes a merge legible is the *approach*, so that is what this stages:
+    the absorbed body is drawn into its neighbour and shrinks away as it goes.
+    The survivor is untouched, which also keeps the family scoring on
+    `object_count` alone.
+
+    Acts on as many pairs as the scene offers. One merge among forty grains is
+    invisible; a third of a pour collapsing into its neighbours is the point.
     """
 
     family = "fusion"
     persistent = True
-    #: How close the two must come before merging is plausible, in radii.
-    MEET_RADII = {"weak": 3.5, "medium": 2.2, "strong": 1.15}
-    RAMP_FRAMES = 4
+    #: How close two bodies must come to be merge candidates, in contact radii.
+    MEET_RADII = {"weak": 3.5, "medium": 2.4, "strong": 1.6}
+    #: Frames the absorbed body takes to be drawn in and disappear.
+    DRAW_IN_FRAMES = 3
 
     def strong_residual_reference(self, spec) -> float:
         return 0.5                      # two bodies become one
 
-    def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        live = self._all_actors(spec)
-        if len(live) < 2:
-            return None
-        keeper = live[0]
-        ki = traj.index_of(int(keeper.segmentation_id))
+    # ------------------------------------------------------------------ #
+    def _pairs(self, spec, traj, severity_bin):
+        """(keeper, absorbed, frame) for every merge this scene can host.
 
-        # Merge with whichever body comes closest, on the frame it does. A merge
-        # staged between two objects that never meet is a vanish and a swell in
-        # different corners of the frame, not a fusion.
-        best = None
-        for other in live[1:]:
-            oi = traj.index_of(int(other.segmentation_id))
-            gap = np.linalg.norm(
-                traj.pos[:, ki, :].astype(np.float64)
-                - traj.pos[:, oi, :].astype(np.float64), axis=1)
-            reach = float(traj.radius[ki] + traj.radius[oi])
-            near = np.flatnonzero(
-                gap <= reach * self.MEET_RADII[severity_bin])
-            near = near[(near >= 1) & (near < traj.num_frames - 1)]
-            if not near.size:
+        Greedy nearest-neighbour over the actors, each body used once. Pairing
+        by proximity rather than by declaration order is what makes the merge
+        look like a merge: two bodies that never come near each other cannot
+        plausibly become one.
+        """
+        live = [b for b in self._all_actors(spec)]
+        if len(live) < 2:
+            return []
+        want = max(1, len(self._group(spec)) // 2)
+        reach_mult = self.MEET_RADII[severity_bin]
+
+        cand = []
+        for i, a in enumerate(live):
+            ia = traj.index_of(int(a.segmentation_id))
+            for b in live[i + 1:]:
+                ib = traj.index_of(int(b.segmentation_id))
+                gap = np.linalg.norm(
+                    traj.pos[:, ia, :].astype(np.float64)
+                    - traj.pos[:, ib, :].astype(np.float64), axis=1)
+                reach = float(traj.radius[ia] + traj.radius[ib]) * reach_mult
+                near = np.flatnonzero(gap <= reach)
+                near = near[(near >= 1) & (near < traj.num_frames - 2)]
+                if near.size:
+                    cand.append((float(gap[near[0]]), int(near[0]), a, b))
+        cand.sort(key=lambda x: (x[1], x[0]))
+
+        used, pairs = set(), []
+        for _, frame, a, b in cand:
+            ka, kb = int(a.segmentation_id), int(b.segmentation_id)
+            if ka in used or kb in used:
                 continue
-            t = int(near[0])
-            if best is None or t < best[0]:
-                best = (t, other, float(gap[t] / max(reach, 1e-9)))
-        if best is None:
+            used.update((ka, kb))
+            pairs.append((a, b, frame))
+            if len(pairs) >= want:
+                break
+        return pairs
+
+    def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
+        pairs = self._pairs(spec, traj, severity_bin)
+        if not pairs:
             return None
-        t0, absorbed, meet = best
+        t0 = min(f for _, _, f in pairs)
+        keepers = [int(a.segmentation_id) for a, _, _ in pairs]
+        absorbed = [int(b.segmentation_id) for _, b, _ in pairs]
 
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, traj.num_frames - 1)],
-            causal_body_ids=[int(keeper.segmentation_id),
-                             int(absorbed.segmentation_id)],
-            params={"type": "merge_bodies", "meet_radii": meet,
-                    "scale_factor": 2.0 ** (1.0 / 3.0)},
-            magnitude=0.5, magnitude_unit="count_ratio",
-            severity_bin=severity_bin,
-            notes={"radius": float(keeper.bounding_radius),
-                   "surface_top": _geom.surface_top(spec, keeper),
-                   "keeper_id": int(keeper.segmentation_id),
-                   "absorbed_id": int(absorbed.segmentation_id),
-                   "sibling_ids": [int(keeper.segmentation_id),
-                                   int(absorbed.segmentation_id)],
-                   "ramp_frames": self.RAMP_FRAMES})
+            causal_body_ids=keepers + absorbed,
+            params={"type": "merge_bodies", "pairs": len(pairs),
+                    "meet_radii": self.MEET_RADII[severity_bin]},
+            magnitude=float(len(pairs)) / max(len(keepers) + len(absorbed), 1),
+            magnitude_unit="count_ratio", severity_bin=severity_bin,
+            notes={"radius": float(pairs[0][0].bounding_radius),
+                   "surface_top": _geom.surface_top(spec, pairs[0][0]),
+                   "keepers": keepers, "absorbed": absorbed,
+                   "merge_frames": [int(f) for _, _, f in pairs],
+                   "sibling_ids": keepers + absorbed,
+                   "draw_in": self.DRAW_IN_FRAMES})
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
-        ki = traj.index_of(int(plan.notes["keeper_id"]))
-        ai = traj.index_of(int(plan.notes["absorbed_id"]))
-        t0 = plan.t_event
-        k = float(plan.params["scale_factor"])
-        ramp = int(plan.notes["ramp_frames"])
-        n = traj.num_frames - t0
-
-        out.present[t0:, ai] = False
-        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
-        factor = 1.0 + (k - 1.0) * (u * u * (3.0 - 2.0 * u))
-        out.scale_mul[t0:, ki, :] = factor[:, None].astype(np.float32)
-
-        top = float(plan.notes["surface_top"])
-        r_t = float(traj.radius[ki]) * factor
-        out.pos[t0:, ki, 2] = np.maximum(out.pos[t0:, ki, 2], top + r_t)
-        self._sync_velocity(traj, out, ki, t0)
+        draw = int(plan.notes["draw_in"])
+        T = traj.num_frames
+        for keep_id, gone_id, frame in zip(plan.notes["keepers"],
+                                           plan.notes["absorbed"],
+                                           plan.notes["merge_frames"]):
+            ki = traj.index_of(int(keep_id))
+            gi = traj.index_of(int(gone_id))
+            t = int(frame)
+            n = min(draw, T - t)
+            if n <= 0:
+                continue
+            u = (np.arange(n, dtype=np.float64) + 1.0) / n
+            ease = u * u * (3.0 - 2.0 * u)
+            # Drawn in along the line of centres, shrinking as it goes, so the
+            # two are unmistakably overlapping before either one is gone.
+            src = traj.pos[t:t + n, gi, :].astype(np.float64)
+            dst = out.pos[t:t + n, ki, :].astype(np.float64)
+            out.pos[t:t + n, gi, :] = (
+                src + (dst - src) * ease[:, None]).astype(np.float32)
+            out.scale_mul[t:t + n, gi, :] = np.maximum(
+                1.0 - ease, 0.05)[:, None].astype(np.float32)
+            self._sync_velocity(traj, out, gi, t)
+            if t + n < T:
+                out.present[t + n:, gi] = False
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
