@@ -73,6 +73,7 @@ Optical Consistency, Material Response.
 |---|---|---|---|
 | Permanence | Permanence | Pendulum (bob disappears), Pyramid (holes) / Conservation of Mass | **covered** |
 | Immutability | Immutability | Ball Drop (colour, rescale), Block Slide (dimensions) / Geometric Invariance | **covered** |
+| Fusion (two become one) | Permanence (the disappearance half) | Cloth/fluid coalescence — both continuum | **covered for rigid bodies** |
 | Fission (one body becomes two) | Permanence (the appearance half) | Cloth Waving "fragments shatter", Faucet "non-coalescing fracture" — both continuum | **covered for rigid bodies**, where neither benchmark stages it |
 | Continuity | Spatio-Temporal Continuity | teleport variants across nearly every scenario / Spatial Continuity | **covered** |
 | Solidity | Solidity | Ball Collision & Ball Drop penetration / Spatial Continuity | **covered** |
@@ -86,7 +87,9 @@ Optical Consistency, Material Response.
 | **Angular momentum** | — | Pendulum (frequency variation) is adjacent | **new** as a conservation-law family |
 | **Support / static equilibrium** | — | none | **new** — severity = clearance above the surface actually beneath the body |
 | **Friction inversion** | — | Block Slide is the setting, not the violation | **new** — severity = effective µ vs declared µ |
-| **Shadow / optical** | — | Moving Shadow, Orbit Shadow / Optical Consistency | covered as a category, but **ours is the only one with a mask that is not on the object** |
+| **Shadow / optical** (position) | — | Moving Shadow, Orbit Shadow / Optical Consistency | covered as a category, but **ours is the only one with a mask that is not on the object** |
+| **Shadow shape** | — | Moving Shadow "shape mismatches the object" | covered, and **split from shadow position on purpose** — a benchmark asking whether a model tracks where a shadow goes should not be scored on clips where it is also the wrong shape |
+| **Deformation** | — | nearest is Cloth "impossible folds", which is continuum | **new** for rigid bodies — the path stays lawful and only the proportions change |
 | **Global gravity scale** | — | none | **new** — internally consistent, mask is the whole frame, no localized culprit |
 | Surprising-but-valid control | — | none | **new** — separates "weird" from "illegal" |
 | Artifact / shortcut probe | debug split | — | adopted from IntPhys 2 |

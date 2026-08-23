@@ -53,7 +53,13 @@ class ShadowTrack(Scenario):
 
         psi = math.atan2(float(light_dir[1]), float(light_dir[0]))
         shade = BodySpec(
-            name="shadow", kind="cube", position=(0.0, 0.0, 0.006),
+            # A flattened SPHERE, not a flattened cube. A round caster does not
+            # throw a square shadow, and shipping one meant every `shadow` clip
+            # carried a second, unlabelled inconsistency for a viewer to notice
+            # first. Whether the shadow's shape matches its caster is a
+            # violation in its own right -- see the `shadow_shape` family --
+            # which only works if the lawful clip gets it right.
+            name="shadow", kind="sphere", position=(0.0, 0.0, 0.006),
             # Stretched along the light's ground-plane bearing, which is the
             # direction a low sun smears a round object's shadow.
             scale=(r / max(abs(float(light_dir[2])), 0.35), r, 0.006),
@@ -76,7 +82,8 @@ class ShadowTrack(Scenario):
             notes={"radius": r, "height": height, "speed": speed,
                    "light_dir": [float(x) for x in light_dir],
                    "caster_id": self.SEG_ACTOR, "shadow_id": self.SEG_SHADOW,
-                   "surface_top": 0.0})
+                   "surface_top": 0.0,
+                   "family_targets": {"shadow_shape": [self.SEG_SHADOW]}})
 
     # ------------------------------------------------------------------ #
     def script(self, spec, traj) -> None:

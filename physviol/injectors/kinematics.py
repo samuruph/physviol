@@ -126,8 +126,15 @@ class _GravityScale(Injector):
         alpha = self._pulse(n_win, float(alpha_peak))
         g_seq = np.concatenate([alpha[:, None] * g[None, :],
                                 np.tile(g[None, :], (max(n_after, 0), 1))])
-        for body in targets:
-            self._rewrite_from(spec, traj, out, body, t0, g_per_frame=g_seq)
+        # Stepped together. Under `global_gravity` every moving body in the
+        # scene is being re-integrated at once, so doing them one at a time
+        # against each other's *lawful* paths made each dodge where its
+        # neighbours would have been rather than where they now are -- which is
+        # how a pyramid's spheres ended up passing through the cube that struck
+        # them, a solidity failure inside a gravity clip.
+        self._rewrite_group(spec, traj, out, targets, t0,
+                            g_by_body={int(b.segmentation_id): g_seq
+                                       for b in targets})
         out.meta = dict(traj.meta)
         out.meta["alpha_profile"] = [float(x) for x in alpha]
         return out
@@ -202,21 +209,25 @@ class AntiGravity(_GravityScale):
         and stable across severity bins, since it depends only on the valid
         rollout. The instance rng breaks ties, so a scene where every actor is
         equally airborne still varies which one is bent.
+
+        How *many* comes from `_group`, so a scene made of many interchangeable
+        bodies can ask for a share of them. One floating grain out of forty is
+        a few pixels nobody will find; a dozen rising together is the point.
         """
         live = self._all_actors(spec)
         if not live:
             return []
+        want = len(self._group(spec))
         jitter = self._instance_rng(spec)
-        best, best_score = None, None
+        scored = []
         for body in live:
             bi = traj.index_of(int(body.segmentation_id))
             run = _geom.longest_airborne_run(
                 traj, bi, _geom.surface_top(spec, body))
             span = 0 if run is None else (run[1] - run[0] + 1)
-            score = (span, float(jitter.rand()))
-            if best_score is None or score > best_score:
-                best, best_score = body, score
-        return [best]
+            scored.append(((span, float(jitter.rand())), body))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [b for _, b in scored[:max(1, want)]]
 
 
 class GlobalGravity(_GravityScale):

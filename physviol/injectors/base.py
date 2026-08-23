@@ -180,6 +180,36 @@ class Injector:
         live = [b for b in _geom.actors(spec) if not b.dormant]
         return live[0] if live else None
 
+    def _group(self, spec):
+        """The bodies this family should act on: one, or several.
+
+        A violation applied to one grain of forty is perfectly annotated and
+        impossible to see -- the mask is a handful of pixels somewhere in a
+        pile. Scenes that are made of many interchangeable bodies say so, and
+        families that can act on a set do.
+
+        Two ways a scenario can ask. `family_targets[family]` names the bodies
+        outright, which is how `granular_pour` steers single-body families onto
+        the grains that end up on top of the pile rather than buried in it.
+        `group_fraction` asks for a share of the actors, chosen per scene so the
+        three severity bins act on the same bodies.
+        """
+        live = self._all_actors(spec)
+        if not live:
+            return []
+        named = (spec.notes.get("family_targets") or {}).get(self.family)
+        if named:
+            by_id = {int(b.segmentation_id): b for b in spec.bodies}
+            chosen = [by_id[int(i)] for i in named if int(i) in by_id]
+            if chosen:
+                return chosen
+        frac = float(spec.notes.get("group_fraction") or 0.0)
+        if frac <= 0.0 or len(live) < 4:
+            return live[:1]
+        k = int(np.clip(round(frac * len(live)), 2, len(live)))
+        picks = self._instance_rng(spec).choice(len(live), size=k, replace=False)
+        return [live[i] for i in sorted(int(x) for x in picks)]
+
     @staticmethod
     def _all_actors(spec):
         """Every actor, for the families that act on a whole medium rather than
@@ -218,7 +248,8 @@ class Injector:
     @staticmethod
     def _integrate_profile(p0: np.ndarray, v0: np.ndarray, g_per_frame: np.ndarray,
                            dt: float, floor_z, radius: float,
-                           restitution: float, substeps: int = 24):
+                           restitution: float, substeps: int = 24,
+                           obstacles=None, t_start: float = 0.0):
         """Integrate under a *time-varying* gravity, respecting a ground plane.
 
         Two things this buys over plain ballistics:
@@ -240,7 +271,7 @@ class Injector:
         vel = np.zeros((n, 3), np.float64)
         for f in range(n):
             g = np.asarray(g_per_frame[f], np.float64)
-            for _ in range(substeps):
+            for k in range(substeps):
                 v = v + g * h
                 p = p + v * h
                 fz = ground(p[0], p[1])
@@ -249,6 +280,10 @@ class Injector:
                     v[2] = -v[2] * restitution
                     if abs(v[2]) < 0.05:
                         v[2] = 0.0
+                if obstacles is not None:
+                    p, v = obstacles.resolve(
+                        p, v, radius, restitution,
+                        t_start + f + (k + 1) / float(substeps))
             pos[f] = p
             vel[f] = v
         return pos.astype(np.float32), vel.astype(np.float32)
@@ -340,7 +375,7 @@ class Injector:
     # ------------------------------------------------------------------ #
     def _rewrite_from(self, spec, traj: Trajectory, out: Trajectory, body,
                       t0: int, v0=None, p0=None, g_per_frame=None,
-                      restitution=None) -> None:
+                      restitution=None, obstacles=None, solid=True) -> None:
         """Re-integrate one body from frame `t0`, on the surface it belongs to.
 
         The workhorse behind most families: an intervention is usually "change
@@ -362,9 +397,113 @@ class Injector:
         pos, vel = self._integrate_profile(
             start_p, start_v, np.asarray(g_per_frame, np.float64),
             traj.dt, _geom.floor_fn(spec, body), float(traj.radius[bi]),
-            float(body.restitution if restitution is None else restitution))
+            float(body.restitution if restitution is None else restitution),
+            obstacles=self._obstacles(spec, traj, body, obstacles, solid),
+            t_start=float(t0 - 1))
         out.pos[t0:, bi, :] = pos
         out.lin_vel[t0:, bi, :] = vel
+
+    @staticmethod
+    def _obstacles(spec, traj, body, given, solid):
+        """The scene as seen by a body being re-integrated.
+
+        `solid=False` is for the one family that means to pass through things --
+        `solidity` -- where an obstacle set would undo the entire intervention.
+        Everywhere else the default is on, because a family that bends gravity
+        should not also be a family that walks through walls.
+        """
+        if not solid:
+            return None
+        if given is not None:
+            return given
+        return _geom.Obstacles(spec, traj, exclude_ids=[body.segmentation_id])
+
+    @staticmethod
+    def _sync_velocity(traj: Trajectory, out: Trajectory, bi: int,
+                       t0: int) -> None:
+        """Make the recorded velocity agree with the positions actually written.
+
+        Anything that edits `pos` without doing this leaves the two telling
+        different stories, and `position_continuity` believes the velocity: it
+        asks whether a step is larger than the speed in play could produce, so a
+        body nudged upward at a stale velocity reads as having teleported.
+        That is how the vertical clamp on `immutability` -- there only to stop a
+        growing body sinking into the floor -- made half the appearance families
+        trip the teleport detector.
+        """
+        dt = traj.dt
+        pos = out.pos[t0 - 1:, bi, :].astype(np.float64)
+        if pos.shape[0] < 2:
+            return
+        out.lin_vel[t0:, bi, :] = ((pos[1:] - pos[:-1]) / dt).astype(np.float32)
+
+    def _rewrite_group(self, spec, traj: Trajectory, out: Trajectory, bodies,
+                       t0: int, g_by_body=None, v0_by_body=None,
+                       substeps: int = 24) -> None:
+        """Re-integrate several bodies *together*, so they collide with each other.
+
+        Stepping them one at a time and treating the others' lawful paths as
+        obstacles is right for the bodies an injector leaves alone, and wrong
+        for the ones it is moving: under `global_gravity` every sphere in a
+        pyramid is being re-integrated at once, so each would dodge where its
+        neighbours *would have been* rather than where they now are, and they
+        end up sharing space.
+        """
+        n = traj.num_frames - t0
+        if n <= 0 or not bodies:
+            return
+        ids = [int(b.segmentation_id) for b in bodies]
+        obstacles = _geom.Obstacles(spec, traj, exclude_ids=ids)
+        idx = [traj.index_of(i) for i in ids]
+        rad = [float(traj.radius[j]) for j in idx]
+        rest = [float(b.restitution) for b in bodies]
+        ground = [_geom.floor_fn(spec, b) for b in bodies]
+        g_def = np.tile(traj.gravity.astype(np.float64)[None, :], (n, 1))
+        g_seq = [np.asarray((g_by_body or {}).get(i, g_def), np.float64)
+                 for i in ids]
+        p = [traj.pos[t0 - 1, j].astype(np.float64).copy() for j in idx]
+        v = [np.asarray((v0_by_body or {}).get(i, traj.lin_vel[t0 - 1, j]),
+                        np.float64).copy() for i, j in zip(ids, idx)]
+
+        h = traj.dt / float(substeps)
+        pos = np.zeros((len(idx), n, 3), np.float64)
+        vel = np.zeros((len(idx), n, 3), np.float64)
+        for f in range(n):
+            for k in range(substeps):
+                t = float(t0 - 1) + f + (k + 1) / float(substeps)
+                for a in range(len(idx)):
+                    v[a] = v[a] + g_seq[a][f] * h
+                    p[a] = p[a] + v[a] * h
+                    fz = ground[a](p[a][0], p[a][1])
+                    if p[a][2] - rad[a] <= fz and v[a][2] < 0.0:
+                        p[a][2] = fz + rad[a]
+                        v[a][2] = -v[a][2] * rest[a]
+                        if abs(v[a][2]) < 0.05:
+                            v[a][2] = 0.0
+                    p[a], v[a] = obstacles.resolve(p[a], v[a], rad[a], rest[a], t)
+                for a in range(len(idx)):
+                    for b in range(a + 1, len(idx)):
+                        d = p[b] - p[a]
+                        dist = float(np.linalg.norm(d))
+                        reach = rad[a] + rad[b]
+                        if dist >= reach or dist < 1e-9:
+                            continue
+                        nrm = d / dist
+                        push = 0.5 * (reach - dist)
+                        p[a] -= nrm * push
+                        p[b] += nrm * push
+                        rel = float(np.dot(v[b] - v[a], nrm))
+                        if rel < 0.0:
+                            e = 0.5 * (rest[a] + rest[b])
+                            imp = -(1.0 + e) * rel * 0.5
+                            v[a] -= nrm * imp
+                            v[b] += nrm * imp
+            for a in range(len(idx)):
+                pos[a, f] = p[a]
+                vel[a, f] = v[a]
+        for a, j in enumerate(idx):
+            out.pos[t0:, j, :] = pos[a].astype(np.float32)
+            out.lin_vel[t0:, j, :] = vel[a].astype(np.float32)
 
     @staticmethod
     def _pulse(n: int, peak: float, base: float = 1.0,

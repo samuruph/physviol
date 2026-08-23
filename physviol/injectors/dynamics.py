@@ -32,9 +32,10 @@ class PhantomImpulse(Injector):
         return float(self.DV_BY_BIN["strong"] / g_dt)
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
-        if actor is None:
+        targets = self._group(spec)
+        if not targets:
             return None
+        actor = targets[0]
         T = traj.num_frames
         free = _geom.contact_free_run(traj, int(actor.segmentation_id), min_len=2)
         if free is not None:
@@ -60,7 +61,7 @@ class PhantomImpulse(Injector):
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0,
             windows=[(t0, min(T - 1, t0 + n_win - 1))],
-            causal_body_ids=[int(actor.segmentation_id)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "impulse", "delta_v": push.tolist(),
                     "frame_fit_scale": scale},
             magnitude=float(dv / max(g_dt, 1e-9)),
@@ -78,9 +79,18 @@ class PhantomImpulse(Injector):
         return out
 
     def apply(self, spec, traj, plan) -> Trajectory:
-        actor = self._primary(spec)
-        out = self._shoved(spec, traj, actor, plan.t_event,
-                           np.asarray(plan.params["delta_v"], np.float64))
+        push = np.asarray(plan.params["delta_v"], np.float64)
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        bodies = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
+        out = self._clone(traj)
+        t0 = plan.t_event
+        # Shoved together, so several bodies given the same uncaused push do not
+        # each dodge where the others *would* have been and end up overlapping.
+        self._rewrite_group(
+            spec, traj, out, bodies, t0,
+            v0_by_body={int(b.segmentation_id):
+                        traj.lin_vel[t0 - 1, traj.index_of(int(b.segmentation_id))]
+                        .astype(np.float64) + push for b in bodies})
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"

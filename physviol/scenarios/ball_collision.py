@@ -1,4 +1,4 @@
-"""`ball_collision` -- two spheres roll toward each other and collide.
+"""`ball_collision` -- a rolling sphere strikes an identical one at rest.
 
 The only scenario in v0 with **two bodies that both ought to respond**, which is
 what `newton3_reaction` and `newton2_mass` need: a violation where only one body
@@ -33,36 +33,46 @@ class BallCollision(Scenario):
         radius = float(rng.uniform(0.28, 0.36))
         r_a = r_b = radius
         hue = float(rng.uniform(0, 1))
-        speed = float(rng.uniform(2.0, 2.6))
+        speed = float(rng.uniform(2.2, 2.8))
         flight = tier.num_frames / float(tier.fps)
-        # Meet at ~45% of the clip: late enough that the lawful approach is
-        # established, early enough that the aftermath is on screen.
-        half_gap = speed * 0.45 * flight
 
-        def roller(name, sign, radius, seg):
-            vx = -sign * speed
-            return BodySpec(
-                name=name, kind="sphere",
-                position=(sign * (half_gap + radius), 0.0, radius),
-                scale=(radius,) * 3, velocity=(vx, 0.0, 0.0),
-                # Rolling without slipping, so the approach looks like rolling
-                # rather than sliding: omega_y = vx / r.
-                angular_velocity=(0.0, vx / radius, 0.0),
-                mass=1.0, friction=0.05, restitution=0.75,
-                color=C.hue_rgb(hue),
-                segmentation_id=seg, role="actor")
+        # A striker into a body at REST, not two balls closing head-on. Both
+        # Newton families hinge on how the struck ball responds, and a target
+        # that is already moving makes that unreadable twice over: "it did not
+        # react" is indistinguishable from "it stopped dead", which is a
+        # different violation, and a target that keeps coming at the striker
+        # has to end up sharing space with it. Against a resting target,
+        # `newton3` is simply "it never moved" -- no overlap, nothing to
+        # misread.
+        target_x = float(rng.uniform(0.15, 0.45))
+        gap = speed * 0.45 * flight
+        striker_x = target_x - r_a - r_b - gap
+
+        striker = BodySpec(
+            name="ball_a", kind="sphere",
+            position=(striker_x, 0.0, r_a), scale=(r_a,) * 3,
+            velocity=(speed, 0.0, 0.0),
+            # Rolling without slipping, so the approach looks like rolling
+            # rather than sliding: omega_y = vx / r.
+            angular_velocity=(0.0, speed / r_a, 0.0),
+            mass=1.0, friction=0.05, restitution=0.75,
+            color=C.hue_rgb(hue), segmentation_id=self.SEG_A, role="actor")
+        target = BodySpec(
+            name="ball_b", kind="sphere",
+            position=(target_x, 0.0, r_b), scale=(r_b,) * 3,
+            mass=1.0, friction=0.05, restitution=0.75,
+            color=C.hue_rgb(hue), segmentation_id=self.SEG_B, role="actor")
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR),
-                    roller("ball_a", -1.0, r_a, self.SEG_A),
-                    roller("ball_b", +1.0, r_b, self.SEG_B)],
+            bodies=[C.ground(cx, self.SEG_FLOOR), striker, target],
             lights=C.lights(cx, look_at=(0, 0, 0.4)),
-            camera_position=(0.6, -6.4, 1.8), camera_look_at=(0.0, 0.0, 0.4),
+            camera_position=(0.3, -6.0, 1.7), camera_look_at=(0.1, 0.0, 0.35),
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,
-                   "identical_actors": True})
+                   "identical_actors": True, "target_at_rest": True,
+                   "striker_id": self.SEG_A, "target_id": self.SEG_B})
 
 
 register(BallCollision())

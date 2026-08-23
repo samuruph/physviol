@@ -246,12 +246,26 @@ class Solidity(Injector):
                 continue          # a wall does not get out of the way
             bi = traj.index_of(int(body.segmentation_id))
             v_pre = traj.lin_vel[t0 - 1, bi].astype(np.float64)
-            self._rewrite_from(spec, traj, out, body, t0, v0=v_pre)
+            # `solid=False` for the window: this is the one family whose whole
+            # point is going through things, so handing it the scene's obstacle
+            # set would politely undo the intervention. Contact resumes
+            # afterwards -- with obstacles back on -- so the body is lawful
+            # again rather than permanently ghostly.
+            self._rewrite_from(spec, traj, out, body, t0, v0=v_pre, solid=False)
             if t1 + 1 < traj.num_frames:
-                # Contact resumes: carry on from wherever the pass-through left
-                # it, rather than snapping back onto the lawful path.
-                self._rewrite_from(spec, out, out, body, t1 + 1,
-                                   v0=out.lin_vel[t1, bi].astype(np.float64))
+                # Carry on from wherever the pass-through left it, rather than
+                # snapping back onto the lawful path -- and with the body it
+                # just went through left out of the obstacle set. Restoring that
+                # pair while the two are still overlapping ejects one of them in
+                # a single substep, which is a position jump large enough to
+                # register as a teleport: the clip would then depict a solidity
+                # failure *and* a continuity failure while claiming one.
+                self._rewrite_from(
+                    spec, out, out, body, t1 + 1,
+                    v0=out.lin_vel[t1, bi].astype(np.float64),
+                    obstacles=_geom.Obstacles(
+                        spec, out,
+                        exclude_ids=[body.segmentation_id, int(partner_id)]))
         c = out.contacts
         pair = {int(actor.segmentation_id), int(partner_id)}
         if len(c):
@@ -609,12 +623,25 @@ class _CollisionEdit(Injector):
         return out
 
     # ------------------------------------------------------------------ #
+    FREEZE = "freeze"
+
     def _edited(self, spec, traj, actor_id, other_id, t0, normal, ratio):
         out = self._clone(traj)
         for body_id, v_new in self._outcome(traj, actor_id, other_id, t0,
                                             normal, ratio).items():
             body = next(b for b in spec.bodies
                         if int(b.segmentation_id) == int(body_id))
+            bi = traj.index_of(int(body_id))
+            if isinstance(v_new, str) and v_new == self.FREEZE:
+                # Held exactly where it was, not re-integrated. Integrating it
+                # would hand it straight back to the collision resolver, which
+                # would dutifully push it out of the striker's way -- restoring
+                # the very reaction the family exists to remove.
+                out.pos[t0:, bi, :] = traj.pos[t0 - 1, bi][None, :]
+                out.quat[t0:, bi, :] = traj.quat[t0 - 1, bi][None, :]
+                out.lin_vel[t0:, bi, :] = 0.0
+                out.ang_vel[t0:, bi, :] = 0.0
+                continue
             self._rewrite_from(spec, traj, out, body, t0, v0=v_new)
         return out
 
@@ -628,13 +655,16 @@ class _CollisionEdit(Injector):
 class Newton3Reaction(_CollisionEdit):
     """In a collision, only one body responds.
 
-    The struck body carries straight on as though nothing hit it, while its
-    partner rebounds normally -- so the pair's total momentum changes with no
-    external force. **Momentum is not conserved, and that is the whole claim.**
+    The striker rebounds exactly as it lawfully would, and the ball it hits
+    never moves. **Momentum is not conserved, and that is the whole claim.**
 
-    Implemented as a very large but finite suppression rather than a total one,
-    so the victim still shows a sliver of response; a perfectly rigid
-    non-response reads as a rendering glitch rather than as physics going wrong.
+    Staged against a target at rest, which is what keeps the clip about one
+    thing. Letting the struck body "carry on as though nothing hit it" sounds
+    more faithful and is worse in practice: a target that was already moving
+    keeps coming at the striker and the two end up sharing space, so the clip
+    depicts a solidity failure as well, and the striker's lawful rebound reads
+    as it having moved before being touched. A target that was at rest and
+    stays at rest has neither problem.
     """
 
     family = "newton3_reaction"
@@ -652,11 +682,8 @@ class Newton3Reaction(_CollisionEdit):
         return [int(other_id), int(actor_id)]
 
     def _outcome(self, traj, actor_id, other_id, t0, normal, ratio):
-        """The victim keeps almost all of its incoming velocity."""
-        bi = traj.index_of(other_id)
-        v_pre = traj.lin_vel[t0 - 1, bi].astype(np.float64)
-        v_post = traj.lin_vel[t0, bi].astype(np.float64)
-        return {other_id: v_pre + (v_post - v_pre) / ratio}
+        """The struck body simply never moves."""
+        return {other_id: self.FREEZE}
 
 
 class Newton2Mass(_CollisionEdit):

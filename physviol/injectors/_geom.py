@@ -415,3 +415,105 @@ def first_impact(traj, body_id: int, exclude=(), min_speed: float = 0.3,
             continue
         return f, other, n
     return None
+
+
+# ------------------------------------------------------------- obstacles --
+class Obstacles:
+    """Everything a re-integrated body must not pass through.
+
+    The integrators originally knew about one thing: the ground. That was fine
+    while every family bent a single body in open air, and quietly wrong as
+    soon as scenes had furniture in them. A `fission` half pushed sideways went
+    straight through the occluding screen; `global_gravity` on a pyramid sent
+    spheres through the cube that struck them; two balls under `newton3` ended
+    up sharing the same space. Each of those clips carried one violation label
+    and depicted two, which makes the families useless for measuring anything
+    independently.
+
+    Two kinds of obstacle, both approximate on purpose:
+
+    * **static boxes**, axis-aligned. Rotated ones -- ramps -- are skipped
+      rather than approximated, because an AABB around a tilted slab is much
+      bigger than the slab and would push bodies out of mid-air. A body sliding
+      on a ramp is held up by `floor_fn` instead.
+    * **other dynamic bodies**, as spheres of their bounding radius, following
+      their *valid* trajectory. Exact for the bodies an injector leaves alone,
+      which is the case that matters; bodies being re-integrated together are
+      handled by stepping them jointly instead.
+    """
+
+    def __init__(self, spec, traj, exclude_ids=()):
+        exclude = {int(i) for i in exclude_ids}
+        self.boxes = []
+        self.spheres = []
+        for body in spec.bodies:
+            bid = int(body.segmentation_id)
+            if bid in exclude or body.dormant:
+                continue
+            if body.static:
+                if body.kind != "cube":
+                    continue
+                q = np.asarray(body.quaternion, np.float64)
+                if abs(float(q[0])) < 0.999:
+                    continue                      # rotated: see the docstring
+                half = np.asarray(body.scale, np.float64)
+                if half[2] <= min(half[0], half[1]):
+                    continue                      # lies flat: it is a floor
+                self.boxes.append((np.asarray(body.position, np.float64), half))
+            else:
+                try:
+                    j = traj.index_of(bid)
+                except KeyError:
+                    continue
+                self.spheres.append((j, float(traj.radius[j])))
+        self._pos = traj.pos
+        self._present = traj.present
+        self._n = int(traj.num_frames)
+
+    def resolve(self, p, v, radius, restitution, t):
+        """Push `p` out of anything it is inside, and reflect `v`. In place-ish.
+
+        `t` is a fractional frame index, so a moving obstacle is sampled where
+        it actually is between two rendered frames rather than at the nearest
+        one.
+        """
+        for centre, half in self.boxes:
+            d = p - centre
+            clamped = np.clip(d, -half, half)
+            delta = d - clamped
+            dist = float(np.linalg.norm(delta))
+            if dist >= radius:
+                continue
+            if dist > 1e-9:
+                n = delta / dist
+                p = centre + clamped + n * radius
+            else:
+                slack = half - np.abs(d)
+                axis = int(np.argmin(slack))
+                n = np.zeros(3)
+                n[axis] = 1.0 if d[axis] >= 0 else -1.0
+                p = centre + n * (half[axis] + radius)
+            vn = float(np.dot(v, n))
+            if vn < 0.0:
+                v = v - (1.0 + restitution) * vn * n
+
+        if self.spheres:
+            lo = int(np.clip(np.floor(t), 0, self._n - 1))
+            hi = int(np.clip(lo + 1, 0, self._n - 1))
+            frac = float(np.clip(t - lo, 0.0, 1.0))
+            for j, rj in self.spheres:
+                if not (bool(self._present[lo, j]) or bool(self._present[hi, j])):
+                    continue
+                q = (self._pos[lo, j].astype(np.float64) * (1.0 - frac)
+                     + self._pos[hi, j].astype(np.float64) * frac)
+                d = p - q
+                dist = float(np.linalg.norm(d))
+                reach = radius + rj
+                if dist >= reach or dist < 1e-9:
+                    continue
+                n = d / dist
+                p = q + n * reach
+                vn = float(np.dot(v, n))
+                if vn < 0.0:
+                    v = v - (1.0 + restitution) * vn * n
+        return p, v

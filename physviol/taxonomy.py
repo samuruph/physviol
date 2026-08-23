@@ -20,6 +20,7 @@ DOMAINS: Dict[str, str] = {
     "dynamics": "do forces and masses behave?",
     "equilibrium": "do resting and supported bodies behave?",
     "optical": "is light consistent with geometry?",
+    "appearance": "does the object look like itself from frame to frame?",
     "global": "are the scene's constants physical?",
 }
 
@@ -45,7 +46,10 @@ FAMILIES: Dict[str, Family] = {
         "identity", "the body grows or shrinks, ideally behind an occluder",
         "volume_ratio", "sustained", "shape_continuity", "immutability", "rigid_body"),
     "fission": Family(
-        "identity", "one body becomes two, each half the volume",
+        "identity", "one body becomes two, which fly apart",
+        "count_ratio", "sustained", "object_count", "permanence", "rigid_body"),
+    "fusion": Family(
+        "identity", "two bodies touch and come out as one",
         "count_ratio", "sustained", "object_count", "permanence", "rigid_body"),
     # -- kinematics --------------------------------------------------------
     "continuity": Family(
@@ -90,8 +94,15 @@ FAMILIES: Dict[str, Family] = {
         "effective_mu_ratio", "sustained", "friction", None, None),
     # -- optical -----------------------------------------------------------
     "shadow": Family(
-        "optical", "the shadow detaches, inverts, vanishes or mismatches its caster",
+        "optical", "the shadow detaches from its caster and slides away",
         "shadow_caster_offset_radii", "sustained", "shadow_consistency", None, "optical"),
+    "shadow_shape": Family(
+        "optical", "the shadow stays put but stops matching the caster's shape",
+        "shadow_aspect_ratio", "sustained", "shape_anisotropy", None, "optical"),
+    # -- appearance --------------------------------------------------------
+    "deformation": Family(
+        "appearance", "a rigid body squashes or stretches out of proportion",
+        "aspect_ratio_change", "sustained", "shape_anisotropy", None, None),
     # -- global ------------------------------------------------------------
     "global_gravity": Family(
         "global", "the whole scene runs at alpha*g, internally consistent",
@@ -175,6 +186,9 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
                          "pendulum_swing": BUILD,
                          "ball_collision": DEFER, "clutter_toss": DEFER,
                          "spin_toss": DEFER},
+    "fusion":           {"ball_collision": BUILD, "granular_pour": BUILD,
+                         "pyramid_impact": DEFER, "stack_topple": DEFER,
+                         "clutter_toss": DEFER},
     "fission":          {"ball_drop": BUILD, "projectile_toss": BUILD,
                          "occluder_pass": BUILD, "barrier_pass": BUILD,
                          "ball_collision": DEFER, "spin_toss": DEFER,
@@ -187,7 +201,8 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
                          "barrier_pass": DEFER, "clutter_toss": DEFER,
                          "granular_pour": DEFER},
     "non_parabolic":    {"ball_drop": BUILD, "projectile_toss": BUILD,
-                         "spin_toss": BUILD, "occluder_pass": DEFER},
+                         "spin_toss": BUILD, "rolling_ramp": BUILD,
+                         "occluder_pass": DEFER},
     "antigravity":      {"ball_drop": BUILD, "projectile_toss": BUILD,
                          "granular_pour": BUILD, "ramp_slide": BUILD,
                          "spin_toss": BUILD,
@@ -226,12 +241,26 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
     "angular_momentum": {"spin_toss": BUILD, "pendulum_swing": BUILD,
                          "rolling_ramp": BUILD, "ball_collision": DEFER,
                          "ramp_slide": DEFER, "projectile_toss": DEFER},
+    # On a ramp this is "the block floats just above the slab and stops
+    # sliding" -- unsupported and motionless, which is exactly the claim.
     "support":          {"stack_topple": BUILD, "resting_table": BUILD,
+                         "ramp_slide": BUILD, "rolling_ramp": BUILD,
                          "pyramid_impact": DEFER},
     "friction":         {"ramp_slide": BUILD, "rolling_ramp": BUILD,
                          "resting_table": DEFER, "granular_pour": DEFER},
+    # `shadow` moves the shadow; `shadow_shape` distorts it where it stands.
+    # Kept apart on purpose: a benchmark that wants to know whether a model
+    # tracks shadow *position* should not be scored on clips where the shadow
+    # is also the wrong shape.
     "shadow":           {"shadow_track": BUILD, "ball_drop": DEFER,
                          "projectile_toss": DEFER, "resting_table": DEFER},
+    "shadow_shape":     {"shadow_track": BUILD},
+    "deformation":      {"ball_drop": BUILD, "projectile_toss": BUILD,
+                         "resting_table": BUILD, "occluder_pass": BUILD,
+                         "spin_toss": BUILD, "barrier_pass": BUILD,
+                         "ramp_slide": BUILD, "stack_topple": BUILD,
+                         "pendulum_swing": BUILD, "granular_pour": BUILD,
+                         "ball_collision": DEFER, "clutter_toss": DEFER},
     # Only where at least two bodies move. With one object on screen, scaling
     # gravity for the scene and scaling it for that object render identically,
     # so a single-body `global_gravity` cell is an `antigravity` clip with a
@@ -246,6 +275,49 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
                          "pendulum_swing": DEFER, "rolling_ramp": DEFER,
                          "spin_toss": DEFER, "clutter_toss": DEFER},
 }
+
+# --------------------------------------------------------------------------
+# Orthogonality -- which family is allowed to move which law
+# --------------------------------------------------------------------------
+# The dataset only supports the claim "this model cannot detect X" if clips
+# labelled X do not also contain Y. That is not automatic: an injector that
+# re-integrates a body will happily send it through a wall unless something
+# stops it, and then a `global_gravity` clip is also a `solidity` clip while
+# being scored as neither.
+#
+# These six laws are the ones with a clean zero baseline on a lawful clip -- a
+# body either passed through something or it did not -- which makes them usable
+# as tripwires. For each, the families that are *entitled* to move it. Any other
+# family moving it is contamination, and `tests/test_orthogonality.py` fails.
+#
+# The continuous dynamical laws (`free_fall`, `linear_momentum`,
+# `energy_at_contact`, `friction`, `support`, `trajectory_shape`,
+# `angular_momentum`) are deliberately absent. They co-move by physics -- change
+# a body's gravity and its momentum residual moves too -- so demanding
+# orthogonality there would be demanding that physics be separable, which it is
+# not. Orthogonality is a claim about *staging*, not about mechanics.
+EXCLUSIVE_LAWS: Dict[str, Tuple[str, ...]] = {
+    "penetration":         ("solidity",),
+    "position_continuity": ("continuity",),
+    # Not `fusion`: the body that ceases to exist there is the absorbed one,
+    # and these tripwires are read on `causal_body_ids[0]`, which for a merge is
+    # the survivor. A merge does remove a body -- that is unavoidable, you
+    # cannot merge without one -- and what distinguishes it from `permanence` is
+    # that the survivor swells to hold both, which `object_count` catches.
+    "mass_continuity":     ("permanence",),
+    "object_count":        ("fission", "fusion", "permanence"),
+    # Not `fission`: its halves keep their full size precisely so the clip is
+    # about object count and nothing else. `fusion`'s survivor does swell, and
+    # that swelling is what distinguishes a merge from one body vanishing.
+    "shape_continuity":    ("immutability", "fusion"),
+    "shape_anisotropy":    ("deformation", "shadow_shape"),
+}
+
+#: How far an unrelated law may move before it counts as contamination, in body
+#: radii. A sub-radius step is not something a viewer can see and not something
+#: a detector would fire on; a whole-radius one is a different violation.
+ORTHOGONALITY_TOLERANCE = 1.0
+
 
 SEVERITY_BINS: Tuple[str, ...] = ("weak", "medium", "strong")
 

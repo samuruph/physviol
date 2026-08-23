@@ -89,6 +89,7 @@ class Shadow(Injector):
         if t1 + 1 < traj.num_frames:
             out.pos[t1 + 1:, bi, 0] += off[0]
             out.pos[t1 + 1:, bi, 1] += off[1]
+        self._sync_velocity(traj, out, bi, t0)
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"

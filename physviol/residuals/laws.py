@@ -72,6 +72,17 @@ def penetration(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     top = float(ctx["surface_top"])
     lowest = traj.pos[:, b, 2] - r
     depth = np.maximum(0.0, top - lowest)
+    bounds = ctx.get("support_bounds")
+    if bounds is not None:
+        # Only where the body is actually over the surface. A raised support is
+        # finite, and a mug knocked off a table is *below table height* for the
+        # rest of the clip without having passed through anything -- which made
+        # `phantom_impulse` and `newton1_inertia` on `resting_table` read as
+        # solidity violations.
+        cx, cy, hx, hy = (float(x) for x in bounds)
+        over = ((np.abs(traj.pos[:, b, 0] - cx) <= hx + r)
+                & (np.abs(traj.pos[:, b, 1] - cy) <= hy + r))
+        depth = depth * over
     return (depth / max(r, 1e-9)).astype(np.float64)
 
 
@@ -105,15 +116,33 @@ def mass_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
 
 @register("position_continuity")
 def position_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
-    """Continuity: displacement unexplained by the previous velocity, in radii."""
+    """Continuity: a step larger than any velocity in play could produce.
+
+    Scored against the distance the body could have covered given its speed on
+    *either* side of the step, not against the previous velocity alone. The
+    difference matters more than it looks: extrapolating from `v[t-1]` means
+    every uncaused shove registers as a teleport, because a body that speeds up
+    always lands further along than its old velocity predicted. That made
+    `phantom_impulse`, `newton1_inertia` and half the other families read as
+    continuity violations too, and a benchmark cannot ask "can the model spot a
+    teleport" using clips where six other families also trip the teleport
+    detector.
+
+    A real teleport is a step no plausible speed explains, so that is what this
+    measures.
+    """
     dt = traj.dt
-    p = traj.pos[:, b, :].astype(np.float64)
-    v = traj.lin_vel[:, b, :].astype(np.float64)
+    r = max(float(traj.radius[b]), 1e-9)
     out = np.zeros((traj.num_frames,), np.float64)
     if traj.num_frames < 2:
         return out
-    predicted = p[:-1] + v[:-1] * dt
-    out[1:] = np.linalg.norm(p[1:] - predicted, axis=1) / max(float(traj.radius[b]), 1e-9)
+    p = traj.pos[:, b, :].astype(np.float64)
+    v = np.linalg.norm(traj.lin_vel[:, b, :].astype(np.float64), axis=1)
+    step = np.linalg.norm(p[1:] - p[:-1], axis=1)
+    # Whichever end of the step was faster, with room for acceleration inside
+    # the frame.
+    reach = np.maximum(v[:-1], v[1:]) * dt * float(ctx.get("step_tolerance", 1.6))
+    out[1:] = np.maximum(0.0, step - reach) / r
     return out
 
 
@@ -241,6 +270,26 @@ def object_count(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
         return np.zeros((traj.num_frames,), np.float64)
     n = traj.present[:, idx].sum(axis=1).astype(np.float64)
     return np.abs(n / max(float(n[0]), 1.0) - 1.0)
+
+
+@register("shape_anisotropy")
+def shape_anisotropy(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
+    """How far the body has been stretched out of its own proportions.
+
+    Distinct from `shape_continuity`, which scores a change in *volume* and is
+    blind to a body that squashes flat while conserving it. This scores the
+    aspect ratio: the widest axis over the narrowest, relative to frame 0. A
+    body that doubles in size uniformly reads zero here and 7.0 there, and a
+    body that squashes to half its height at constant volume reads the reverse.
+
+    Used both by `deformation`, where the body itself distorts, and by
+    `shadow_shape`, where the shadow stops matching the shape of the thing
+    casting it.
+    """
+    s = np.asarray(traj.scale_mul[:, b, :], np.float64)
+    s = np.maximum(np.abs(s), 1e-9)
+    ratio = s.max(axis=1) / s.min(axis=1)
+    return np.abs(ratio / max(float(ratio[0]), 1e-9) - 1.0)
 
 
 @register("angular_momentum")

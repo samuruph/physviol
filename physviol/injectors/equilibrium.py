@@ -33,6 +33,7 @@ class Support(Injector):
 
     family = "support"
     persistent = True
+    RISE_FRAMES = 3
     CLEARANCE_RADII = {"weak": 0.8, "medium": 2.0, "strong": 3.6}
 
     def strong_residual_reference(self, spec) -> float:
@@ -68,12 +69,24 @@ class Support(Injector):
         radius = float(plan.notes["radius"])
         lift = float(plan.notes["clearance_radii"]) * radius
 
-        held = traj.pos[t0 - 1, bi].astype(np.float64).copy()
-        held[2] = top + radius + lift
-        out.pos[t0:, bi, :] = held.astype(np.float32)[None, :]
+        # Eased up over a few frames, not snapped. A body that jumps three
+        # radii between two frames is a *teleport*, so snapping it made every
+        # `support` clip trip the continuity detector as well -- two violations
+        # depicted, one annotated. Rising smoothly and then holding is also what
+        # hovering actually looks like.
+        n = traj.num_frames - t0
+        ramp = max(2, min(self.RISE_FRAMES, n))
+        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
+        ease = u * u * (3.0 - 2.0 * u)
+
+        start = traj.pos[t0 - 1, bi].astype(np.float64)
+        target_z = top + radius + lift
+        held = np.tile(start, (n, 1))
+        held[:, 2] = start[2] + (target_z - start[2]) * ease
+        out.pos[t0:, bi, :] = held.astype(np.float32)
         out.quat[t0:, bi, :] = traj.quat[t0 - 1, bi][None, :]
-        out.lin_vel[t0:, bi, :] = 0.0
         out.ang_vel[t0:, bi, :] = 0.0
+        self._sync_velocity(traj, out, bi, t0)
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()

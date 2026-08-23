@@ -111,6 +111,16 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     ctx = dict(plan_d.get("notes", {}))
     surface_top = ctx.get("surface_top", spec.floor_level)
     ctx["surface_top"] = surface_top
+    if "support_bounds" not in ctx:
+        # A raised surface is finite, and the penetration law needs to know
+        # that or a body knocked off a table reads as having sunk through it.
+        from ..injectors import _geom as _g
+        primary_body = next((b for b in spec.bodies
+                             if int(b.segmentation_id) == int(primary_id)), None)
+        if primary_body is not None:
+            _, _, bounds = _g.support_plane(spec, primary_body)
+            if bounds is not None:
+                ctx["support_bounds"] = list(bounds)
 
     # The free-fall law asks "is this body accelerating like gravity?", which is
     # only a fair question while nothing is holding it up. Without this gate a

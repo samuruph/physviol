@@ -87,16 +87,22 @@ class GranularPour(Scenario):
             notes={"n_grains": n_grains, "grain_radius": r,
                    "box_half_width": half,
                    "grain_ids": [SEG_GRAIN_BASE + i for i in range(n_grains)],
-                   # Single-grain families act on the grains that start
-                   # HIGHEST, because those land last and end up on top of the
-                   # pile. Any other grain spends the clip buried: its
-                   # footprint is identical in both twins, so the violation is
-                   # active, correctly scored, and completely unobservable --
-                   # a clip with a maximal residual and an empty mask.
-                   "family_targets": {
-                       fam: [i for _, i in sorted(heights, reverse=True)[:6]]
-                       for fam in ("solidity", "permanence", "phantom_impulse",
-                                   "immutability", "superelastic")}})
+                   # Families that act on "a body" act on a SET of grains here.
+                   # One grain out of forty is a few pixels somewhere in a pile:
+                   # perfectly annotated, impossible to see. The named ones are
+                   # the grains that start highest, because those land last and
+                   # end up on top rather than buried, where their footprint
+                   # would be identical in both twins.
+                   "family_targets": dict(
+                       {fam: [i for _, i in sorted(heights, reverse=True)[:10]]
+                        for fam in ("permanence", "phantom_impulse",
+                                    "immutability")},
+                       **{fam: [i for _, i in sorted(heights, reverse=True)[:6]]
+                          for fam in ("solidity", "superelastic")}),
+                   # Families that need a contact of their own pick a single
+                   # visible grain rather than a set, so this fraction only
+                   # applies to the ones that can act on several at once.
+                   "group_fraction": 0.3})
 
 
 register(GranularPour())

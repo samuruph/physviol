@@ -33,9 +33,10 @@ class Permanence(Injector):
         return 1.0                       # all of the actor's mass is missing
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
-        if actor is None:
+        targets = self._group(spec)
+        if not targets:
             return None
+        actor = targets[0]
         T = traj.num_frames
         t0 = _geom.default_event_frame(spec, T)
         if t0 is None:
@@ -54,9 +55,9 @@ class Permanence(Injector):
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
-            causal_body_ids=[int(actor.segmentation_id)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "remove_body",
-                    "body": int(actor.segmentation_id),
+                    "bodies": [int(b.segmentation_id) for b in targets],
                     "frames_absent": int(t1 - t0 + 1)},
             magnitude=1.0, magnitude_unit="mass_ratio_removed",
             severity_bin=severity_bin,
@@ -66,10 +67,9 @@ class Permanence(Injector):
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
-        actor = self._primary(spec)
-        bi = traj.index_of(int(actor.segmentation_id))
         t0, t1 = plan.windows[0]
-        out.present[t0:t1 + 1, bi] = False
+        for bid in plan.causal_body_ids:
+            out.present[t0:t1 + 1, traj.index_of(int(bid))] = False
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -176,6 +176,7 @@ class Immutability(Injector):
         top = float(plan.notes["surface_top"])
         r_t = float(traj.radius[bi]) * factor
         out.pos[t0:, bi, 2] = np.maximum(out.pos[t0:, bi, 2], top + r_t)
+        self._sync_velocity(traj, out, bi, t0)
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
@@ -202,13 +203,17 @@ class Fission(Injector):
     family = "fission"
     persistent = True
     SEPARATION_BY_BIN = {"weak": 1.2, "medium": 2.4, "strong": 3.8}   # m/s
-    #: Linear scale each half takes. Volume-conserving (2^-1/3) at the weak end,
-    #: and deliberately *not* at the strong end. The claim this family makes is
-    #: about object **count**, not about mass -- and two halves that each shrank
-    #: to 79% and stayed close together read as one blurry object at 128 px,
-    #: which is exactly how the occluded case came out looking like nothing had
-    #: happened. Legibility of the count wins over conservation of the volume.
-    SCALE_BY_BIN = {"weak": 2.0 ** (-1.0 / 3.0), "medium": 0.88, "strong": 1.0}
+    #: Both halves keep their full size, in every bin.
+    #:
+    #: Shrinking them to conserve volume is the tempting choice and it costs
+    #: more than it buys. Two 79%-scale halves sitting close together read as
+    #: one blurry object at 128 px, so the count -- the actual claim -- becomes
+    #: the hardest thing to see. Worse, it made the family score on *two*
+    #: laws: `object_count` in every bin and `shape_continuity` in the weak and
+    #: medium ones, so a clip's orthogonality depended on its severity. A
+    #: family should break the same law at all three strengths and differ only
+    #: in how hard, which here is how far apart the halves end up.
+    SCALE_BY_BIN = {"weak": 1.0, "medium": 1.0, "strong": 1.0}
 
     def strong_residual_reference(self, spec) -> float:
         return 1.0                       # exactly one extra body exists
@@ -295,6 +300,100 @@ class Fission(Injector):
         return out
 
 
+class Fusion(Injector):
+    """Two bodies merge into one, which then carries both their volumes.
+
+    The dual of `fission`, and the other half of what video generators do to
+    object count: two things that touch and come out as one. Needs two actors,
+    so `plan` returns None below that rather than inventing a partner.
+
+    Volume *is* conserved here, unlike at fission's strong bin, because the
+    survivor swelling to hold both is what makes the merge readable -- two balls
+    becoming one ball the same size as each would look like one of them simply
+    vanished, which is `permanence`.
+    """
+
+    family = "fusion"
+    persistent = True
+    #: How close the two must come before merging is plausible, in radii.
+    MEET_RADII = {"weak": 3.5, "medium": 2.2, "strong": 1.15}
+    RAMP_FRAMES = 4
+
+    def strong_residual_reference(self, spec) -> float:
+        return 0.5                      # two bodies become one
+
+    def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
+        live = self._all_actors(spec)
+        if len(live) < 2:
+            return None
+        keeper = live[0]
+        ki = traj.index_of(int(keeper.segmentation_id))
+
+        # Merge with whichever body comes closest, on the frame it does. A merge
+        # staged between two objects that never meet is a vanish and a swell in
+        # different corners of the frame, not a fusion.
+        best = None
+        for other in live[1:]:
+            oi = traj.index_of(int(other.segmentation_id))
+            gap = np.linalg.norm(
+                traj.pos[:, ki, :].astype(np.float64)
+                - traj.pos[:, oi, :].astype(np.float64), axis=1)
+            reach = float(traj.radius[ki] + traj.radius[oi])
+            near = np.flatnonzero(
+                gap <= reach * self.MEET_RADII[severity_bin])
+            near = near[(near >= 1) & (near < traj.num_frames - 1)]
+            if not near.size:
+                continue
+            t = int(near[0])
+            if best is None or t < best[0]:
+                best = (t, other, float(gap[t] / max(reach, 1e-9)))
+        if best is None:
+            return None
+        t0, absorbed, meet = best
+
+        return InterventionPlan(
+            family=self.family, kind="sustained", t_event=t0,
+            windows=[(t0, traj.num_frames - 1)],
+            causal_body_ids=[int(keeper.segmentation_id),
+                             int(absorbed.segmentation_id)],
+            params={"type": "merge_bodies", "meet_radii": meet,
+                    "scale_factor": 2.0 ** (1.0 / 3.0)},
+            magnitude=0.5, magnitude_unit="count_ratio",
+            severity_bin=severity_bin,
+            notes={"radius": float(keeper.bounding_radius),
+                   "surface_top": _geom.surface_top(spec, keeper),
+                   "keeper_id": int(keeper.segmentation_id),
+                   "absorbed_id": int(absorbed.segmentation_id),
+                   "sibling_ids": [int(keeper.segmentation_id),
+                                   int(absorbed.segmentation_id)],
+                   "ramp_frames": self.RAMP_FRAMES})
+
+    def apply(self, spec, traj, plan) -> Trajectory:
+        out = self._clone(traj)
+        ki = traj.index_of(int(plan.notes["keeper_id"]))
+        ai = traj.index_of(int(plan.notes["absorbed_id"]))
+        t0 = plan.t_event
+        k = float(plan.params["scale_factor"])
+        ramp = int(plan.notes["ramp_frames"])
+        n = traj.num_frames - t0
+
+        out.present[t0:, ai] = False
+        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
+        factor = 1.0 + (k - 1.0) * (u * u * (3.0 - 2.0 * u))
+        out.scale_mul[t0:, ki, :] = factor[:, None].astype(np.float32)
+
+        top = float(plan.notes["surface_top"])
+        r_t = float(traj.radius[ki]) * factor
+        out.pos[t0:, ki, 2] = np.maximum(out.pos[t0:, ki, 2], top + r_t)
+        self._sync_velocity(traj, out, ki, t0)
+
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
+
+
 register(Permanence())
+register(Fusion())
 register(Immutability())
 register(Fission())
