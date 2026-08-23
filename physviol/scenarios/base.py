@@ -142,6 +142,18 @@ class BodySpec:
     visible_camera: bool = True
     visible_shadow: bool = True
 
+    # What the renderer draws, when that differs from what the simulator is
+    # given. Kubric's PyBullet wrapper asserts uniform scaling on spheres, so a
+    # flattened disc -- which is what a round object's shadow looks like -- can
+    # only be declared as a uniform sphere and squashed afterwards. Applied
+    # once the body has joined the scene, and only the renderer observes
+    # `scale`, so the physics never sees it.
+    render_scale: Optional[Tuple[float, float, float]] = None
+
+    @property
+    def draw_scale(self) -> Tuple[float, float, float]:
+        return self.render_scale or self.scale
+
     @property
     def bounding_radius(self) -> float:
         return float(max(self.scale))
@@ -216,6 +228,7 @@ class SceneSpec:
                         "restitution": b.restitution, "friction": b.friction,
                         "static": b.static, "scripted": b.scripted,
                         "dormant": b.dormant,
+                        "render_scale": list(b.draw_scale),
                         "scale": list(b.scale)} for b in self.bodies],
             "notes": self.notes,
         }

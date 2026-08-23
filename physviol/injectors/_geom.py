@@ -129,7 +129,8 @@ def first_contact_any(traj, body_id: int, exclude=()) -> Optional[Tuple[int, int
 
 
 def first_dynamic_pair_contact(spec, traj, prefer: Optional[int] = None,
-                               only=None) -> Optional[Tuple[int, int, int]]:
+                               only=None, min_approach: float = 0.35
+                               ) -> Optional[Tuple[int, int, int]]:
     """(frame, id_a, id_b) of the first contact between two *dynamic* bodies.
 
     The event `newton2_mass` and `newton3_reaction` need: two things that both
@@ -157,6 +158,21 @@ def first_dynamic_pair_contact(spec, traj, prefer: Optional[int] = None,
         f = int(c.frame[k])
         if f < 1:
             continue
+        # A real impact, not two bodies settling against each other. The
+        # spheres in a pyramid touch from frame 0 and jostle for the whole
+        # clip, so "first contact between two dynamic bodies" found a nudge
+        # with no momentum in it -- and a Newton family staged on that has
+        # almost no reaction to suppress. Scored 0.01.
+        ia, ib = traj.index_of(a), traj.index_of(b)
+        sep = traj.pos[f, ib].astype(np.float64) - traj.pos[f, ia].astype(np.float64)
+        mag = float(np.linalg.norm(sep))
+        if mag > 1e-9:
+            n = sep / mag
+            closing = float(np.dot(
+                traj.lin_vel[f - 1, ia].astype(np.float64)
+                - traj.lin_vel[f - 1, ib].astype(np.float64), n))
+            if closing < min_approach:
+                continue
         if best is None or f < best[0]:
             best = (f, a, b)
         if prefer is not None and prefer in (a, b):

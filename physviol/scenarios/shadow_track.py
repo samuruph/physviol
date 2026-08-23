@@ -60,9 +60,14 @@ class ShadowTrack(Scenario):
             # violation in its own right -- see the `shadow_shape` family --
             # which only works if the lawful clip gets it right.
             name="shadow", kind="sphere", position=(0.0, 0.0, 0.006),
-            # Stretched along the light's ground-plane bearing, which is the
-            # direction a low sun smears a round object's shadow.
-            scale=(r / max(abs(float(light_dir[2])), 0.35), r, 0.006),
+            # Declared round for the simulator, drawn as a flattened ellipse.
+            # Kubric's PyBullet wrapper asserts uniform scaling on spheres, so
+            # the squash has to happen on the render side -- see
+            # `BodySpec.render_scale`. Stretched along the light's ground-plane
+            # bearing, which is the direction a low sun smears a round object's
+            # shadow.
+            scale=(r, r, r),
+            render_scale=(r / max(abs(float(light_dir[2])), 0.35), r, 0.006),
             quaternion=(math.cos(psi / 2.0), 0.0, 0.0, math.sin(psi / 2.0)),
             mass=1.0, static=False, scripted=True, visible_shadow=False,
             color=(0.035, 0.035, 0.045), segmentation_id=self.SEG_SHADOW,

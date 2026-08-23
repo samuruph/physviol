@@ -99,6 +99,11 @@ def build_scene(spec: SceneSpec, scratch):
             obj.velocity = b.velocity
             obj.angular_velocity = b.angular_velocity
         scene += obj
+        if b.render_scale is not None:
+            # After joining the scene, so PyBullet has already validated the
+            # uniform collision scale it was given. Only the renderer observes
+            # `scale`, so this changes what is drawn and nothing else.
+            obj.scale = tuple(float(x) for x in b.render_scale)
         _set_visibility(renderer, obj, b)
         objs[b.name] = obj
 
@@ -243,7 +248,7 @@ def replay(spec, objs, traj: Trajectory) -> None:
             obj.keyframe_insert("position", f)
             obj.keyframe_insert("quaternion", f)
             if resize:
-                obj.scale = tuple(float(b.scale[k] * scale_mul[f, j, k])
+                obj.scale = tuple(float(b.draw_scale[k] * scale_mul[f, j, k])
                                   for k in range(3))
                 obj.keyframe_insert("scale", f)
 

@@ -230,11 +230,13 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
     # objects, so "the cube is heavy" is a lawful reading of the clip and there
     # is no violation left for a viewer to see. Both Newton families need two
     # bodies that look the same.
-    # On `pyramid_impact` these act on two *spheres*, never the cube: the whole
-    # family rests on the two bodies being indistinguishable, and a cube next to
-    # a sphere makes "the cube is heavier" a lawful reading. The scenario names
-    # the eligible pair in `family_targets`.
-    "newton3_reaction": {"ball_collision": BUILD, "pyramid_impact": BUILD,
+    # Not on `pyramid_impact`, and it took two attempts to be sure. The cube
+    # cannot be one of the pair -- next to a sphere, "the cube is heavier" is a
+    # lawful reading -- and the spheres, which *are* identical to each other,
+    # never strike one another hard enough: they touch from frame 0 and settle
+    # rather than collide, so the reaction there is to suppress amounts to
+    # nothing and the clips scored 0.01. Measured, not assumed.
+    "newton3_reaction": {"ball_collision": BUILD, "pyramid_impact": DEFER,
                          "clutter_toss": DEFER},
     "phantom_impulse":  {"ball_collision": BUILD, "projectile_toss": BUILD,
                          "resting_table": BUILD, "spin_toss": BUILD,
@@ -242,7 +244,7 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
                          "granular_pour": BUILD, "ball_drop": BUILD,
                          "occluder_pass": DEFER, "pendulum_swing": DEFER,
                          "rolling_ramp": DEFER, "clutter_toss": DEFER},
-    "newton2_mass":     {"ball_collision": BUILD, "pyramid_impact": BUILD,
+    "newton2_mass":     {"ball_collision": BUILD, "pyramid_impact": DEFER,
                          "ball_drop": DEFER, "ramp_slide": DEFER},
     "angular_momentum": {"spin_toss": BUILD, "pendulum_swing": BUILD,
                          "rolling_ramp": BUILD, "ball_collision": DEFER,
