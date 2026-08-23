@@ -73,6 +73,8 @@ Optical Consistency, Material Response.
 |---|---|---|---|
 | Permanence | Permanence | Pendulum (bob disappears), Pyramid (holes) / Conservation of Mass | **covered** |
 | Immutability | Immutability | Ball Drop (colour, rescale), Block Slide (dimensions) / Geometric Invariance | **covered** |
+| Colour shift | Immutability | Ball Drop "colour change mid-flight", Cloth Drape "colour change" | **covered**, and continuous where theirs is a swap: severity is CIE-Lab distance, so a hue nudge and a jump to the opposite side of the wheel are on one scale |
+| Dissolve (fades to nothing) | Permanence (the disappearance half) | none — every prior benchmark's disappearance is a switch | **covered, but continuous where theirs is discrete**: the same end state reached as a trend rather than a single-frame cut |
 | Fusion (two become one) | Permanence (the disappearance half) | Cloth/fluid coalescence — both continuum | **covered for rigid bodies** |
 | Fission (one body becomes two) | Permanence (the appearance half) | Cloth Waving "fragments shatter", Faucet "non-coalescing fracture" — both continuum | **covered for rigid bodies**, where neither benchmark stages it |
 | Continuity | Spatio-Temporal Continuity | teleport variants across nearly every scenario / Spatial Continuity | **covered** |

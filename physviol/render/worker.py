@@ -196,10 +196,15 @@ def simulate(spec, scene, simulator, objs) -> Trajectory:
         if b.dormant:
             present[:, j] = False
 
+    colour = np.zeros((T, B, 3), np.float32)
+    for j, b in enumerate(spec.bodies):
+        colour[:, j, :] = np.asarray(b.color, np.float32)
+
     return Trajectory(
         body_ids=np.asarray([seg_of[n_] for n_ in order], np.int32),
         body_names=list(order),
         pos=pos, quat=quat, lin_vel=lvel, ang_vel=avel, present=present,
+        colour=colour,
         mass=np.asarray([b.mass for b in spec.bodies], np.float32),
         radius=np.asarray([b.bounding_radius for b in spec.bodies], np.float32),
         is_static=np.asarray([b.static for b in spec.bodies], bool),
@@ -225,6 +230,7 @@ def replay(spec, objs, traj: Trajectory) -> None:
     """
     present = traj.present
     scale_mul = traj.scale_mul
+    colour = traj.colour
     for j, b in enumerate(spec.bodies):
         obj = objs[b.name]
         # Scale is keyframed on EVERY body, every frame, whether or not this
@@ -239,6 +245,14 @@ def replay(spec, objs, traj: Trajectory) -> None:
         # The dome is the exception: a background asset with its own scale,
         # which resizing would turn into resizing the world.
         resize = b.kind != "dome"
+        # Material animation is keyframed the same way pose and scale are.
+        # Verified against the pinned image: `material.keyframe_insert("color",
+        # f)` writes one fcurve per RGBA channel on the Principled BSDF's Base
+        # Colour and the render follows it. The dome is excluded because its
+        # material carries the HDRI, not a colour.
+        recolour = (b.kind != "dome"
+                    and float(np.abs(colour[:, j, :]
+                                     - np.asarray(b.color, np.float32)).max()) > 1e-6)
         for f in range(traj.num_frames):
             if present is not None and not bool(present[f, j]):
                 obj.position = (0.0, 0.0, GONE_Z)
@@ -251,6 +265,9 @@ def replay(spec, objs, traj: Trajectory) -> None:
                 obj.scale = tuple(float(b.draw_scale[k] * scale_mul[f, j, k])
                                   for k in range(3))
                 obj.keyframe_insert("scale", f)
+            if recolour:
+                obj.material.color = kb.Color(*(float(x) for x in colour[f, j]))
+                obj.material.keyframe_insert("color", f)
 
 
 def render_and_save(renderer, scene, spec, objs, outdir, tag: str):

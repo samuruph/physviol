@@ -4,9 +4,11 @@
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
 — all derived from the simulator, not from human annotation.
 
-> **Status: all 48 build cells generate, annotate and validate.** 13 scenarios × 17
-> violation families compose through the trajectory seam; `physviol generate` walks the whole
-> matrix in 8 minutes at Tier D. Design doc: [docs/PLAN.md](docs/PLAN.md).
+> **Status: every build cell generates, annotates and validates.** 15 scenarios × 20
+> violation families compose through the trajectory seam, and `physviol generate` walks the
+> whole matrix in one command. Each clip depicts *one* violation — that is asserted, not
+> hoped for; see [§7](#7-orthogonality-what-the-labels-guarantee).
+> Design doc: [docs/PLAN.md](docs/PLAN.md) · Evaluating: [docs/evaluation.md](docs/evaluation.md)
 
 ---
 
@@ -44,8 +46,8 @@ python -m physviol.cli generate --debug --complexity L0 \
 
 `--debug` is Tier D: 128², 13 frames, 16 spp. `--complexity L0` is a solid background with a
 sun lamp, which needs no network and renders ~4.6× faster than the photographic L1. Roughly
-**10 s per pair**, including annotation and the overlay video. This is the loop to iterate in
-— a bug found at Tier D is fixed for all three tiers.
+**~17 s per pair**, including annotation and the overlay video. This is the loop to iterate
+in — a bug found at Tier D is fixed for all three tiers.
 
 ### b. Small subset — every family, one scenario, or a slice of the matrix
 
@@ -59,9 +61,8 @@ python -m physviol.cli generate --debug --complexity L0 --family solidity --seed
 # the whole matrix, but stop after 6 cells
 python -m physviol.cli generate --debug --complexity L0 -n 6 --seed 777
 
-# the whole matrix, one randomisation each: 48 cells in 8m12s at L0/Tier D
-# (measured: 61 clips, 107 MB, 10.3 s per pair including annotation and video)
-bash scripts/generate_sample.sh L0 D 777 strong 4
+# the whole matrix, one randomisation each -- every scenario x family cell
+bash scripts/generate_sample.sh L0 D 777 strong
 ```
 
 `--keep-going` carries on past a cell that fails and lists the failures at the end, which is
@@ -152,7 +153,7 @@ occlusion lag, and `occluder_pass` is the scenario built to produce it.
 ## 4. Every command
 
 ```bash
-# Taxonomy: 7 domains, 17 families, 14 scenarios, 48 build cells
+# Taxonomy: 8 domains, 20 families, 15 scenarios, and every build cell
 python -m physviol.cli taxonomy
 python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
 
@@ -297,13 +298,38 @@ claiming `"fluid"`. Real fluid and cloth are **Phase 3**, behind a newer Blender
 
 ---
 
-## 7. Tiers
+## 7. Orthogonality — what the labels guarantee
+
+A clip labelled `solidity` has to contain solidity **and nothing else**, or the dataset
+cannot support the claim "this model misses X". That is not free — it broke four separate
+times while the injectors were being written, always the same way: an injector re-integrates a
+body, the integrator does not know about the walls, and a `global_gravity` clip quietly
+becomes a clip about solidity too.
+
+So it is asserted. `taxonomy.EXCLUSIVE_LAWS` names the residuals with a clean zero baseline on
+a lawful clip and the families entitled to move each one; `tests/test_orthogonality.py` fails
+if any other family moves one, and fails again if an owner does *not* move the law it owns —
+a tripwire nobody trips measures nothing.
+
+```bash
+python -m pytest tests/test_orthogonality.py -q     # every cell, no docker, ~10 s
+```
+
+**Where the guarantee stops.** Families with an exclusive tripwire are provably clean. The
+rest are separated by *staging*, not by residual: `antigravity`, `phantom_impulse`,
+`newton1_inertia` and `newton3_reaction` all move `linear_momentum`, because they must —
+bend a body's gravity and its momentum residual moves with it. Physics is not separable there
+and pretending otherwise would be the wrong fix. What separates them is the situation, which a
+model has to read from the image. [docs/evaluation.md](docs/evaluation.md) says which is
+which, and what that means for a confusion matrix.
+
+## 8. Tiers
 
 | | Tier D (debug) | Tier A (`physviol_v0`) | Tier B (`physviol_v1`) |
 |---|---|---|---|
 | resolution | 128² | 256² | 512² |
-| frames @ fps | 13 @ 12 | 25 @ 12 | 97 @ 24 |
-| latent grid | 4×8×8 | 7×16×16 | 25×16×16 |
+| frames @ fps | 25 @ 12 | 49 @ 12 | 97 @ 24 |
+| latent grid | 7×8×8 | 13×16×16 | 25×16×16 |
 | render cost | ~0.44 s/frame | ~1.75 s/frame | ~7.16 s/frame |
 | published | never | yes | yes |
 
@@ -317,7 +343,7 @@ by Amdahl. Clip-level parallelism measures **1.92×** at width 4, for free. Deta
 
 ---
 
-## 8. Repo layout
+## 9. Repo layout
 
 ```
 docs/PLAN.md          the design document -- start here
@@ -344,14 +370,20 @@ tests/                prefix identity, mask union, windows, grids, taxonomy,
 out/                  all generated output (gitignored)
 ```
 
-## 9. Evaluating on it
+## 10. Where it is going
+
+[docs/roadmap.md](docs/roadmap.md) — the medium axis that maps onto LikePhys, the perceptual
+families still missing from v0 (`colour_shift`, `illumination_shift`), and what v1 is:
+population, a realistic twin of every clip, and deeper randomisation.
+
+## 11. Evaluating on it
 
 [docs/evaluation.md](docs/evaluation.md) — which axes to report on, the four tasks the
 annotations support, and what the orthogonality guarantee does and does not cover. The short
 version: report **per family**, cross with **severity** and **complexity**, split by
 `scene_id`, and never train on `divergence_map`.
 
-## 10. Papers
+## 12. Papers
 
 [IntPhys 2](https://arxiv.org/abs/2506.09849) · [LikePhys](https://arxiv.org/abs/2510.11512) ·
 [Kubric](https://github.com/google-research/kubric). PDFs of the first two live in

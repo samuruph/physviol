@@ -65,7 +65,7 @@ def test_cell_plans_and_applies(scenario, family):
     changed = any(
         float(np.abs(getattr(invalid, a)[plan.t_event:]
                      - getattr(traj, a)[plan.t_event:]).max()) > 1e-6
-        for a in ("pos", "quat", "scale_mul"))
+        for a in ("pos", "quat", "scale_mul", "colour"))
     changed = changed or not np.array_equal(invalid.present, traj.present)
     assert changed, "%s x %s changed nothing after t_event" % (scenario, family)
 
@@ -101,7 +101,7 @@ def test_only_declared_culprits_are_edited(scenario, family):
 
     moved = set()
     for j, body in enumerate(spec.bodies):
-        for attr in ("pos", "quat", "scale_mul"):
+        for attr in ("pos", "quat", "scale_mul", "colour"):
             a = getattr(traj, attr)[:, j]
             b = getattr(invalid, attr)[:, j]
             if float(np.abs(a - b).max()) > 1e-6:

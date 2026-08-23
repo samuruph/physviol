@@ -40,8 +40,12 @@ class Family(NamedTuple):
 FAMILIES: Dict[str, Family] = {
     # -- identity ----------------------------------------------------------
     "permanence": Family(
-        "identity", "remove a body, ideally while occluded",
+        "identity", "a body is simply gone between one frame and the next",
         "mass_ratio", "sustained", "mass_continuity", "permanence", "rigid_body"),
+    "dissolve": Family(
+        "identity", "a body dwindles away to nothing over several frames",
+        "mass_ratio_dissolved", "sustained", "mass_dissolution", "permanence",
+        "rigid_body"),
     "immutability": Family(
         "identity", "the body grows or shrinks, ideally behind an occluder",
         "volume_ratio", "sustained", "shape_continuity", "immutability", "rigid_body"),
@@ -100,6 +104,9 @@ FAMILIES: Dict[str, Family] = {
         "optical", "the shadow stays put but stops matching the caster's shape",
         "shadow_aspect_ratio", "sustained", "shape_anisotropy", None, "optical"),
     # -- appearance --------------------------------------------------------
+    "colour_shift": Family(
+        "appearance", "a body changes colour with nothing to explain it",
+        "lab_distance", "sustained", "colour_continuity", "immutability", None),
     "deformation": Family(
         "appearance", "a rigid body squashes or stretches out of proportion",
         "aspect_ratio_change", "sustained", "shape_anisotropy", None, None),
@@ -174,6 +181,14 @@ BUILD, DEFER = "build", "defer"
 # Level 3 x Level 2 -- which families are meaningful in which scenarios.
 # "build" == a v0 deliverable; "defer" == valid but not scheduled.
 COMPATIBILITY: Dict[str, Dict[str, str]] = {
+    # `dissolve` goes wherever `permanence` does: the same staging, asking
+    # whether the model notices a trend rather than a discontinuity.
+    "dissolve":         {"ball_drop": BUILD, "occluder_pass": BUILD,
+                         "resting_table": BUILD, "stack_topple": BUILD,
+                         "granular_pour": BUILD, "shadow_track": BUILD,
+                         "barrier_pass": BUILD, "projectile_toss": BUILD,
+                         "pendulum_swing": BUILD, "ball_collision": DEFER,
+                         "clutter_toss": DEFER},
     "permanence":       {"ball_drop": BUILD, "occluder_pass": BUILD,
                          "resting_table": BUILD, "stack_topple": BUILD,
                          "granular_pour": BUILD, "shadow_track": BUILD,
@@ -263,6 +278,14 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
     "shadow":           {"shadow_track": BUILD, "ball_drop": DEFER,
                          "projectile_toss": DEFER, "resting_table": DEFER},
     "shadow_shape":     {"shadow_track": BUILD},
+    # Everywhere there is something coloured to look at, which is everywhere.
+    "colour_shift":     {"ball_drop": BUILD, "projectile_toss": BUILD,
+                         "resting_table": BUILD, "occluder_pass": BUILD,
+                         "spin_toss": BUILD, "barrier_pass": BUILD,
+                         "ramp_slide": BUILD, "stack_topple": BUILD,
+                         "pendulum_swing": BUILD, "granular_pour": BUILD,
+                         "ball_collision": BUILD, "rolling_ramp": BUILD,
+                         "clutter_toss": DEFER},
     "deformation":      {"ball_drop": BUILD, "projectile_toss": BUILD,
                          "resting_table": BUILD, "occluder_pass": BUILD,
                          "spin_toss": BUILD, "barrier_pass": BUILD,
@@ -313,20 +336,20 @@ EXCLUSIVE_LAWS: Dict[str, Tuple[str, ...]] = {
     # cannot merge without one -- and what distinguishes it from `permanence` is
     # that the survivor swells to hold both, which `object_count` catches.
     "mass_continuity":     ("permanence",),
-    "object_count":        ("fission", "fusion", "permanence"),
+    "object_count":        ("fission", "fusion", "permanence", "dissolve"),
+    "mass_dissolution":    ("dissolve",),
     # Neither `fission` nor `fusion`: both keep every surviving body at its
     # own size precisely so the clip is about object count and nothing else.
     # What distinguishes a merge from one body vanishing is the *approach* --
     # the two visibly converge -- not a size change on the survivor.
-    # `permanence` is here because its dissolve genuinely changes size: the
-    # body dwindles away over several frames before it is removed, and shrinking
-    # is the only gradient this render path supports (see
-    # render/probe_opacity.py -- neither alpha nor transmission moves the
-    # pixels, and the segmentation pass keeps the geometry regardless). The two
-    # identity families therefore overlap on this tripwire by construction,
-    # which is worth stating rather than tuning a constant to hide.
-    "shape_continuity":    ("immutability", "permanence"),
+    # `dissolve` is here because fading a body out *is* shrinking it -- the only
+    # gradient this render path supports, and measured rather than assumed (see
+    # render/probe_opacity.py). Two families that both legitimately change size
+    # is an honest overlap; `permanence` is instant precisely so it stays out of
+    # it and keeps a clean tripwire of its own.
+    "shape_continuity":    ("immutability", "dissolve"),
     "shape_anisotropy":    ("deformation", "shadow_shape"),
+    "colour_continuity":   ("colour_shift",),
 }
 
 #: How far an unrelated law may move before it counts as contamination, in body

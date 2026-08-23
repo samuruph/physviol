@@ -1,4 +1,4 @@
-"""Appearance-domain injectors: deformation.
+"""Appearance-domain injectors: deformation, colour_shift.
 
 A domain of its own because none of the seven physical ones covers it. A body
 that squashes out of proportion has not moved unlawfully, gained energy or
@@ -17,6 +17,7 @@ import numpy as np
 
 from ..sim.trajectory import Trajectory
 from . import _geom
+from ..residuals.laws import _srgb_to_lab
 from .base import Injector, InterventionPlan, register
 
 
@@ -128,5 +129,130 @@ class ShadowShape(_Squash):
         return shade[:1]
 
 
+class ColourShift(Injector):
+    """A body changes colour, with nothing in the scene to explain it.
+
+    The most common perceptual failure in generated video, and the one furthest
+    from anything mechanical: the trajectory is untouched and every physical law
+    in the taxonomy stays satisfied. What is wrong is that the object stopped
+    looking like itself.
+
+    Material colour is animated the same way pose and scale are -- one fcurve
+    per channel on the Principled BSDF's Base Colour, verified rendering
+    against the pinned image. Eased rather than switched, for the reason
+    `immutability` is: a colour that changes between two frames is a cut,
+    one that visibly shifts is a violation.
+
+    Severity is perceptual distance rather than RGB distance, and the bins are
+    *solved for* in CIE-Lab rather than expressed as hue rotations -- see
+    `DISTANCE_BY_BIN` for why the obvious version is not monotone.
+    """
+
+    family = "colour_shift"
+    persistent = True
+    #: Target perceptual separation, in CIE-Lab distance over 100. Specified
+    #: here and *solved for* per body, rather than specified as a hue rotation.
+    #:
+    #: Setting the bins in hue was the first attempt and it is not monotone in
+    #: what it claims to measure: from red, a 0.30 turn lands on green and a
+    #: 0.50 turn lands on cyan, and green is the further of the two in Lab. So
+    #: `medium` came out more different than `strong` on some colours and less
+    #: on others, and the severity ordering the whole bin system rests on held
+    #: only by luck. Solving for the distance makes the bins mean the same thing
+    #: whatever colour a body started as.
+    DISTANCE_BY_BIN = {"weak": 0.25, "medium": 0.55, "strong": 0.95}
+    RAMP_FRACTION = 0.22
+    RAMP_MIN = 3
+
+    def strong_residual_reference(self, spec) -> float:
+        return float(self.DISTANCE_BY_BIN["strong"])
+
+    @staticmethod
+    def _shift_to_distance(rgb, target: float, sign: float):
+        """The colour a hue rotation reaches at `target` Lab distance from `rgb`.
+
+        Bisection on the rotation, because Lab distance is monotone in hue turn
+        over half the wheel but has no closed form. Twenty steps is well past
+        the precision anything downstream can use.
+        """
+        import colorsys
+        h, sat, val = colorsys.rgb_to_hsv(*rgb)
+        sat = min(1.0, sat + 0.12)
+        base = _srgb_to_lab(np.asarray(rgb, np.float64))
+
+        def at(turn):
+            out = np.asarray(colorsys.hsv_to_rgb((h + sign * turn) % 1.0,
+                                                 sat, val), np.float64)
+            return out, float(np.linalg.norm(_srgb_to_lab(out) - base) / 100.0)
+
+        lo, hi = 0.0, 0.5
+        best = at(hi)
+        if best[1] <= target:
+            return best                    # even the antipode is not far enough
+        for _ in range(20):
+            mid = 0.5 * (lo + hi)
+            cand = at(mid)
+            if cand[1] < target:
+                lo = mid
+            else:
+                hi, best = mid, cand
+        return best
+
+    def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
+        targets = [b for b in self._group(spec) if b.kind != "dome"]
+        if not targets:
+            return None
+        T = traj.num_frames
+        t0 = _geom.default_event_frame(spec, T)
+        if t0 is None:
+            return None
+
+        target = float(self.DISTANCE_BY_BIN[severity_bin])
+        # Direction per scene, not per bin, so the three strengths are the same
+        # shift at three sizes rather than three different colours.
+        sign = 1.0 if self._instance_rng(spec).rand() < 0.5 else -1.0
+        ramp = max(self.RAMP_MIN, int(round(self.RAMP_FRACTION * T)))
+
+        finals, reached = {}, []
+        for body in targets:
+            rgb, dist = self._shift_to_distance(body.color, target, sign)
+            finals[int(body.segmentation_id)] = [float(x) for x in rgb]
+            reached.append(dist)
+        return InterventionPlan(
+            family=self.family, kind="sustained", t_event=t0,
+            windows=[(t0, T - 1)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
+            params={"type": "colour_ramp", "target_distance": target,
+                    "ramp_frames": int(min(ramp, T - t0))},
+            magnitude=float(np.mean(reached)),
+            magnitude_unit="lab_distance", severity_bin=severity_bin,
+            notes={"radius": float(targets[0].bounding_radius),
+                   "surface_top": _geom.surface_top(spec, targets[0]),
+                   "final_colour": finals,
+                   "ramp_frames": int(min(ramp, T - t0)),
+                   "r_strong": self.strong_residual_reference(spec)})
+
+    def apply(self, spec, traj, plan) -> Trajectory:
+        out = self._clone(traj)
+        t0 = plan.t_event
+        ramp = int(plan.notes["ramp_frames"])
+        n = traj.num_frames - t0
+        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / max(ramp, 1), 0.0, 1.0)
+        ease = (u * u * (3.0 - 2.0 * u))[:, None]
+
+        for bid, final in plan.notes["final_colour"].items():
+            bi = traj.index_of(int(bid))
+            start = traj.colour[t0 - 1, bi].astype(np.float64)
+            end = np.asarray(final, np.float64)
+            out.colour[t0:, bi, :] = (
+                start[None, :] + (end - start)[None, :] * ease).astype(np.float32)
+
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
+
+
+register(ColourShift())
 register(Deformation())
 register(ShadowShape())

@@ -249,6 +249,23 @@ def shape_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     return np.abs(vol / max(float(vol[0]), 1e-9) - 1.0)
 
 
+@register("mass_dissolution")
+def mass_dissolution(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
+    """How much of the body has ceased to exist, as a fraction, over time.
+
+    Continuous where `mass_continuity` is a step: it follows the body down from
+    its own frame-0 volume to nothing and stays at 1.0 once it is removed. That
+    difference is the whole distinction between `dissolve` and `permanence` --
+    the same end state, reached in a way a model has to notice as a *trend*
+    rather than as a single-frame discontinuity.
+    """
+    s = np.asarray(traj.scale_mul[:, b, :], np.float64)
+    vol = np.prod(np.maximum(np.abs(s), 1e-9), axis=1)
+    remaining = np.clip(vol / max(float(vol[0]), 1e-9), 0.0, 1.0)
+    gone = 1.0 - remaining
+    return np.maximum(gone, 1.0 - traj.present[:, b].astype(np.float64))
+
+
 @register("object_count")
 def object_count(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """Fission: how many bodies exist where one should.
@@ -270,6 +287,39 @@ def object_count(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
         return np.zeros((traj.num_frames,), np.float64)
     n = traj.present[:, idx].sum(axis=1).astype(np.float64)
     return np.abs(n / max(float(n[0]), 1.0) - 1.0)
+
+
+def _srgb_to_lab(rgb: np.ndarray) -> np.ndarray:
+    """sRGB in [0,1] -> CIE-Lab (D65). Vectorised over a trailing axis of 3.
+
+    Perceptual distance, not RGB distance, because the two disagree badly: the
+    same numeric step is glaring between two greens and invisible between two
+    dark blues. A severity that claims to be comparable across clips has to be
+    measured in a space where equal steps look equally different.
+    """
+    c = np.clip(np.asarray(rgb, np.float64), 0.0, 1.0)
+    lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    m = np.array([[0.4124, 0.3576, 0.1805],
+                  [0.2126, 0.7152, 0.0722],
+                  [0.0193, 0.1192, 0.9505]])
+    xyz = lin @ m.T / np.array([0.95047, 1.0, 1.08883])
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16.0 / 116.0)
+    return np.stack([116.0 * f[..., 1] - 16.0,
+                     500.0 * (f[..., 0] - f[..., 1]),
+                     200.0 * (f[..., 1] - f[..., 2])], axis=-1)
+
+
+@register("colour_continuity")
+def colour_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
+    """Appearance: how far the body's colour has drifted from its own frame 0.
+
+    CIE-Lab distance, scaled by 100 so a value of 1.0 is about as different as
+    two colours get. Measured against the body's *own* first frame rather than
+    an absolute reference, so a scene of differently coloured objects does not
+    register a violation just for containing them.
+    """
+    lab = _srgb_to_lab(np.asarray(traj.colour[:, b, :], np.float64))
+    return np.linalg.norm(lab - lab[0][None, :], axis=1) / 100.0
 
 
 @register("shape_anisotropy")

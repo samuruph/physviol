@@ -20,28 +20,18 @@ from .base import Injector, InterventionPlan, register
 class Permanence(Injector):
     """Remove the actor from the scene, ideally while it is occluded.
 
-    It dwindles away over a few frames rather than switching off between two of
-    them, then is gone. Severity is how long it stays gone: `weak` blinks out
-    briefly, `strong` never returns. When the scenario provides an occlusion interval the removal
+    Instant: between one frame and the next the body is simply not there. The
+    *gradual* version is `dissolve`, and keeping them apart is what lets
+    `permanence` own a clean tripwire -- it moves `mass_continuity` and
+    `object_count` and touches nothing else, where anything that fades has to
+    change size on the way out. Severity is how long it stays gone: `weak`
+    blinks out briefly, `strong` never returns. When the scenario provides an occlusion interval the removal
     fires inside it, so the violation is not directly observable and only its
     failure to re-emerge betrays it -- the observability-lag case of PLAN 1.1.
     """
 
     family = "permanence"
     GONE_FRACTION = {"weak": 0.25, "medium": 0.55, "strong": 1.0}
-    #: The body dwindles away over this share of the clip before it is removed,
-    #: rather than switching off between two frames.
-    #:
-    #: Geometric, not optical, and that is a measurement rather than a
-    #: preference -- see `render/probe_opacity.py`. Neither material
-    #: transmission nor the Principled BSDF's alpha moves the rendered pixels in
-    #: the pinned image, and more importantly the segmentation pass reports the
-    #: body at full size whatever alpha says, because cryptomatte tracks
-    #: geometry. A body that faded visually would still be wholly present in
-    #: `seg.npz`, so every mask and every observability window would deny a
-    #: violation the clip was showing. Shrinking dissolves it in both.
-    FADE_FRACTION = 0.14
-    FADE_MIN = 3
 
     def strong_residual_reference(self, spec) -> float:
         return 1.0                       # all of the actor's mass is missing
@@ -67,35 +57,23 @@ class Permanence(Injector):
             n_win = self._window_len(max(1, int(round(frac * (T - t0)))), t0, T)
             t1 = min(T - 1, t0 + n_win - 1)
         occ = spec.notes.get("occluded_frames") or []
-        fade = max(self.FADE_MIN, int(round(self.FADE_FRACTION * T)))
-        fade = max(1, min(fade, t1 - t0 + 1))
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "remove_body",
                     "bodies": [int(b.segmentation_id) for b in targets],
-                    "fade_frames": int(fade),
                     "frames_absent": int(t1 - t0 + 1)},
             magnitude=1.0, magnitude_unit="mass_ratio_removed",
             severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "fade_frames": int(fade),
                    "occluded_at_event": bool(t0 in occ)})
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         t0, t1 = plan.windows[0]
-        fade = int(plan.notes.get("fade_frames", 1))
-        n = min(fade, t1 - t0 + 1)
-        u = (np.arange(n, dtype=np.float64) + 1.0) / n
-        ease = 1.0 - u * u * (3.0 - 2.0 * u)          # 1 -> 0, smooth at both ends
         for bid in plan.causal_body_ids:
-            bi = traj.index_of(int(bid))
-            if n > 0:
-                out.scale_mul[t0:t0 + n, bi, :] = np.maximum(
-                    ease, 0.02)[:, None].astype(np.float32)
-            out.present[t0 + n:t1 + 1, bi] = False
+            out.present[t0:t1 + 1, traj.index_of(int(bid))] = False
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -457,7 +435,103 @@ class Fusion(Injector):
         return out
 
 
+class Dissolve(Injector):
+    """The body dwindles away to nothing and is gone.
+
+    `permanence`'s gradual counterpart, and a separate family rather than a mode
+    of it because the two make different claims and a benchmark should be able
+    to ask them separately: one is "it was there and then it was not", the other
+    is "it faded out of existence". They also differ in what a model has to
+    notice -- an instant removal is a single-frame discontinuity, a dissolve is
+    a trend across several.
+
+    **Geometric, because optical does not work here, and that is measured** --
+    see `render/probe_opacity.py`. Neither material transmission nor the
+    Principled BSDF's alpha moves the rendered pixels in the pinned image, and
+    decisively, the segmentation pass reports the body at full size at alpha 0
+    regardless, because cryptomatte tracks geometry. A body that faded only
+    visually would still be wholly present in `seg.npz`, so every mask and
+    observability window in the project would deny a violation the clip was
+    plainly showing. Shrinking dissolves it in the render *and* in the
+    annotation, which is the only version that can be labelled honestly.
+
+    Distinct from `immutability` in where it ends up: that one settles at a new,
+    smaller size and stays there, this one reaches nothing and is removed.
+    """
+
+    family = "dissolve"
+    persistent = True
+    #: Share of the clip the body takes to disappear. Slower is more legibly a
+    #: dissolve and less legibly a cut, and it scales with the tier.
+    FADE_BY_BIN = {"weak": 0.45, "medium": 0.28, "strong": 0.16}
+    FADE_MIN = 3
+    #: The size it reaches before being removed. Not zero: a body a hundredth of
+    #: its own width is already a speck, and the last few frames of shrinking add
+    #: nothing a viewer can see.
+    VANISH_AT = 0.08
+
+    def strong_residual_reference(self, spec) -> float:
+        return 1.0                       # all of it, gone
+
+    def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
+        targets = self._group(spec)
+        if not targets:
+            return None
+        T = traj.num_frames
+        t0 = _geom.default_event_frame(spec, T)
+        if t0 is None:
+            return None
+        fade = max(self.FADE_MIN,
+                   int(round(self.FADE_BY_BIN[severity_bin] * T)))
+        fade = max(1, min(fade, T - t0))
+        occ = spec.notes.get("occluded_frames") or []
+        return InterventionPlan(
+            family=self.family, kind="sustained", t_event=t0,
+            windows=[(t0, T - 1)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets],
+            params={"type": "dissolve_body", "fade_frames": int(fade),
+                    "vanish_at": self.VANISH_AT},
+            magnitude=1.0, magnitude_unit="mass_ratio_dissolved",
+            severity_bin=severity_bin,
+            notes={"radius": float(targets[0].bounding_radius),
+                   "surface_top": _geom.surface_top(spec, targets[0]),
+                   "fade_frames": int(fade),
+                   "sibling_ids": [int(b.segmentation_id) for b in targets],
+                   "occluded_at_event": bool(t0 in occ)})
+
+    def apply(self, spec, traj, plan) -> Trajectory:
+        out = self._clone(traj)
+        t0 = plan.t_event
+        T = traj.num_frames
+        n = min(int(plan.notes["fade_frames"]), T - t0)
+        floor = float(plan.params["vanish_at"])
+        u = (np.arange(n, dtype=np.float64) + 1.0) / n
+        shrink = np.maximum(1.0 - u * u * (3.0 - 2.0 * u), floor)
+
+        for bid in plan.causal_body_ids:
+            bi = traj.index_of(int(bid))
+            out.scale_mul[t0:t0 + n, bi, :] = shrink[:, None].astype(np.float32)
+            # It keeps resting on the surface as it shrinks rather than hanging
+            # at its old centre height, which would be a support violation
+            # smuggled into a dissolve.
+            top = float(plan.notes["surface_top"])
+            r_t = float(traj.radius[bi]) * shrink
+            grounded = traj.pos[t0:t0 + n, bi, 2].astype(np.float64)
+            out.pos[t0:t0 + n, bi, 2] = np.where(
+                grounded - float(traj.radius[bi]) <= top + 1e-3,
+                top + r_t, grounded).astype(np.float32)
+            self._sync_velocity(traj, out, bi, t0)
+            if t0 + n < T:
+                out.present[t0 + n:, bi] = False
+
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
+
+
 register(Permanence())
+register(Dissolve())
 register(Fusion())
 register(Immutability())
 register(Fission())

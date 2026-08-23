@@ -138,6 +138,7 @@ class Injector:
         out.ang_vel = traj.ang_vel.copy()
         out.present = traj.present.copy()
         out.scale_mul = traj.scale_mul.copy()
+        out.colour = traj.colour.copy()
         out.meta = dict(traj.meta)
         return out
 

@@ -173,16 +173,18 @@ def roll(spec, scenario=None) -> Trajectory:
         np.ones((n,), np.float32), np.zeros((n,), np.float32))
 
     present = np.ones((T, B), bool)
+    colour = np.zeros((T, B, 3), np.float32)
     for j, b in enumerate(bodies):
         if b.dormant:
             present[:, j] = False
+        colour[:, j, :] = np.asarray(b.color, np.float32)
 
     traj = Trajectory(
         body_ids=np.asarray(seg, np.int32),
         body_names=[b.name for b in bodies],
         pos=pos.astype(np.float32), quat=quat.astype(np.float32),
         lin_vel=lvel.astype(np.float32), ang_vel=avel.astype(np.float32),
-        present=present,
+        present=present, colour=colour,
         mass=np.asarray([b.mass for b in bodies], np.float32),
         radius=r.astype(np.float32),
         is_static=np.asarray([b.static for b in bodies], bool),
