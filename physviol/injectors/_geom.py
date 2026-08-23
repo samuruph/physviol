@@ -43,6 +43,24 @@ def top_of(spec, body) -> float:
     return float(body.position[2] + max(body.scale))
 
 
+def _over(surface, position, radius: float) -> bool:
+    """Is a body at `position` actually above this surface's footprint?
+
+    Height alone is not enough, and `granular_pour` is where that shows: its
+    box walls are tall thin slabs whose tops sit below the falling grains, so a
+    search that only compares heights decided a grain was being held up by a
+    wall standing half a metre to one side. The `penetration` residual is then
+    gated to frames the grain is over that wall -- which is never -- and a whole
+    pour dropping through the floor scored exactly zero.
+    """
+    if surface.kind != "cube":
+        return True                       # a dome or plane is under everything
+    cx, cy, _ = surface.position
+    hx, hy, _ = surface.scale
+    return (abs(float(position[0]) - float(cx)) <= float(hx) + radius
+            and abs(float(position[1]) - float(cy)) <= float(hy) + radius)
+
+
 def support_under(spec, body) -> Tuple[Optional[object], float]:
     """The static surface directly beneath `body`, and its top z.
 
@@ -56,6 +74,8 @@ def support_under(spec, body) -> Tuple[Optional[object], float]:
     best, best_top = None, None
     for other in spec.bodies:
         if other is body or not other.static:
+            continue
+        if not _over(other, body.position, body.bounding_radius):
             continue
         t = top_of(spec, other)
         if t <= lowest and (best_top is None or t > best_top):
@@ -327,8 +347,12 @@ def support_under_any(spec, body, traj=None, frame: int = 0):
     else:
         lowest = float(body.position[2]) - float(body.bounding_radius) + 1e-3
     best, best_top = None, None
+    ref = (traj.pos[frame, traj.index_of(int(body.segmentation_id))]
+           if traj is not None else body.position)
     for other in spec.bodies:
         if other is body or other.dormant:
+            continue
+        if not _over(other, ref, body.bounding_radius):
             continue
         if other.static:
             t = top_of(spec, other)
