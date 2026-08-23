@@ -30,7 +30,7 @@ Level 4  INSTANCE  scenario x family x seed x severity
 | medium | scenarios | status |
 |---|---|---|
 | `rigid` | 12 of the 15 | built |
-| `granular` | `granular_pour` | built — the fluid stand-in, never labelled fluid |
+| `granular` | `pour` | built — the fluid stand-in, never labelled fluid |
 | `optical` | `shadow_track` | built |
 | `fluid` | — | **Phase 3**: needs a Blender with working headless Mantaflow |
 | `continuum` | — | **Phase 3**: cloth and soft bodies, needs MuJoCo/MJX behind the seam |
@@ -51,7 +51,7 @@ reader having to infer it from absence.
 `deformation` and `shadow_shape` landed. Two more belong in v0, and both are mechanically
 cheap because the render path already animates what they need.
 
-### `colour_shift` — the object changes colour
+### `colour_shift` — the object changes colour — **BUILT**
 
 **Verified working in the pinned image.** `material.keyframe_insert("color", frame)` creates
 one fcurve per RGBA channel on the Principled BSDF's Base Colour, and the rendered pixels
@@ -80,7 +80,7 @@ moving the light moves the shadow, so the two must not be built on the same scen
 |---|---|
 | `texture_swap` | needs GSO assets, which arrive with the complexity ladder in v1 |
 | `reflection` | no scenario has a reflective surface, and adding one is a lighting project |
-| `transparency` | **measured and rejected** — see `render/probe_opacity.py`. Neither material transmission nor the Principled BSDF's alpha moves the rendered pixels, and the segmentation pass reports the body at full size at alpha 0 regardless, so no mask could see it |
+| `transparency` | **built** as the `dissolve` family, though it took three attempts. The first two probes concluded it was impossible; both were measuring the *floor*, because they never called `kb.adjust_segmentation_idxs`. Mixing a Transparent BSDF into the shader works cleanly — see `render/probe_opacity.py`, which keeps the mistake on record |
 
 ---
 
@@ -132,13 +132,21 @@ All three are per-seed, so `--variants N` picks them up without further work.
 
 ---
 
-## Suggested order
+## Where this stands
 
-1. **`colour_shift`** — the largest gap in v0's coverage, and the render path is proven
-2. **Medium as Level 0** — half a day, and it settles the prior-art comparison
-3. **`illumination_shift`** — completes the appearance domain
-4. **Population + multi-culprit** — the big structural piece
-5. **Complexity ladder L2–L4** — the realistic twin
-6. **Randomisation depth** — mostly falls out of 5
+**Done (v0 complete):** `colour_shift`, `deformation`, `shadow_shape`, `dissolve` (optical,
+via a Transparent BSDF mix), `fusion`, medium as Level 0, and the compatibility matrix
+derived from declared capabilities rather than written out by hand — 176 build cells across
+8 domains, 22 families and 15 scenarios.
 
-1–3 are v0 completion. 4–6 are v1.
+**Still open, in order:**
+
+1. **`illumination_shift`** — the scene's light changes with nothing to change it. Light
+   `color` and `intensity` are both keyframable traits, so the mechanism is proven; it needs
+   a `LightSpec` animation channel. Completes the appearance domain. Note it necessarily
+   co-moves with `shadow`, so the two must not share a scenario.
+2. **Population + multi-culprit** — the big structural piece (§3a).
+3. **Complexity ladder L2–L4** — the realistic twin (§3b).
+4. **Randomisation depth** — mostly falls out of 3 (§3c).
+
+1 is the last of v0. 2–4 are v1.

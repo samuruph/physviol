@@ -103,7 +103,7 @@ class AngularMomentum(Injector):
     Two ways a body can carry angular momentum, and the injector dispatches on
     which one the *scenario declares* -- never on the scenario's name:
 
-    * **Free body** (`spin_toss`, `rolling_ramp`): the body's own spin is
+    * **Free body** (`tumble`, `rolling_ramp`): the body's own spin is
       rescaled and the orientation re-integrated from there. Position is
       untouched, so the clip contains exactly one anomaly.
     * **Constrained body** (`spec.notes["constraint"] == "pivot"`): the whole

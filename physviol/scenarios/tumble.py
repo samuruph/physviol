@@ -1,4 +1,4 @@
-"""`spin_toss` -- a cube tumbling through the air, thrown with heavy spin.
+"""`tumble` -- a cube tumbling through the air, thrown with heavy spin.
 
 Exists because a *sphere* cannot show rotation. Uniformly coloured primitives
 are the v0 asset set, so a spinning ball is pixel-identical to a still one and
@@ -17,8 +17,8 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
 
-class SpinToss(Scenario):
-    name = "spin_toss"
+class Tumble(Scenario):
+    name = "tumble"
     SEG_FLOOR, SEG_CUBE, SEG_SPLIT = 1, 2, 4
 
     def _sample(self, seed: int, tier: Tier,
@@ -58,4 +58,4 @@ class SpinToss(Scenario):
                    "v0": [vx, 0.0, vz]})
 
 
-register(SpinToss())
+register(Tumble())

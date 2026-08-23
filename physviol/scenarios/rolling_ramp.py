@@ -6,7 +6,7 @@ first; `angular_momentum` needs the second, because a body in contact with the
 ground can change its spin lawfully and only a change made in mid-air is
 unexplained.
 
-A cube rather than a ball for the same reason `spin_toss` uses one: a uniformly
+A cube rather than a ball for the same reason `tumble` uses one: a uniformly
 coloured sphere renders identically however it is spinning.
 """
 from __future__ import annotations

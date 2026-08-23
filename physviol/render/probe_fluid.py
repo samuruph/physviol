@@ -15,7 +15,7 @@ starting point for a future attempt.
     operator that expects the job system, absent under `blender -b`.
 
 A future attempt should drive Mantaflow through its own Python bindings, or use a
-newer Blender. Until then fluid is Phase 3 and `granular_pour` is the v0 stand-in.
+newer Blender. Until then fluid is Phase 3 and `pour` is the v0 stand-in.
 See docs/PLAN.md Part 2, "On fluid and deformables".
 
 Run: bash docker/kubric.sh physviol/render/probe_fluid.py --res 32 --frames 25

@@ -11,12 +11,12 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 
 ```json
 {
-  "clip_uid": "physviol_v0/ball_collision/0173/invalid_solidity_a",
-  "pair_uid": "physviol_v0/ball_collision/0173",
-  "twin_uid": "physviol_v0/ball_collision/0173/valid",
+  "clip_uid": "physviol_v0/collision/0173/invalid_solidity_a",
+  "pair_uid": "physviol_v0/collision/0173",
+  "twin_uid": "physviol_v0/collision/0173/valid",
   "label": "invalid",
   "tier": "A", "release": "physviol_v0",
-  "domain": "contact", "family": "solidity", "scenario": "ball_collision", "seed": 91731,
+  "domain": "contact", "family": "solidity", "scenario": "collision", "seed": 91731,
   "intphys2_category": "solidity", "likephys_domain": "rigid_body",
   "fps": 12, "num_frames": 25, "resolution": [256, 256],
   "camera": {"intrinsics": [], "extrinsics_per_frame": [], "motion": "orbit"},
@@ -65,10 +65,10 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 |---|---|---|
 | `domain` | str | one of 7: `identity`, `kinematics`, `contact`, `dynamics`, `equilibrium`, `optical`, `global` |
 | `family` | str | one of 16, e.g. `solidity`, `non_parabolic`, `newton3_reaction` |
-| `scenario` | str | one of 13, e.g. `ball_collision`, `occluder_pass`, `granular_pour` |
+| `scenario` | str | one of 13, e.g. `collision`, `occluder_pass`, `pour` |
 | `complexity` | object | `{name, background, actor_assets, n_distractors, camera_motion, motion_blur}` -- the MOVi-style realism level (L0 solid .. L4 MOVi-F). Orthogonal to severity. |
 | `hdri_id` | str \| null | HDRI Haven environment id, from complexity L1 up |
-| `physics_medium` | `rigid` \| `granular` | `granular` for `granular_pour`. **Never `fluid` in v0** — see PLAN Part 2. Prevents a granular scenario being mistaken for an SPH benchmark. |
+| `physics_medium` | `rigid` \| `granular` | `granular` for `pour`. **Never `fluid` in v0** — see PLAN Part 2. Prevents a granular scenario being mistaken for an SPH benchmark. |
 | `intphys2_category` | str \| null | cross-reference; null is a claim of novelty |
 | `likephys_domain` | str \| null | cross-reference |
 
@@ -260,7 +260,7 @@ without re-simulating.
 7. every id in `causal_body_ids` appears in `seg.npz`; `newton3_reaction` has ≥ 2
 8. `spatial_extent == "global"` iff `family == "global_gravity"`
 9. `domain` matches `family`, and `(scenario, family)` is a `●` cell in `taxonomy.py`
-9b. `physics_medium == "granular"` iff `scenario == "granular_pour"`; `physics_medium` is
+9b. `physics_medium == "granular"` iff `scenario == "pour"`; `physics_medium` is
     never `"fluid"` at schema version 0
 10. every entry in `assets` carries a non-empty `license`
 11. `provenance.prefix_identical_verified` is true

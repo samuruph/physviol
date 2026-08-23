@@ -52,8 +52,8 @@ in — a bug found at Tier D is fixed for all three tiers.
 ### b. Small subset — every family, one scenario, or a slice of the matrix
 
 ```bash
-# every family that ball_drop supports (9 cells) -- one container run, one valid render
-python -m physviol.cli generate --debug --complexity L0 --scenario ball_drop --seed 777
+# every family that drop supports (9 cells) -- one container run, one valid render
+python -m physviol.cli generate --debug --complexity L0 --scenario drop --seed 777
 
 # one family everywhere it is meaningful
 python -m physviol.cli generate --debug --complexity L0 --family solidity --seed 777
@@ -94,7 +94,7 @@ bit-identical by construction, so rendering it once is both correct and cheaper.
 **`--variants N` is the randomisation knob.** Each variant is a fresh seed, and a seed drives
 every free parameter a scenario has: sizes, speeds, drop heights, restitution, colours, the
 HDRI environment at L1, the camera position and aim, the lamp direction, and — where it is
-physically neutral — whether the actor is a sphere or a cube. So six variants of `ball_drop ×
+physically neutral — whether the actor is a sphere or a cube. So six variants of `drop ×
 solidity` are six visibly different clips of the same violation, not one clip with a
 different random number in the filename.
 
@@ -104,7 +104,7 @@ Use `--variants 1` while debugging and `--variants 5`–`8` for a release.
 Split by scenario, since one worker run covers all families of one scenario anyway:
 
 ```bash
-for s in ball_drop projectile_toss occluder_pass ball_collision; do
+for s in drop toss occluder_pass collision; do
   python -m physviol.cli generate --tier A --complexity L1 --variants 6 \
       --scenario "$s" --seed 100000 --outdir out/physviol_v0 &
 done; wait
@@ -119,10 +119,10 @@ mp4 is encoded host-side by `physviol/viz/video.py`.
 
 ```bash
 # five-panel annotated video for ONE clip
-python -m physviol.cli overlay out/release/clips/physviol_v0/ball_drop/0777/invalid_solidity_strong
+python -m physviol.cli overlay out/release/clips/physviol_v0/drop/0777/invalid_solidity_strong
 
 # the valid clip beside every severity bin of one family
-python -m physviol.cli grid out/release/clips/physviol_v0/ball_drop/0777 --family solidity
+python -m physviol.cli grid out/release/clips/physviol_v0/drop/0777 --family solidity
 
 # ONE video tiling every invalid clip in the release -- the coverage check
 python -m physviol.cli coverage out/release
@@ -158,17 +158,17 @@ python -m physviol.cli taxonomy
 python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
 
 # Generate (see section 2 for the flags that matter)
-python -m physviol.cli generate --debug --complexity L0 --scenario ball_drop
+python -m physviol.cli generate --debug --complexity L0 --scenario drop
 #   --tier D|A|B      --complexity L0|L1     --severity weak|medium|strong|all
 #   --variants N      --window N             --scenario X   --family Y
 #   -n / --limit N    --keep-going           --no-overlay   --outdir / --workdir
 
 # Re-annotate an existing worker output without re-rendering
-python -m physviol.cli annotate out/work/ball_drop/0777 --outdir out/release
+python -m physviol.cli annotate out/work/drop/0777 --outdir out/release
 
 # Rebuild one overlay / one grid / the coverage tiling
 python -m physviol.cli overlay out/release/clips/.../invalid_solidity_strong
-python -m physviol.cli grid    out/release/clips/physviol_v0/ball_drop/0777 --family solidity
+python -m physviol.cli grid    out/release/clips/physviol_v0/drop/0777 --family solidity
 python -m physviol.cli coverage out/release
 
 # Schema + cross-checks over a whole release (13 structural checks)
@@ -188,7 +188,7 @@ bash docker/kubric.sh physviol/render/worker_smoke.py --resolution 256 --frames 
 # the real worker: simulate + inject + render both twins.
 # --family takes a comma list; they share one scene build and one valid render.
 bash docker/kubric.sh physviol/render/worker.py \
-    --scenario ball_drop --seed 777 --tier D --complexity L0 \
+    --scenario drop --seed 777 --tier D --complexity L0 \
     --family solidity,antigravity --severity strong --outdir out/work
 ```
 
@@ -242,17 +242,17 @@ Four levels — `python -m physviol.cli taxonomy` prints the live version:
 DOMAIN     7   which physical law is at stake      identity, kinematics, contact,
                                                    dynamics, equilibrium, optical, global
 FAMILY    17   the specific way it breaks          solidity, fission, newton3_reaction, ...
-SCENARIO  14   the staged scene                    ball_drop, occluder_pass, granular_pour, ...
+SCENARIO  14   the staged scene                    drop, occluder_pass, pour, ...
                (13 built; clutter_toss is deferred)
 INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 ```
 
 | scenario | what it stages | why it is in the set |
 |---|---|---|
-| `ball_drop` | sphere or cube falls and bounces | simplest scenario with a real contact instant |
-| `ball_collision` | two spheres roll together | two bodies that both *ought* to respond |
-| `projectile_toss` | ballistic arc, no contact | the clean control: `t_event == t_observable` |
-| `spin_toss` | cube tumbling in free flight | a sphere cannot show rotation |
+| `drop` | sphere or cube falls and bounces | simplest scenario with a real contact instant |
+| `collision` | two spheres roll together | two bodies that both *ought* to respond |
+| `toss` | ballistic arc, no contact | the clean control: `t_event == t_observable` |
+| `tumble` | cube tumbling in free flight | a sphere cannot show rotation |
 | `occluder_pass` | body passes behind a screen | the only source of observability lag |
 | `ramp_slide` | block slides down an incline | sustained contact + friction |
 | `rolling_ramp` | cube tumbles off a raised ramp | contact, then a short free flight |
@@ -261,7 +261,7 @@ INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 | `pendulum_swing` | bob on a rigid rod | constrained periodic motion (scripted; Kubric has no joints) |
 | `resting_table` | bodies at rest on a table | static equilibrium; any motion is the violation |
 | `shadow_track` | object translating under a key light | the only violation whose mask is not on the object |
-| `granular_pour` | 40 grains falling into an open box | **granular, never "fluid"** — see below |
+| `pour` | 40 grains falling into an open box | **granular, never "fluid"** — see below |
 
 Two orthogonal augmentation axes:
 
@@ -292,7 +292,7 @@ pendulum arc rather than knowing what a pendulum is.
 Tested rather than assumed: Blender 2.93.4 in the pinned image ships Mantaflow, but headless
 scripted baking fails (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no
 fluid object, and a liquid's per-frame mesh state does not fit a pose-based trajectory seam.
-`granular_pour` is the v0 stand-in — a few dozen rigid grains that stream, pile and break up —
+`pour` is the v0 stand-in — a few dozen rigid grains that stream, pile and break up —
 and it is labelled `physics_medium: "granular"`. `physviol validate` rejects any clip
 claiming `"fluid"`. Real fluid and cloth are **Phase 3**, behind a newer Blender.
 

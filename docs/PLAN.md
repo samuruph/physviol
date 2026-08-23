@@ -464,7 +464,7 @@ reproduces pouring, splashing-ish spreading and stream break-up — using the ri
 machinery we already have, so it keeps the seam, keeps exact per-body residuals, and keeps
 exact masks. It covers a real subset of LikePhys's fluid *violations* (mass created or
 removed, antigravity flow, stream fragmenting into disconnected clumps) with none of the
-solver risk. It ships as the `granular_pour` scenario below and is **labelled honestly as
+solver risk. It ships as the `pour` scenario below and is **labelled honestly as
 granular flow, not fluid** — the schema records `physics_medium: "granular"`, so nobody can
 mistake it for an SPH benchmark.
 
@@ -510,11 +510,11 @@ plus a granular stand-in for the fluid domain.
 
 | scenario | the scene | event structure it guarantees | occluder? | grounded in |
 |---|---|---|---|---|
-| `ball_drop` | sphere falls to a floor and bounces | free fall → contact → rebound | optional | LikePhys *Ball Drop* |
-| `ball_collision` | two spheres roll toward each other | approach → collision → separation | no | LikePhys *Ball Collision* |
+| `drop` | sphere falls to a floor and bounces | free fall → contact → rebound | optional | LikePhys *Ball Drop* |
+| `collision` | two spheres roll toward each other | approach → collision → separation | no | LikePhys *Ball Collision* |
 | `ramp_slide` | block slides down an incline | sustained contact + friction | no | LikePhys *Block Slide* |
-| `projectile_toss` | body thrown on a ballistic arc | pure free flight, no contact | no | new — parabola control |
-| `spin_toss` | cube tumbling in the air, thrown with heavy spin | free flight with visible rotation | no | new — a uniformly coloured sphere cannot show spin |
+| `toss` | body thrown on a ballistic arc | pure free flight, no contact | no | new — parabola control |
+| `tumble` | cube tumbling in the air, thrown with heavy spin | free flight with visible rotation | no | new — a uniformly coloured sphere cannot show spin |
 | `occluder_pass` | body travels behind a screen and re-emerges | occlusion interval of known length | **yes** | IntPhys 2 occlusion |
 | `stack_topple` | stacked bodies, marginally stable | static equilibrium → topple | no | IntPhys 2 / LikePhys |
 | `pyramid_impact` | cube dropped onto a sphere pyramid | multi-body contact chain | no | LikePhys *Pyramid Impact* |
@@ -523,7 +523,7 @@ plus a granular stand-in for the fluid domain.
 | `rolling_ramp` | cube tumbles down a raised ramp and off its lip | rolling contact, then a short free flight | no | new |
 | `shadow_track` | object translates under a fixed light | a clean, trackable cast shadow | no | LikePhys *Moving Shadow* |
 | `clutter_toss` | MOVi-style multi-object toss | dense collisions, heavy occlusion | implicit | MOVi baseline |
-| `granular_pour` | a loose column of grains falls into an open box (40 at Tier D, 96 above) | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
+| `pour` | a loose column of grains falls into an open box (40 at Tier D, 96 above) | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
 
 ### Which families can be injected into which scenarios
 
@@ -556,7 +556,7 @@ the authoritative list is `taxonomy.build_cells()`). At ~6 randomisations each �
 sizes, speeds, colours, camera, environment map and, where physically neutral, actor shape —
 that is ~288 pairs / 576 clips, the Phase 2 target, arrived at from the matrix rather than
 picked as a round number.
-`granular_pour` contributes the two cells (`antigravity`, `global_gravity`) that read most
+`pour` contributes the two cells (`antigravity`, `global_gravity`) that read most
 like LikePhys's fluid violations while staying inside exact rigid-body physics.
 
 ### How much code this actually takes
@@ -572,7 +572,7 @@ scene produced it.
 | injector files | **6** | one per *domain*, holding all its families, plus a shared `_geom.py` |
 | per-combination files | **0** | the compatibility matrix selects the 48 meaningful cells |
 
-**19 files, not 238.** `antigravity` written once runs on `ball_drop`, `projectile_toss` and
+**19 files, not 238.** `antigravity` written once runs on `drop`, `toss` and
 `occluder_pass` unchanged; `permanence` written once works anywhere there is an actor. Adding
 a scenario makes every compatible family available in it for free, and vice versa — which is
 the practical payoff of decoupling dynamics from rendering, beyond the twin-identity property
@@ -586,13 +586,13 @@ one `valid` clip and one `invalid` twin, rendered through a bit-identical path.
 ```
 clip_uid  =  physviol_v0/<scenario>/<seed:04d>/<label>[_<family>][_<variant>]
 
-  physviol_v0/ball_collision/0173/valid
-  physviol_v0/ball_collision/0173/invalid_solidity_a
+  physviol_v0/collision/0173/valid
+  physviol_v0/collision/0173/invalid_solidity_a
   ^^^^^^^^^^^ ^^^^^^^^^^^^^^ ^^^^ ^^^^^^^^^^^^^^^^^
    release      scenario      seed  label + family + variant
 ```
 
-`pair_uid` is `physviol_v0/ball_collision/0173` and is the **leakage-free grouping key** —
+`pair_uid` is `physviol_v0/collision/0173` and is the **leakage-free grouping key** —
 never split a pair, or a scenario, across train/val/test.
 
 **Two control families, labelled `valid`, that are not violations:**
@@ -809,7 +809,7 @@ profile — e.g. `0.13 → 0.40 → 0.40 → 0.13 → 0` for the medium bin.
    clearance allowance scaled by `|v_z| · dt` since the contact happens between samples.
    Guarded by `test_bounce_gate_does_not_eat_the_antigravity_signal`.
 
-#### Worked example, end to end — `antigravity` on `ball_drop`
+#### Worked example, end to end — `antigravity` on `drop`
 
 Every number below is either chosen by us or computed from `traj.npz`. Nothing comes from
 pixels.
@@ -821,7 +821,7 @@ pixels.
 | **inject** | `violation_windows` | `[[9, 24]]` | frames the injector applies `g → αg` to body 3 |
 | **simulate** | acceleration `a(3,t)` | `≈ 0.3·g` | second difference of `pos[t,3]` from `traj.npz` |
 | **measure** | residual `r(3,t)` | `‖a − g‖/‖g‖ = 0.70` | the free-fall law from §1.2 |
-| **calibrate** | noise floor `μ, σ` | `0.004, 0.002` | over the *valid* arm of `ball_drop` |
+| **calibrate** | noise floor `μ, σ` | `0.004, 0.002` | over the *valid* arm of `drop` |
 | **normalise** | `z(3,t)` | `(0.70 − 0.004)/0.002 = 348` | z-score vs that floor |
 | **bound** | `z_ref(antigravity)` | `498` | the z of the `strong` bin (`α = 0`, so `r = 1.0`) |
 | **bound** | `s(3,t)` | `clip(348/498, 0, 1) = 0.70` | the trainable score |
@@ -927,7 +927,7 @@ plumbing or the render path has drifted and every downstream annotation is suspe
    `segmentation_id` is honoured only if you run `kb.adjust_segmentation_idxs()` afterwards
    (as `movi_def_worker.py` does). Skip it and instances are relabelled whenever declaration
    order differs from insertion order — which mislabels every mask, residual and severity
-   value downstream while still looking entirely plausible. `ball_drop` happened to be
+   value downstream while still looking entirely plausible. `drop` happened to be
    immune because its declaration order matched; `occluder_pass` swapped actor and occluder.
    Guarded by `test_segmentation_ids_match_what_the_scenario_declared`.
 2. **"Occluded" must mean *fully* occluded.** A geometric occlusion test that allows a few
@@ -983,7 +983,7 @@ physviol/
   context/         source papers, gitignored; see context/README.md
   physviol/
     taxonomy.py    DOMAINS, FAMILIES, SCENARIOS, COMPATIBILITY — Part 2 as data
-    scenarios/     ball_drop.py  ball_collision.py  ramp_slide.py  projectile_toss.py
+    scenarios/     drop.py  collision.py  ramp_slide.py  toss.py
                    occluder_pass.py  stack_topple.py  pyramid_impact.py  pendulum_swing.py
                    resting_table.py  rolling_ramp.py  shadow_track.py  clutter_toss.py
     sim/           backend.py (ABC)  pybullet_backend.py  [mjx_backend.py — Phase 3]
@@ -1006,7 +1006,7 @@ physviol/
 
 ## Part 5 — Phasing
 
-**Phase 0 — two clips (days 1-3). — BUILT.** `ball_drop` × `solidity`, all three severity
+**Phase 0 — two clips (days 1-3). — BUILT.** `drop` × `solidity`, all three severity
 bins, end to end: sample → simulate → inject → render both twins → annotate → overlay →
 validate. ~16.7 s per pair at Tier D including annotation and video encoding. Prefix identity
 holds exactly; `physviol validate` is clean; 21 tests pass. Remaining Phase 0 item: produce

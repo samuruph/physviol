@@ -1,4 +1,4 @@
-"""`granular_pour` -- a loose column of small spheres falls into an open box.
+"""`pour` -- a loose column of small spheres falls into an open box.
 
 **This is not a fluid and must never be labelled one.** True liquid was tested
 against the pinned image and does not work: Blender 2.93.4 ships Mantaflow but
@@ -24,8 +24,8 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 SEG_GRAIN_BASE = 16
 
 
-class GranularPour(Scenario):
-    name = "granular_pour"
+class Pour(Scenario):
+    name = "pour"
     SEG_FLOOR = 1
     SEG_WALLS = (3, 4, 5, 6)
 
@@ -96,4 +96,4 @@ class GranularPour(Scenario):
                    "group_fraction": 1.0})
 
 
-register(GranularPour())
+register(Pour())

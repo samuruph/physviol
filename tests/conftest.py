@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORK_CANDIDATES = ["out/sev_medium/ball_drop/91731", "out/work/ball_drop/91731"]
+WORK_CANDIDATES = ["out/sev_medium/drop/91731", "out/work/drop/91731"]
 RELEASE_CANDIDATES = ["out/release_medium", "out/release"]
 
 

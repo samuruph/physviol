@@ -24,7 +24,7 @@ beyond `physviol/render/worker_smoke.py`.
   not 238. `taxonomy.COMPATIBILITY` selects the 48 meaningful cells.
 - **No fluid in v0.** Tested: Blender 2.93.4 has Mantaflow but headless baking fails
   (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a
-  liquid does not fit the pose-based seam. `granular_pour` (~200 rigid spheres) is the v0
+  liquid does not fit the pose-based seam. `pour` (~200 rigid spheres) is the v0
   stand-in and is labelled `physics_medium: "granular"` — never call it fluid. True fluid and
   cloth are Phase 3.
 - **CPU rendering, upstream image, unchanged.** GPU/OptiX caps at ~1.37× (only 26% of frame

@@ -45,7 +45,7 @@ def validate_clip(cdir: str) -> List[str]:
     pm = m.get("physics_medium")
     if pm == "fluid":
         bad("physics_medium 'fluid' is not permitted at schema v0")
-    if (pm == "granular") != (m.get("scenario") == "granular_pour"):
+    if (pm == "granular") != (m.get("scenario") == "pour"):
         bad("physics_medium %r inconsistent with scenario %r"
             % (pm, m.get("scenario")))
     # 10. every asset carries a licence
@@ -148,7 +148,7 @@ def validate_clip(cdir: str) -> List[str]:
     #
     # Deliberately checked against the *declared* assets rather than against
     # the pixels in seg.npz. A causal body can be invisible for the whole clip
-    # and still be a genuine participant: seven of `granular_pour`'s forty
+    # and still be a genuine participant: seven of `pour`'s forty
     # grains never show a pixel from that camera, and a vanished body has no
     # pixels precisely because it vanished. Requiring each one to be rendered
     # would fail exactly the cases the union rule and the observability lag

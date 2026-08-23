@@ -18,7 +18,7 @@ import numpy as np
 # ----------------------------------------------------------------- bodies --
 def actors(spec) -> List:
     """Every body a violation may act on. Several scenarios have more than one
-    (`ball_collision`, `granular_pour`), which is why this is a list."""
+    (`collision`, `pour`), which is why this is a list."""
     return [b for b in spec.bodies if b.role == "actor"]
 
 
@@ -46,7 +46,7 @@ def top_of(spec, body) -> float:
 def _over(surface, position, radius: float) -> bool:
     """Is a body at `position` actually above this surface's footprint?
 
-    Height alone is not enough, and `granular_pour` is where that shows: its
+    Height alone is not enough, and `pour` is where that shows: its
     box walls are tall thin slabs whose tops sit below the falling grains, so a
     search that only compares heights decided a grain was being held up by a
     wall standing half a metre to one side. The `penetration` residual is then
@@ -310,7 +310,7 @@ def longest_airborne_run(traj, bi: int, top: float) -> Optional[Tuple[int, int]]
     """The longest stretch of frames where body `bi` is off the surface.
 
     Families that bend free flight have to fire *inside* free flight. Picking a
-    fixed fraction of the clip instead lands `ball_drop` mid-bounce as often as
+    fixed fraction of the clip instead lands `drop` mid-bounce as often as
     not, and a parabola fitted across a bounce is not a parabola.
     """
     air = airborne(traj, bi, top)

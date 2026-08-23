@@ -101,7 +101,7 @@ Optical Consistency, Material Response.
 | skipped | why |
 |---|---|
 | **Continuum** (Cloth Drape, Cloth Waving) | PyBullet exposes only `loadSoftBody`/`createSoftBodyAnchor` and Kubric wraps neither; no trustworthy per-element residual at v0. Deferred to **Phase 3** with the MuJoCo/MJX backend. |
-| **Fluid** (Droplet Fall, Faucet Flow, River Flow) | **Tested, not assumed.** Blender 2.93.4 in our image *does* ship Mantaflow, but headless scripted baking fails (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a liquid's per-frame mesh state does not fit the pose-based seam. Partially substituted at v0 by the **`granular_pour`** scenario — a few dozen rigid grains, honestly labelled `physics_medium: "granular"`. True fluid is **Phase 3**. See PLAN Part 2. |
+| **Fluid** (Droplet Fall, Faucet Flow, River Flow) | **Tested, not assumed.** Blender 2.93.4 in our image *does* ship Mantaflow, but headless scripted baking fails (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a liquid's per-frame mesh state does not fit the pose-based seam. Partially substituted at v0 by the **`pour`** scenario — a few dozen rigid grains, honestly labelled `physics_medium: "granular"`. True fluid is **Phase 3**. See PLAN Part 2. |
 | **Temporal disorder** (frame shuffling / jump cuts) | Used by nearly every LikePhys scenario, and we intentionally omit it: it is an *encoding* artifact, not a physics violation. It has no law residual, and including it would reward exactly the shortcut detection our artifact-probe control exists to catch. |
 
 ### What this table is claiming

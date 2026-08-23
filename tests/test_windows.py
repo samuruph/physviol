@@ -96,7 +96,7 @@ def test_carry_to_visible_is_the_identity_when_nothing_is_hidden():
 def test_evidence_after_the_window_still_gets_annotated():
     """A violation whose consequence only shows up once the window has closed.
 
-    `ball_collision x superelastic` adds its energy over two frames and the
+    `collision x superelastic` adds its energy over two frames and the
     body has not visibly moved by the time the window shuts, so gating strictly
     on `active AND observable` left the clip with an empty mask and an
     all-zero severity field -- internally consistent and useless. The severity

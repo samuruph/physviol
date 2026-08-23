@@ -1,4 +1,4 @@
-"""`ball_collision` -- a rolling sphere strikes an identical one at rest.
+"""`collision` -- a rolling sphere strikes an identical one at rest.
 
 The only scenario in v0 with **two bodies that both ought to respond**, which is
 what `newton3_reaction` and `newton2_mass` need: a violation where only one body
@@ -13,8 +13,8 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
 
-class BallCollision(Scenario):
-    name = "ball_collision"
+class Collision(Scenario):
+    name = "collision"
     SEG_FLOOR, SEG_A, SEG_B, SEG_SPLIT = 1, 2, 4, 6
 
     def _sample(self, seed: int, tier: Tier,
@@ -76,4 +76,4 @@ class BallCollision(Scenario):
                    "striker_id": self.SEG_A, "target_id": self.SEG_B})
 
 
-register(BallCollision())
+register(Collision())

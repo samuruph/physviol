@@ -68,7 +68,7 @@ Every one of these can be crossed with the family axis, which is the point of th
 | **complexity** | `L0` / `L1` | How hard the *scene* is to parse, with the physics held fixed. L0 is a solid background, L1 a photographic HDRI environment. Separates "understands physics" from "copes with clutter". |
 | **observability lag** | 0, or 1–2 frames | `t_observable − t_event`: how long the violation is real before it is visible. Non-zero only where something occludes the culprit. This is the axis for "can the model reason about what it cannot currently see". |
 | **population** | `single` / `multi` | How many independent movers. *Not yet built* — see the roadmap. |
-| **physics medium** | `rigid` / `granular` | `granular_pour` only. Never `fluid` at schema v0. |
+| **physics medium** | `rigid` / `granular` | `pour` only. Never `fluid` at schema v0. |
 
 **Split by `scene_id`, never by clip.** A scenario+seed produces one valid render and several
 invalid twins that share it frame-for-frame before `t_event`. Putting one twin in train and

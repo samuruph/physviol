@@ -3,7 +3,7 @@
     conda activate physviol
     python -m physviol.cli taxonomy
     python -m physviol.cli generate --debug -n 2
-    python -m physviol.cli annotate out/work/ball_drop/0173
+    python -m physviol.cli annotate out/work/drop/0173
     python -m physviol.cli overlay out/release/clips/.../invalid_solidity_a
     python -m physviol.cli validate out/release
 

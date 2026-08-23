@@ -1,4 +1,4 @@
-"""`ball_drop` -- a sphere falls to a floor and bounces.
+"""`drop` -- a sphere falls to a floor and bounces.
 
 Event structure: free fall -> contact -> rebound. The simplest scenario that
 still has a well-defined contact instant, which is what `solidity`,
@@ -12,8 +12,8 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
 
-class BallDrop(Scenario):
-    name = "ball_drop"
+class Drop(Scenario):
+    name = "drop"
 
     # Segmentation ids are fixed per role so downstream annotation never has to
     # guess which instance is the actor.
@@ -40,7 +40,7 @@ class BallDrop(Scenario):
         floor = C.ground(cx, self.SEG_FLOOR)
 
         # Sphere or cube: both fall and bounce, so the shape is free to vary
-        # and two instances of ball_drop do not look like one clip twice.
+        # and two instances of drop do not look like one clip twice.
         kind = "sphere" if rng.rand() < 0.6 else "cube"
         ball = BodySpec(
             name="ball", kind=kind, position=(0.0, 0.0, drop_height),
@@ -59,4 +59,4 @@ class BallDrop(Scenario):
         )
 
 
-register(BallDrop())
+register(Drop())

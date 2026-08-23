@@ -11,6 +11,34 @@ from __future__ import annotations
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 # --------------------------------------------------------------------------
+# Level 0 -- medium: what kind of matter is misbehaving
+# --------------------------------------------------------------------------
+# The macro-category, and the axis that lines up with LikePhys's four domains.
+# It is *not* a competing scheme to `DOMAINS` -- the two are independent
+# groupings of the same cells, and both are worth reporting:
+#
+#   medium  answers "what kind of matter", which is a capability question --
+#           does this model handle deformables at all?
+#   domain  answers "which principle broke", which is what severity is
+#           measured against, since the domain picks the residual.
+#
+# The two empty rows are deliberate. Declaring `fluid` and `continuum` as
+# known-empty says what the dataset does not cover; omitting them would leave a
+# reader to infer it from absence.
+MEDIA: Dict[str, str] = {
+    "rigid":     "solid bodies that keep their shape",
+    "granular":  "many small bodies behaving as a medium -- the v0 stand-in "
+                 "for fluid, and never labelled as one",
+    "optical":   "light and shadow rather than matter",
+    "fluid":     "Phase 3 -- needs a Blender with working headless Mantaflow",
+    "continuum": "Phase 3 -- cloth and soft bodies, behind a MuJoCo/MJX backend",
+}
+
+#: Media that no scenario stages yet. Named so the gap is legible.
+EMPTY_MEDIA: Tuple[str, ...] = ("fluid", "continuum")
+
+
+# --------------------------------------------------------------------------
 # Level 1 -- domains: which physical law is at stake
 # --------------------------------------------------------------------------
 DOMAINS: Dict[str, str] = {
@@ -177,7 +205,7 @@ class Scenario(NamedTuple):
     description: str
     event_structure: str
     has_occluder: bool
-    physics_medium: str  # rigid | granular  (never "fluid" at schema v0)
+    physics_medium: str  # a key of MEDIA; never "fluid" at schema v0
     grounded_in: Optional[str]
     #: Which of the CAPABILITIES this scene actually offers. Declared once here
     #: rather than implied by a hand-written matrix row.
@@ -185,11 +213,11 @@ class Scenario(NamedTuple):
 
 
 SCENARIOS: Dict[str, Scenario] = {
-    "ball_drop": Scenario(
+    "drop": Scenario(
         "sphere or cube falls to a floor and bounces",
         "free fall -> contact -> rebound", False, "rigid", "LikePhys Ball Drop",
         provides=('actor', 'flight', 'contact', 'impact', 'spin', 'understudy')),
-    "ball_collision": Scenario(
+    "collision": Scenario(
         "two spheres roll toward each other",
         "approach -> collision -> separation", False, "rigid", "LikePhys Ball Collision",
         provides=('actor', 'contact', 'impact', 'identical_pair', 'multi_body',
@@ -198,11 +226,11 @@ SCENARIOS: Dict[str, Scenario] = {
         "block slides down an incline",
         "sustained contact + friction", False, "rigid", "LikePhys Block Slide",
         provides=('actor', 'contact', 'sliding', 'understudy')),
-    "projectile_toss": Scenario(
+    "toss": Scenario(
         "body thrown on a ballistic arc",
         "pure free flight, no contact", False, "rigid", None,
         provides=('actor', 'flight', 'spin', 'understudy')),
-    "spin_toss": Scenario(
+    "tumble": Scenario(
         "cube tumbling through the air, thrown with heavy spin",
         "free flight with visible rotation", False, "rigid", None,
         provides=('actor', 'flight', 'spin', 'understudy')),
@@ -236,13 +264,13 @@ SCENARIOS: Dict[str, Scenario] = {
         provides=('actor', 'contact', 'sliding', 'flight', 'spin', 'understudy')),
     "shadow_track": Scenario(
         "object translates under a fixed light",
-        "a clean, trackable cast shadow", False, "rigid", "LikePhys Moving Shadow",
+        "a clean, trackable cast shadow", False, "optical", "LikePhys Moving Shadow",
         provides=('actor', 'cast_shadow')),
     "clutter_toss": Scenario(
         "MOVi-style multi-object toss",
         "dense collisions, heavy occlusion", True, "rigid", "MOVi baseline",
         provides=('actor', 'flight', 'contact', 'impact', 'multi_body')),
-    "granular_pour": Scenario(
+    "pour": Scenario(
         "a loose column of grains falls into an open box (40 at Tier D, 96 above)",
         "streaming flow, accumulation, break-up", False, "granular",
         "LikePhys Faucet Flow (as granular, not fluid)",
@@ -268,7 +296,7 @@ NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
         "the only surface is the floor, so the violation sank the ball into the "
         "ground while it was hidden and read as a vanish -- which is what "
         "permanence does on the same scenario. `barrier_pass` stages it instead",
-    ("fission", "granular_pour"):
+    ("fission", "pour"):
         "forty grains already; splitting one more is not a legible change in "
         "object count",
     ("fusion", "clutter_toss"):
@@ -391,3 +419,17 @@ def validate_taxonomy() -> None:
             assert status in (BUILD, DEFER), "%s/%s: %s" % (family, scenario, status)
     missing = set(FAMILIES) - set(COMPATIBILITY)
     assert not missing, "families with no scenarios: %s" % sorted(missing)
+    for name, sc in SCENARIOS.items():
+        assert sc.physics_medium in MEDIA, "%s: unknown medium %s" % (
+            name, sc.physics_medium)
+        assert sc.physics_medium not in EMPTY_MEDIA, (
+            "%s claims medium %r, which schema v0 does not stage"
+            % (name, sc.physics_medium))
+        for cap in sc.provides:
+            assert cap in CAPABILITIES, "%s: unknown capability %s" % (name, cap)
+    for name, fam in FAMILIES.items():
+        for cap in fam.requires:
+            assert cap in CAPABILITIES, "%s: unknown capability %s" % (name, cap)
+    for (fam, scen) in NOT_MEANINGFUL:
+        assert fam in FAMILIES, fam
+        assert scen in SCENARIOS, scen

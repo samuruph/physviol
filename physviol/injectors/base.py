@@ -165,7 +165,7 @@ class Injector:
         `notes["family_targets"]`, which is how a scene says something about
         itself that the injector could not work out: `pyramid_impact` points
         `solidity` at a struck sphere rather than the falling cube, and
-        `granular_pour` points every single-grain family at the grains that
+        `pour` points every single-grain family at the grains that
         start highest, because any other grain spends the clip buried and its
         violation would be perfectly scored and completely invisible.
 
@@ -191,7 +191,7 @@ class Injector:
         families that can act on a set do.
 
         Two ways a scenario can ask. `family_targets[family]` names the bodies
-        outright, which is how `granular_pour` steers single-body families onto
+        outright, which is how `pour` steers single-body families onto
         the grains that end up on top of the pile rather than buried in it.
         `group_fraction` asks for a share of the actors, chosen per scene so the
         three severity bins act on the same bodies.
@@ -297,7 +297,7 @@ class Injector:
 
         A frame counts as lost when fewer than `visible_fraction` of the culprit
         bodies are inside the frustum, so one grain of forty drifting out of a
-        `granular_pour` is not treated the same as the whole pour leaving.
+        `pour` is not treated the same as the whole pour leaving.
         """
         idx = [traj.index_of(int(b.segmentation_id)) for b in bodies]
         if not idx:

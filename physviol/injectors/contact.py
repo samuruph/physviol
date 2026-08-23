@@ -846,7 +846,7 @@ class Newton2Mass(_CollisionEdit):
 
     That makes it the family most dependent on its valid twin -- "that ball
     barely moved" is not evidence of anything on its own -- and it is why
-    `ball_collision` samples both balls with the same radius and the same
+    `collision` samples both balls with the same radius and the same
     colour. It is also why the family is not offered on `pyramid_impact`: a cube
     and a sphere are plainly different objects, so "the cube is heavy" is a
     lawful reading and there is no violation left to see.

@@ -1,4 +1,4 @@
-"""`projectile_toss` -- a body thrown on a ballistic arc.
+"""`toss` -- a body thrown on a ballistic arc.
 
 Pure free flight, no contact for the whole clip. This is the **clean control**
 of docs/PLAN.md Part 2: nothing occludes the actor, so `t_event` and
@@ -13,8 +13,8 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
 
 
-class ProjectileToss(Scenario):
-    name = "projectile_toss"
+class Toss(Scenario):
+    name = "toss"
     SEG_FLOOR, SEG_BALL, SEG_SPLIT = 1, 2, 4
 
     def _sample(self, seed: int, tier: Tier,
@@ -54,4 +54,4 @@ class ProjectileToss(Scenario):
                    "flight_seconds": flight, "actor_kind": kind})
 
 
-register(ProjectileToss())
+register(Toss())

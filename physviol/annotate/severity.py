@@ -50,7 +50,7 @@ class NoiseFloor:
         carries -- solver error, finite-difference noise -- so it has to survive
         rare enormous spikes, and lawful clips are full of them. Kubric reports
         a contact force rather than an impulse, so the momentum balance never
-        closes on a real landing: a perfectly legal `ball_drop` reads 208 on the
+        closes on a real landing: a perfectly legal `drop` reads 208 on the
         frame it hits the floor. Averaged in, that put mu at 20.9 against a
         family reference of 5.5 -- a negative denominator -- and a clean
         phantom-impulse signal of 5.4 scored as exactly zero.
@@ -84,7 +84,7 @@ def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float,
     residual is not stationary -- which is most of them.
 
     Three separate families shipped with a severity of exactly zero before this
-    was per-frame. The clearest: a `ball_drop` twin is airborne for half the
+    was per-frame. The clearest: a `drop` twin is airborne for half the
     clip and resting on the floor for the rest, and Kubric reports a contact
     *force* rather than an impulse, so its momentum residual is 0 while falling
     and about 20 while resting. No single scalar describes that. The median came

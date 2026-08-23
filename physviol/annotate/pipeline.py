@@ -4,7 +4,7 @@ Reads what the container worker produced (traj_*.npz, passes_*.npz, plan.json)
 and writes the released clip layout of docs/PLAN.md Part 4.
 
     conda activate physviol
-    python -m physviol.cli annotate out/phase0/ball_drop/0173
+    python -m physviol.cli annotate out/phase0/drop/0173
 """
 from __future__ import annotations
 
@@ -319,6 +319,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         "domain": domain_of(family), "family": family,
         "scenario": scenario, "seed": seed,
         "physics_medium": SCENARIOS[scenario].physics_medium,
+        "medium": SCENARIOS[scenario].physics_medium,
         "complexity": spec_d.get("complexity", {}),
         "hdri_id": spec_d.get("hdri_id"),
         "intphys2_category": fam.intphys2, "likephys_domain": fam.likephys,

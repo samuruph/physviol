@@ -30,7 +30,7 @@ def _event_frame(spec, traj, body, num_frames: int) -> Optional[int]:
     the observability lag non-zero. Otherwise inside the longest airborne run,
     no earlier than a quarter of the way in so there is a lawful prefix to
     contradict. Falling back to a fixed fraction of the clip is what puts
-    `ball_drop` mid-bounce, and a parabola fitted across a bounce is not a
+    `drop` mid-bounce, and a parabola fitted across a bounce is not a
     parabola.
     """
     occ = _geom.occluded_midpoint(spec)
@@ -201,7 +201,7 @@ class AntiGravity(_GravityScale):
         to measure: `free_fall` is gated on the frames where a body is
         unsupported, so a grain sitting in a pile has its residual zeroed for
         the whole window however hard gravity is reversed. That is how
-        `granular_pour x antigravity` came out with a clean-looking plan and a
+        `pour x antigravity` came out with a clean-looking plan and a
         severity of exactly zero -- it had picked a grain that had already
         landed.
 
