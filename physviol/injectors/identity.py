@@ -20,14 +20,28 @@ from .base import Injector, InterventionPlan, register
 class Permanence(Injector):
     """Remove the actor from the scene, ideally while it is occluded.
 
-    Severity is how long it stays gone: `weak` blinks out briefly, `strong`
-    never returns. When the scenario provides an occlusion interval the removal
+    It dwindles away over a few frames rather than switching off between two of
+    them, then is gone. Severity is how long it stays gone: `weak` blinks out
+    briefly, `strong` never returns. When the scenario provides an occlusion interval the removal
     fires inside it, so the violation is not directly observable and only its
     failure to re-emerge betrays it -- the observability-lag case of PLAN 1.1.
     """
 
     family = "permanence"
     GONE_FRACTION = {"weak": 0.25, "medium": 0.55, "strong": 1.0}
+    #: The body dwindles away over this share of the clip before it is removed,
+    #: rather than switching off between two frames.
+    #:
+    #: Geometric, not optical, and that is a measurement rather than a
+    #: preference -- see `render/probe_opacity.py`. Neither material
+    #: transmission nor the Principled BSDF's alpha moves the rendered pixels in
+    #: the pinned image, and more importantly the segmentation pass reports the
+    #: body at full size whatever alpha says, because cryptomatte tracks
+    #: geometry. A body that faded visually would still be wholly present in
+    #: `seg.npz`, so every mask and every observability window would deny a
+    #: violation the clip was showing. Shrinking dissolves it in both.
+    FADE_FRACTION = 0.14
+    FADE_MIN = 3
 
     def strong_residual_reference(self, spec) -> float:
         return 1.0                       # all of the actor's mass is missing
@@ -53,23 +67,35 @@ class Permanence(Injector):
             n_win = self._window_len(max(1, int(round(frac * (T - t0)))), t0, T)
             t1 = min(T - 1, t0 + n_win - 1)
         occ = spec.notes.get("occluded_frames") or []
+        fade = max(self.FADE_MIN, int(round(self.FADE_FRACTION * T)))
+        fade = max(1, min(fade, t1 - t0 + 1))
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "remove_body",
                     "bodies": [int(b.segmentation_id) for b in targets],
+                    "fade_frames": int(fade),
                     "frames_absent": int(t1 - t0 + 1)},
             magnitude=1.0, magnitude_unit="mass_ratio_removed",
             severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
+                   "fade_frames": int(fade),
                    "occluded_at_event": bool(t0 in occ)})
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         t0, t1 = plan.windows[0]
+        fade = int(plan.notes.get("fade_frames", 1))
+        n = min(fade, t1 - t0 + 1)
+        u = (np.arange(n, dtype=np.float64) + 1.0) / n
+        ease = 1.0 - u * u * (3.0 - 2.0 * u)          # 1 -> 0, smooth at both ends
         for bid in plan.causal_body_ids:
-            out.present[t0:t1 + 1, traj.index_of(int(bid))] = False
+            bi = traj.index_of(int(bid))
+            if n > 0:
+                out.scale_mul[t0:t0 + n, bi, :] = np.maximum(
+                    ease, 0.02)[:, None].astype(np.float32)
+            out.present[t0 + n:t1 + 1, bi] = False
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -307,14 +333,15 @@ class Fusion(Injector):
     The dual of `fission`, and the other half of what video generators do to
     object count.
 
-    **The survivor does not change size.** Swelling it to conserve volume was
-    the first attempt and it read badly: at a distance the two never visibly
-    met, so the clip looked like one body vanishing while an unrelated one grew
-    -- `permanence` and `immutability` in the same frame, which is neither.
-    What makes a merge legible is the *approach*, so that is what this stages:
-    the absorbed body is drawn into its neighbour and shrinks away as it goes.
-    The survivor is untouched, which also keeps the family scoring on
-    `object_count` alone.
+    **Nothing changes size.** Swelling the survivor to conserve volume read as
+    one body vanishing while an unrelated one grew -- `permanence` and
+    `immutability` in the same frame, which is neither. Shrinking the absorbed
+    one away was the second attempt and read as it evaporating rather than
+    merging. What makes a merge legible is simply the *approach*: two identical
+    balls slide together until one is inside the other, at which point they are
+    visually one ball of the same size, and the absorbed one is removed. Every
+    body keeps its own size throughout, which is also what keeps the family
+    scoring on `object_count` and nothing else.
 
     Acts on as many pairs as the scene offers. One merge among forty grains is
     invisible; a third of a pour collapsing into its neighbours is the point.
@@ -324,8 +351,11 @@ class Fusion(Injector):
     persistent = True
     #: How close two bodies must come to be merge candidates, in contact radii.
     MEET_RADII = {"weak": 3.5, "medium": 2.4, "strong": 1.6}
-    #: Frames the absorbed body takes to be drawn in and disappear.
-    DRAW_IN_FRAMES = 3
+    #: Share of the clip the absorbed body takes to slide inside its neighbour.
+    #: Long enough to read as travel rather than a cut, and it scales with the
+    #: tier so a longer clip gets a slower, smoother merge.
+    DRAW_IN_FRACTION = 0.18
+    DRAW_IN_MIN = 3
 
     def strong_residual_reference(self, spec) -> float:
         return 0.5                      # two bodies become one
@@ -392,7 +422,9 @@ class Fusion(Injector):
                    "keepers": keepers, "absorbed": absorbed,
                    "merge_frames": [int(f) for _, _, f in pairs],
                    "sibling_ids": keepers + absorbed,
-                   "draw_in": self.DRAW_IN_FRAMES})
+                   "draw_in": max(self.DRAW_IN_MIN,
+                                  int(round(self.DRAW_IN_FRACTION
+                                            * traj.num_frames)))})
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
@@ -415,8 +447,6 @@ class Fusion(Injector):
             dst = out.pos[t:t + n, ki, :].astype(np.float64)
             out.pos[t:t + n, gi, :] = (
                 src + (dst - src) * ease[:, None]).astype(np.float32)
-            out.scale_mul[t:t + n, gi, :] = np.maximum(
-                1.0 - ease, 0.05)[:, None].astype(np.float32)
             self._sync_velocity(traj, out, gi, t)
             if t + n < T:
                 out.present[t + n:, gi] = False

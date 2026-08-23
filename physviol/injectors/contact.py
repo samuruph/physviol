@@ -243,7 +243,13 @@ class Solidity(Injector):
         solidity for one grain.
         """
         T = traj.num_frames
-        t0 = _geom.default_event_frame(spec, T)
+        # If something *outside* the group runs into it, that arrival is the
+        # moment -- the pyramid's spheres should drop through the floor when the
+        # cube lands on them, not a third of the way through the clip for no
+        # visible reason. Absent such a body, fall back to the usual fraction.
+        t0 = self._group_trigger(spec, traj, bodies)
+        if t0 is None:
+            t0 = _geom.default_event_frame(spec, T)
         if t0 is None:
             return None
         depth_r = self.DEPTH_BY_BIN[severity_bin]
@@ -264,38 +270,49 @@ class Solidity(Injector):
                    "t_contact": int(t0), "group": True,
                    "passes_through": bool(depth_r >= 1.0)})
 
+    @staticmethod
+    def _group_trigger(spec, traj, bodies):
+        """First frame a body outside the group touches one inside it."""
+        inside = {int(b.segmentation_id) for b in bodies}
+        outside = {int(b.segmentation_id) for b in spec.bodies
+                   if not b.static and not b.dormant
+                   and int(b.segmentation_id) not in inside}
+        if not outside:
+            return None
+        c = traj.contacts
+        best = None
+        for k in range(len(c)):
+            a, b = int(c.body_a[k]), int(c.body_b[k])
+            hit = ((a in inside and b in outside)
+                   or (b in inside and a in outside))
+            if not hit:
+                continue
+            f = int(c.frame[k])
+            if 1 <= f < traj.num_frames - 2 and (best is None or f < best):
+                best = f
+        return best
+
     def _sink_group(self, spec, traj, plan):
-        """Ease every target down through its own support and let it keep going."""
+        """The surface stops being solid; everything else stays exactly as it was.
+
+        The floor is simply removed for these bodies from `t_event` on, and they
+        are re-integrated under ordinary gravity. Prescribing a depth for the
+        whole group instead -- which is what this did first -- made every grain
+        in a pour start sinking on the same frame, so forty grains still in
+        mid-air dropped through a floor none of them had reached yet. Taking the
+        floor away lets each body arrive and pass through on its own schedule,
+        under the same physics it had a frame earlier, which is the only version
+        that looks like anything.
+        """
         out = self._clone(traj)
-        t0, t1 = plan.windows[0]
-        n_win = t1 - t0 + 1
-        depth_r = float(plan.params["target_depth_radii"])
-        frac = np.linspace(1.0 / n_win, 1.0, n_win) ** 1.6
+        t0 = plan.windows[0][0]
         for bid in plan.causal_body_ids:
             body = next(b for b in spec.bodies
                         if int(b.segmentation_id) == int(bid))
-            bi = traj.index_of(int(bid))
-            radius = float(traj.radius[bi])
-            top = _geom.surface_top(spec, body)
-            p_prev = traj.pos[t0 - 1, bi].astype(np.float64)
-            v_prev = traj.lin_vel[t0 - 1, bi].astype(np.float64)
-            tt = (np.arange(1, n_win + 1, dtype=np.float64) * traj.dt)[:, None]
-            xy = p_prev[None, :2] + v_prev[None, :2] * tt
-            z = top + radius - depth_r * radius * frac
-            out.pos[t0:t1 + 1, bi, 0:2] = xy.astype(np.float32)
-            out.pos[t0:t1 + 1, bi, 2] = z.astype(np.float32)
-            if t1 + 1 < traj.num_frames:
-                n_rest = traj.num_frames - (t1 + 1)
-                p_end = np.array([xy[-1, 0], xy[-1, 1], z[-1]], np.float64)
-                v_end = np.array([v_prev[0], v_prev[1],
-                                  float((z[-1] - z[-2]) / traj.dt)
-                                  if n_win > 1 else v_prev[2]])
-                pos2, vel2 = self._ballistic(
-                    p_end, v_end, traj.gravity.astype(np.float64),
-                    traj.dt, n_rest)
-                out.pos[t1 + 1:, bi, :] = pos2
-                out.lin_vel[t1 + 1:, bi, :] = vel2
-            self._sync_velocity(traj, out, bi, t0)
+            # `solid=False` for the obstacles and a floor far below: nothing to
+            # land on, everything else unchanged.
+            self._rewrite_from(spec, traj, out, body, t0,
+                               obstacles=None, solid=False)
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"
@@ -472,6 +489,7 @@ class SuperElastic(Injector):
         simulator resolved the collision.
         """
         out = self._clone(traj)
+        v_by_body = {}
         for body in targets:
             bi = traj.index_of(int(body.segmentation_id))
             v_in = traj.lin_vel[t0 - 1, bi].astype(np.float64)
@@ -482,8 +500,21 @@ class SuperElastic(Injector):
             # matter -- only that it is the *impact's* normal.
             v_out = v_in - (1.0 + gain) * float(np.dot(v_in, n)) * n
             out.lin_vel[t0, bi, :] = v_out.astype(np.float32)
-            self._rewrite_from(spec, traj, out, body, t0 + 1, v0=v_out,
-                               restitution=min(0.98, float(body.restitution) * gain))
+            v_by_body[int(body.segmentation_id)] = v_out
+
+        if len(targets) > 2:
+            # A whole medium bouncing: step it together. Boosting each grain
+            # against the others' *lawful* paths ejected the ones buried in the
+            # pile, and an ejection is a position jump large enough to read as
+            # a teleport -- a second violation inside an energy clip.
+            self._rewrite_group(spec, traj, out, targets, t0 + 1,
+                                v0_by_body=v_by_body)
+        else:
+            for body in targets:
+                self._rewrite_from(
+                    spec, traj, out, body, t0 + 1,
+                    v0=v_by_body[int(body.segmentation_id)],
+                    restitution=min(0.98, float(body.restitution) * gain))
         return out
 
     @staticmethod
@@ -712,6 +743,13 @@ class _CollisionEdit(Injector):
 
     def _edited(self, spec, traj, actor_id, other_id, t0, normal, ratio):
         out = self._clone(traj)
+        # The two are touching at `t0` and their outcome is prescribed, so they
+        # must not see each other as obstacles afterwards -- the resolver would
+        # dutifully re-solve the collision correctly and undo the intervention.
+        # It did exactly that: a declared mass ratio of 25 came out rendering as
+        # a ratio of 1. Everything else in the scene stays solid.
+        pair = _geom.Obstacles(spec, traj,
+                               exclude_ids=[int(actor_id), int(other_id)])
         for body_id, v_new in self._outcome(traj, actor_id, other_id, t0,
                                             normal, ratio).items():
             body = next(b for b in spec.bodies
@@ -727,7 +765,8 @@ class _CollisionEdit(Injector):
                 out.lin_vel[t0:, bi, :] = 0.0
                 out.ang_vel[t0:, bi, :] = 0.0
                 continue
-            self._rewrite_from(spec, traj, out, body, t0, v0=v_new)
+            self._rewrite_from(spec, traj, out, body, t0, v0=v_new,
+                               obstacles=pair)
         return out
 
     @staticmethod
@@ -836,12 +875,25 @@ class Newton2Mass(_CollisionEdit):
         ia, ib = traj.index_of(actor_id), traj.index_of(other_id)
         ua, ta = self._split(traj.lin_vel[t0 - 1, ia].astype(np.float64), normal)
         ub, tb = self._split(traj.lin_vel[t0 - 1, ib].astype(np.float64), normal)
-        va, _ = self._split(traj.lin_vel[t0, ia].astype(np.float64), normal)
-        vb, _ = self._split(traj.lin_vel[t0, ib].astype(np.float64), normal)
 
+        # The restitution has to be read from the frame the collision actually
+        # *resolves*, which is not always the frame the surfaces meet. `t0` is
+        # now the geometric touch -- so that nothing reacts before it is
+        # touched -- and PyBullet may only separate the pair a frame or two
+        # later. Reading the outcome at `t0` then found the two still
+        # approaching, computed a restitution of zero, and produced an outcome
+        # where both bodies moved identically: a mass ratio of 25 that rendered
+        # as a mass ratio of 1.
         approach = ua - ub
+        va, vb = ua, ub
+        for t in range(t0, min(t0 + 4, traj.num_frames)):
+            ca, _ = self._split(traj.lin_vel[t, ia].astype(np.float64), normal)
+            cb, _ = self._split(traj.lin_vel[t, ib].astype(np.float64), normal)
+            if (cb - ca) > 1e-3:                  # separating: it has resolved
+                va, vb = ca, cb
+                break
         e = 0.5 if abs(approach) < 1e-6 else float(np.clip((vb - va) / approach,
-                                                           0.0, 1.0))
+                                                           0.05, 1.0))
         ma, mb = ratio * float(traj.mass[ia]), float(traj.mass[ib])
         total = ma + mb
         p = ma * ua + mb * ub

@@ -318,7 +318,14 @@ EXCLUSIVE_LAWS: Dict[str, Tuple[str, ...]] = {
     # own size precisely so the clip is about object count and nothing else.
     # What distinguishes a merge from one body vanishing is the *approach* --
     # the two visibly converge -- not a size change on the survivor.
-    "shape_continuity":    ("immutability",),
+    # `permanence` is here because its dissolve genuinely changes size: the
+    # body dwindles away over several frames before it is removed, and shrinking
+    # is the only gradient this render path supports (see
+    # render/probe_opacity.py -- neither alpha nor transmission moves the
+    # pixels, and the segmentation pass keeps the geometry regardless). The two
+    # identity families therefore overlap on this tripwire by construction,
+    # which is worth stating rather than tuning a constant to hide.
+    "shape_continuity":    ("immutability", "permanence"),
     "shape_anisotropy":    ("deformation", "shadow_shape"),
 }
 

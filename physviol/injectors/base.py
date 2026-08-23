@@ -396,7 +396,8 @@ class Injector:
         start_p = traj.pos[t0 - 1, bi] if p0 is None else np.asarray(p0, np.float64)
         pos, vel = self._integrate_profile(
             start_p, start_v, np.asarray(g_per_frame, np.float64),
-            traj.dt, _geom.floor_fn(spec, body), float(traj.radius[bi]),
+            traj.dt, (self._no_floor(spec, body) if not solid
+                      else _geom.floor_fn(spec, body)), float(traj.radius[bi]),
             float(body.restitution if restitution is None else restitution),
             obstacles=self._obstacles(spec, traj, body, obstacles, solid),
             t_start=float(t0 - 1))
@@ -417,6 +418,11 @@ class Injector:
         if given is not None:
             return given
         return _geom.Obstacles(spec, traj, exclude_ids=[body.segmentation_id])
+
+    @staticmethod
+    def _no_floor(spec, body):
+        """A ground plane far below everything -- for the one family that removes it."""
+        return lambda x, y: -1.0e4
 
     @staticmethod
     def _sync_velocity(traj: Trajectory, out: Trajectory, bi: int,
@@ -507,11 +513,14 @@ class Injector:
 
     @staticmethod
     def _pulse(n: int, peak: float, base: float = 1.0,
-               hold: float = 0.6) -> np.ndarray:
+               hold: float = 0.42) -> np.ndarray:
         """Trapezoid: ramp `base` -> `peak`, hold, ramp back to `base`.
 
         A violation with a shape, not a step: it comes on, sustains, releases,
-        and the actor obeys real physics afterwards. The residual traces the
+        and the actor obeys real physics afterwards. The default hold is under
+        half the window, so most of it is ramp -- with the longer clips the
+        tiers now use, that reads as a body drifting up and settling back rather
+        than being yanked. The residual traces the
         same shape, which is what a per-frame severity field is for.
 
         Deliberately a trapezoid rather than a raised cosine. A cosine only

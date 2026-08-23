@@ -38,10 +38,17 @@ class Tier:
 
 TIERS: Dict[str, Tier] = {
     #                      res  fps  frames  spp  F_lat  HW_lat  publishable
-    "D": Tier("D", 128, 12, 13, 16, 4, 8, False),
-    "A": Tier("A", 256, 12, 25, 64, 7, 16, True),
+    "D": Tier("D", 128, 12, 25, 16, 7, 8, False),
+    "A": Tier("A", 256, 12, 49, 64, 13, 16, True),
     "B": Tier("B", 512, 24, 97, 64, 25, 16, True),
 }
+# Frame counts went up across the board (13/25/97 -> 25/49/97). At thirteen
+# frames a violation that fires a third of the way in has eight frames to play
+# out, which is not enough to see a body rise and fall, or a pour drain through
+# a floor, or a stack finish toppling -- and every window had to be squeezed
+# into the space left over. Timing is expressed as a fraction of the clip
+# (see `EVENT_FRACTION`), so lengthening the tier lengthens the violations too
+# rather than leaving them as brief events in a longer static shot.
 DEFAULT_TIER = "D"
 
 for _t in TIERS.values():

@@ -105,17 +105,34 @@ def occluded_midpoint(spec) -> Optional[int]:
     return int(occ[len(occ) // 2]) if occ else None
 
 
+#: Where a violation fires when nothing physical dictates the moment, as a
+#: fraction of the clip. Everything downstream is expressed this way so that
+#: lengthening a tier lengthens the violation rather than leaving it a brief
+#: event followed by a long static shot.
+EVENT_FRACTION = 0.35
+
+#: How much of what remains after the event a sustained violation occupies.
+WINDOW_FRACTION = 0.55
+
+
 def default_event_frame(spec, num_frames: int) -> Optional[int]:
     """When to fire, absent a physical cue: hidden if possible, else a third in.
 
-    A third of the way in leaves the opening frames untouched (so the prefix is
-    long enough to establish what lawful motion looks like) and still leaves
-    two thirds for the consequences to play out.
+    Roughly a third of the way in leaves the opening frames untouched -- so the
+    prefix is long enough to establish what lawful motion looks like -- and
+    still leaves most of the clip for the consequences to play out.
     """
     t0 = occluded_midpoint(spec)
     if t0 is None:
-        t0 = max(1, num_frames // 3)
+        t0 = max(1, int(round(EVENT_FRACTION * num_frames)))
     return int(t0) if 1 <= t0 < num_frames - 1 else None
+
+
+def window_frames(num_frames: int, t0: int, fraction: float = None,
+                  minimum: int = 3) -> int:
+    """A sustained window as a share of what is left after the event."""
+    frac = WINDOW_FRACTION if fraction is None else fraction
+    return max(minimum, int(round(frac * (num_frames - t0))))
 
 
 def airborne(traj, bi: int, top: float, slack: float = 1e-3) -> np.ndarray:
@@ -184,6 +201,18 @@ def first_dynamic_pair_contact(spec, traj, prefer: Optional[int] = None,
         # with no momentum in it -- and a Newton family staged on that has
         # almost no reaction to suppress. Scored 0.01.
         ia, ib = traj.index_of(a), traj.index_of(b)
+        # Snap to the frame the surfaces actually meet. PyBullet resolves
+        # contacts at its own sub-step rate and reports the frame it noticed,
+        # which can be a frame before the two are visibly touching -- so the
+        # clip showed one ball reacting to another it had not reached yet.
+        reach = float(traj.radius[ia] + traj.radius[ib])
+        gap = np.linalg.norm(
+            traj.pos[:, ib, :].astype(np.float64)
+            - traj.pos[:, ia, :].astype(np.float64), axis=1)
+        touching = np.flatnonzero(gap <= reach * 1.02)
+        touching = touching[(touching >= 1) & (touching < traj.num_frames - 1)]
+        if touching.size:
+            f = int(touching[0])
         sep = traj.pos[f, ib].astype(np.float64) - traj.pos[f, ia].astype(np.float64)
         mag = float(np.linalg.norm(sep))
         if mag > 1e-9:
