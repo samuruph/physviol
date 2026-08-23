@@ -18,7 +18,7 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 class RampSlide(Scenario):
     name = "ramp_slide"
-    SEG_FLOOR, SEG_BLOCK, SEG_RAMP = 1, 2, 3
+    SEG_FLOOR, SEG_BLOCK, SEG_RAMP, SEG_SPLIT = 1, 2, 3, 4
 
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
@@ -54,7 +54,7 @@ class RampSlide(Scenario):
             scenario=self.name, seed=seed, tier=tier,
             bodies=[C.ground(cx, self.SEG_FLOOR),
                     C.ramp(self.SEG_RAMP, tilt, centre, half_len, 0.85, thick, mu),
-                    block],
+                    block, C.understudy(block, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 1.0)),
             camera_position=(0.5, -6.6, 2.5), camera_look_at=(0.0, 0.0, 1.0),
             floor_level=0.0, complexity=complexity,

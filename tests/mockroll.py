@@ -185,6 +185,7 @@ def roll(spec, scenario=None) -> Trajectory:
         pos=pos.astype(np.float32), quat=quat.astype(np.float32),
         lin_vel=lvel.astype(np.float32), ang_vel=avel.astype(np.float32),
         present=present, colour=colour,
+        opacity=np.ones((T, B), np.float32),
         mass=np.asarray([b.mass for b in bodies], np.float32),
         radius=r.astype(np.float32),
         is_static=np.asarray([b.static for b in bodies], bool),

@@ -176,8 +176,14 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     r_strong = ctx.get("r_strong")
     if not r_strong:
         r_strong = inj.strong_residual_reference(spec)
-    s_invalid = sev_mod.bounded_score(r_invalid, floor, r_strong)
-    s_valid = sev_mod.bounded_score(r_valid, floor, r_strong)
+    # Scored against the twin frame by frame, not against a pooled floor -- see
+    # the note in `bounded_score`. The valid arm is the control; using it at
+    # each frame rather than averaging it into one number is what makes the
+    # score survive a scene whose lawful residual is not stationary.
+    s_invalid = sev_mod.bounded_score(r_invalid, floor, r_strong,
+                                      baseline=r_valid)
+    s_valid = sev_mod.bounded_score(r_valid, floor, r_strong,
+                                    baseline=r_valid)
 
     # ---- 3.2 windows and timelines ---------------------------------------
     plan_windows = [tuple(w) for w in plan_d["violation_windows"]]
@@ -187,7 +193,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # note in windows.observable_frames -- and it gates the *spatial*
     # annotations, which answer "where can this be seen" rather than "when is
     # it happening". `active` remains the ground-truth timeline.
-    observable = win_mod.observable_frames(seg_v, seg_i, dynamic_ids or causal_ids)
+    observable = win_mod.observable_frames(
+        seg_v, seg_i, dynamic_ids or causal_ids,
+        rgb_valid=pv["rgba"], rgb_invalid=pi["rgba"])
     visible, s_visible = sev_mod.attribute_to_evidence(s_invalid, active, observable)
 
     # ---- 3.3 masks (the union rule) --------------------------------------

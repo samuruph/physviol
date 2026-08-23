@@ -312,7 +312,7 @@ class Solidity(Injector):
             # `solid=False` for the obstacles and a floor far below: nothing to
             # land on, everything else unchanged.
             self._rewrite_from(spec, traj, out, body, t0,
-                               obstacles=None, solid=False)
+                               obstacles=None, solid=False, floorless=True)
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
         out.meta["label"] = "invalid"

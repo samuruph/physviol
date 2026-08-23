@@ -73,10 +73,37 @@ class NoiseFloor:
         return NoiseFloor(mu, 1.4826 * mad, int(flat.size))
 
 
-def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float) -> np.ndarray:
-    """Step 3. `r_strong` is the family's residual at its `hard` bin."""
-    denom = max(float(r_strong) - floor.mu, 1e-9)
-    return np.clip((np.asarray(r, np.float64) - floor.mu) / denom, 0.0, 1.0)
+def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float,
+                  baseline: Optional[np.ndarray] = None) -> np.ndarray:
+    """Step 3. How far past its lawful twin this clip's residual sits.
+
+    `baseline` is the *same body's residual in the valid twin, frame by frame*,
+    and passing it is strongly preferred over relying on the scalar noise floor.
+    The twin is the control this whole dataset is built around; pooling it into
+    one number throws away the part that matters whenever a lawful clip's
+    residual is not stationary -- which is most of them.
+
+    Three separate families shipped with a severity of exactly zero before this
+    was per-frame. The clearest: a `ball_drop` twin is airborne for half the
+    clip and resting on the floor for the rest, and Kubric reports a contact
+    *force* rather than an impulse, so its momentum residual is 0 while falling
+    and about 20 while resting. No single scalar describes that. The median came
+    out at 19.9 against a family reference of 5.5 -- a negative denominator --
+    and a clean phantom-impulse signal of 3.9 scored as nothing at all.
+
+    Frame by frame there is no such problem: at the frame in question the twin
+    reads 0 and the clip reads 3.9, and the difference is the whole answer.
+
+    `r_strong` is the family's residual at its `strong` bin, which is what keeps
+    the score comparable across families whose units are not.
+    """
+    r = np.asarray(r, np.float64)
+    if baseline is None:
+        denom = max(float(r_strong) - floor.mu, 1e-9)
+        return np.clip((r - floor.mu) / denom, 0.0, 1.0)
+    base = np.asarray(baseline, np.float64)
+    denom = max(float(r_strong) - float(floor.mu), 1e-9)
+    return np.clip(np.maximum(0.0, r - base) / denom, 0.0, 1.0)
 
 
 def paint(seg: np.ndarray, score_by_body: Dict[int, np.ndarray],

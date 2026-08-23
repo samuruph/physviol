@@ -15,7 +15,7 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 class BallCollision(Scenario):
     name = "ball_collision"
-    SEG_FLOOR, SEG_A, SEG_B = 1, 2, 4
+    SEG_FLOOR, SEG_A, SEG_B, SEG_SPLIT = 1, 2, 4, 6
 
     def _sample(self, seed: int, tier: Tier,
                 complexity: str = DEFAULT_COMPLEXITY) -> SceneSpec:
@@ -65,7 +65,8 @@ class BallCollision(Scenario):
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), striker, target],
+            bodies=[C.ground(cx, self.SEG_FLOOR), striker, target,
+                    C.understudy(striker, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.4)),
             camera_position=(0.3, -6.0, 1.7), camera_look_at=(0.1, 0.0, 0.35),
             floor_level=0.0, complexity=complexity,

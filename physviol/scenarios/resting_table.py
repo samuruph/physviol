@@ -21,7 +21,7 @@ from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
 
 class RestingTable(Scenario):
     name = "resting_table"
-    SEG_FLOOR, SEG_ACTOR, SEG_TABLE, SEG_POST = 1, 2, 3, 8
+    SEG_FLOOR, SEG_ACTOR, SEG_TABLE, SEG_POST, SEG_SPLIT = 1, 2, 3, 8, 9
     SEG_PROPS = (4, 5)
 
     def _sample(self, seed: int, tier: Tier,
@@ -63,7 +63,8 @@ class RestingTable(Scenario):
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), post, table, actor] + props,
+            bodies=([C.ground(cx, self.SEG_FLOOR), post, table, actor]
+                    + props + [C.understudy(actor, self.SEG_SPLIT)]),
             lights=C.lights(cx, look_at=(0, 0, 0.9)),
             camera_position=(2.6, -4.2, 1.85), camera_look_at=(0.0, 0.0, 0.85),
             floor_level=0.0, complexity=complexity,

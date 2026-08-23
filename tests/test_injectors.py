@@ -252,6 +252,8 @@ def test_newton2_needs_visually_identical_bodies():
     from physviol import scenarios
     for seed in (1, 777, 4242):
         spec = scenarios.get("ball_collision").sample(seed, TIERS["D"], "L0")
-        a, b = [x for x in spec.bodies if x.role == "actor"]
+        # Dormant understudies carry role "actor" too -- they are the body
+        # `fission` switches on -- so they have to be excluded here.
+        a, b = [x for x in spec.bodies if x.role == "actor" and not x.dormant]
         assert a.scale == b.scale, seed
         assert a.color == b.color, seed

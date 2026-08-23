@@ -82,6 +82,11 @@ class Trajectory:
     # declared colour, which the worker fills in.
     colour: Optional[np.ndarray] = None
 
+    # [T, B] float32 -- 1 is solid, 0 is invisible. How `dissolve` is expressed
+    # at the seam: the renderer mixes the shaded surface with a Transparent BSDF
+    # and keyframes the blend, so a body can fade out without changing shape.
+    opacity: Optional[np.ndarray] = None
+
     contacts: Contacts = None
 
     # -- scene constants ---------------------------------------------------
@@ -99,6 +104,8 @@ class Trajectory:
             self.scale_mul = np.ones(self.pos.shape, dtype=np.float32)
         if self.colour is None:
             self.colour = np.zeros(self.pos.shape, dtype=np.float32)
+        if self.opacity is None:
+            self.opacity = np.ones(self.pos.shape[:2], dtype=np.float32)
 
     @property
     def num_frames(self) -> int:
@@ -142,7 +149,7 @@ class Trajectory:
             pos=self.pos, quat=self.quat, lin_vel=self.lin_vel, ang_vel=self.ang_vel,
             mass=self.mass, radius=self.radius, is_static=self.is_static,
             present=self.present, scale_mul=self.scale_mul,
-            colour=self.colour,
+            colour=self.colour, opacity=self.opacity,
             contact_frame=self.contacts.frame, contact_a=self.contacts.body_a,
             contact_b=self.contacts.body_b, contact_point=self.contacts.point,
             contact_normal=self.contacts.normal, contact_impulse=self.contacts.impulse,
@@ -161,6 +168,7 @@ class Trajectory:
             present=z["present"] if "present" in z.files else None,
             scale_mul=z["scale_mul"] if "scale_mul" in z.files else None,
             colour=z["colour"] if "colour" in z.files else None,
+            opacity=z["opacity"] if "opacity" in z.files else None,
             contacts=Contacts(z["contact_frame"], z["contact_a"], z["contact_b"],
                               z["contact_point"], z["contact_normal"],
                               z["contact_impulse"], z["contact_penetration"]),
@@ -179,7 +187,8 @@ def prefix_identical(a: Trajectory, b: Trajectory, upto: int,
     """
     if a.num_bodies != b.num_bodies:
         return False, "body count %d != %d" % (a.num_bodies, b.num_bodies)
-    for name in ("pos", "quat", "lin_vel", "ang_vel", "scale_mul", "colour"):
+    for name in ("pos", "quat", "lin_vel", "ang_vel", "scale_mul", "colour",
+                 "opacity"):
         x = getattr(a, name)[:upto]
         y = getattr(b, name)[:upto]
         if x.shape != y.shape:

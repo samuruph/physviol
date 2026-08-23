@@ -445,30 +445,30 @@ class Dissolve(Injector):
     notice -- an instant removal is a single-frame discontinuity, a dissolve is
     a trend across several.
 
-    **Geometric, because optical does not work here, and that is measured** --
-    see `render/probe_opacity.py`. Neither material transmission nor the
-    Principled BSDF's alpha moves the rendered pixels in the pinned image, and
-    decisively, the segmentation pass reports the body at full size at alpha 0
-    regardless, because cryptomatte tracks geometry. A body that faded only
-    visually would still be wholly present in `seg.npz`, so every mask and
-    observability window in the project would deny a violation the clip was
-    plainly showing. Shrinking dissolves it in the render *and* in the
-    annotation, which is the only version that can be labelled honestly.
+    **Optical, not geometric**: the body keeps its size and shape and simply
+    stops being opaque. The renderer mixes its shaded surface with a Transparent
+    BSDF and keyframes the blend -- measured working in the pinned image, see
+    `render/probe_opacity.py`, which also records that the Principled BSDF's own
+    alpha input does nothing here and why it took three attempts to find that
+    out.
 
-    Distinct from `immutability` in where it ends up: that one settles at a new,
-    smaller size and stays there, this one reaches nothing and is removed.
+    Fading alone is not enough to *remove* it, though, so the body is dropped
+    from the scene once it is invisible. Cryptomatte tracks geometry, so a
+    perfectly transparent body still reports every one of its pixels in
+    `seg.npz`; leaving it there would mean the mask claimed an object that is no
+    longer visible anywhere in the frame.
+
+    Distinct from `immutability`, which settles at a new size and stays there,
+    and from `permanence`, which is a single-frame cut. Fading changes neither
+    shape nor position, so it moves no law but its own.
     """
 
     family = "dissolve"
     persistent = True
-    #: Share of the clip the body takes to disappear. Slower is more legibly a
-    #: dissolve and less legibly a cut, and it scales with the tier.
+    #: Share of the clip the body takes to fade out. Slower reads more clearly
+    #: as a dissolve and less as a cut, and it scales with the tier.
     FADE_BY_BIN = {"weak": 0.45, "medium": 0.28, "strong": 0.16}
     FADE_MIN = 3
-    #: The size it reaches before being removed. Not zero: a body a hundredth of
-    #: its own width is already a speck, and the last few frames of shrinking add
-    #: nothing a viewer can see.
-    VANISH_AT = 0.08
 
     def strong_residual_reference(self, spec) -> float:
         return 1.0                       # all of it, gone
@@ -489,9 +489,8 @@ class Dissolve(Injector):
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
-            params={"type": "dissolve_body", "fade_frames": int(fade),
-                    "vanish_at": self.VANISH_AT},
-            magnitude=1.0, magnitude_unit="mass_ratio_dissolved",
+            params={"type": "dissolve_body", "fade_frames": int(fade)},
+            magnitude=1.0, magnitude_unit="opacity_lost",
             severity_bin=severity_bin,
             notes={"radius": float(targets[0].bounding_radius),
                    "surface_top": _geom.surface_top(spec, targets[0]),
@@ -504,24 +503,17 @@ class Dissolve(Injector):
         t0 = plan.t_event
         T = traj.num_frames
         n = min(int(plan.notes["fade_frames"]), T - t0)
-        floor = float(plan.params["vanish_at"])
         u = (np.arange(n, dtype=np.float64) + 1.0) / n
-        shrink = np.maximum(1.0 - u * u * (3.0 - 2.0 * u), floor)
+        alpha = 1.0 - u * u * (3.0 - 2.0 * u)      # 1 -> 0, smooth at both ends
 
         for bid in plan.causal_body_ids:
             bi = traj.index_of(int(bid))
-            out.scale_mul[t0:t0 + n, bi, :] = shrink[:, None].astype(np.float32)
-            # It keeps resting on the surface as it shrinks rather than hanging
-            # at its old centre height, which would be a support violation
-            # smuggled into a dissolve.
-            top = float(plan.notes["surface_top"])
-            r_t = float(traj.radius[bi]) * shrink
-            grounded = traj.pos[t0:t0 + n, bi, 2].astype(np.float64)
-            out.pos[t0:t0 + n, bi, 2] = np.where(
-                grounded - float(traj.radius[bi]) <= top + 1e-3,
-                top + r_t, grounded).astype(np.float32)
-            self._sync_velocity(traj, out, bi, t0)
+            out.opacity[t0:t0 + n, bi] = alpha.astype(np.float32)
             if t0 + n < T:
+                out.opacity[t0 + n:, bi] = 0.0
+                # Removed once it is invisible, so it leaves the segmentation
+                # too. Transparency alone does not: cryptomatte tracks geometry,
+                # so a fully faded body still reports every one of its pixels.
                 out.present[t0 + n:, bi] = False
 
         out.meta = dict(traj.meta)

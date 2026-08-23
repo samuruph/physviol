@@ -40,25 +40,57 @@ def to_windows(active: np.ndarray) -> List[Window]:
 
 
 def observable_frames(seg_valid: np.ndarray, seg_invalid: np.ndarray,
-                      causal_ids: Sequence[int]) -> np.ndarray:
+                      causal_ids: Sequence[int],
+                      rgb_valid: Optional[np.ndarray] = None,
+                      rgb_invalid: Optional[np.ndarray] = None,
+                      level: int = 8, min_pixels: int = 4) -> np.ndarray:
     """Frames carrying visual evidence, computed exactly rather than estimated.
 
     The twins share a bit-identical render path, so before the intervention the
-    causal bodies' rendered footprints are *identical*. A frame is observable
-    exactly when that footprint differs at all -- which is why this needs no
-    threshold and no heuristic.
+    causal bodies' footprints are *identical*. A frame is observable exactly
+    when the two renders disagree about them -- which is why this needs no
+    heuristic.
+
+    Two ways they can disagree, and for a long time only the first was checked:
+
+    * **occupancy** -- the culprit covers different pixels. Catches everything
+      that moves, vanishes or changes size.
+    * **appearance** -- it covers the same pixels and they *look* different.
+      Catches everything that does not move: a body changing colour, a shadow
+      changing shape, a body fading out.
+
+    Missing the second was not a subtle loss. Segmentation records which
+    instance owns a pixel and nothing about what that pixel looks like, so a
+    `colour_shift` clip -- an object plainly turning from red to green --
+    reported zero observable frames, and shipped with an empty mask and a
+    severity of exactly zero. Any family whose whole subject is appearance was
+    unmeasurable by construction.
 
     Pass only the **dynamic** causal bodies. Including a static participant
-    silently destroys the signal: when a ball sinks into a floor, pixels move
-    from the ball id to the floor id, so the *union* footprint {ball, floor} is
-    unchanged and every frame looks unobservable.
+    silently destroys the occupancy signal: when a ball sinks into a floor,
+    pixels move from the ball id to the floor id, so the *union* footprint
+    {ball, floor} is unchanged and every frame looks identical.
     """
     T = seg_valid.shape[0]
     ids = np.asarray(list(causal_ids), dtype=seg_valid.dtype)
     fv = np.isin(seg_valid, ids)
     fi = np.isin(seg_invalid, ids)
-    diff = fv != fi
-    return diff.reshape(T, -1).any(axis=1)
+    diff = (fv != fi).reshape(T, -1).any(axis=1)
+
+    if rgb_valid is None or rgb_invalid is None:
+        return diff
+
+    # Appearance, restricted to where the culprit is in either twin, so a
+    # shadow moving elsewhere in the frame is not mistaken for evidence about
+    # this body. `level` is in 0-255; a few pixels' worth of path-tracing noise
+    # should not count as a violation becoming visible.
+    here = (fv | fi)
+    if here.ndim == 4:
+        here = here[..., 0]
+    a = np.asarray(rgb_valid)[..., :3].astype(np.int16)
+    b = np.asarray(rgb_invalid)[..., :3].astype(np.int16)
+    changed = (np.abs(a - b).max(axis=-1) >= level) & here
+    return diff | (changed.reshape(T, -1).sum(axis=1) >= min_pixels)
 
 
 def occluded_frames(seg: np.ndarray, body_id: int) -> np.ndarray:

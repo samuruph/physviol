@@ -115,6 +115,37 @@ def build_scene(spec: SceneSpec, scratch):
     return scene, simulator, renderer, objs
 
 
+def _fade_control(renderer, obj):
+    """Mix the body's shaded surface with a Transparent BSDF; return the blend.
+
+    Cycles renders the Principled BSDF's own `Alpha` input as opaque here --
+    measured, see `probe_opacity.py` -- so fading has to be done by mixing in a
+    transparent shader. The returned socket is 1 for solid and 0 for invisible,
+    and it keyframes like anything else.
+
+    Built lazily, and only for bodies something actually fades, because it edits
+    the material's node graph directly.
+    """
+    bmat = obj.material.linked_objects.get(renderer)
+    if bmat is None or getattr(bmat, "node_tree", None) is None:
+        return None
+    nt = bmat.node_tree
+    existing = nt.nodes.get("physviol_fade")
+    if existing is not None:
+        return existing.inputs[0]
+    principled = nt.nodes.get("Principled BSDF")
+    out_node = next((n for n in nt.nodes if n.type == "OUTPUT_MATERIAL"), None)
+    if principled is None or out_node is None:
+        return None
+    transp = nt.nodes.new("ShaderNodeBsdfTransparent")
+    mix = nt.nodes.new("ShaderNodeMixShader")
+    mix.name = "physviol_fade"
+    nt.links.new(transp.outputs[0], mix.inputs[1])
+    nt.links.new(principled.outputs["BSDF"], mix.inputs[2])
+    nt.links.new(mix.outputs[0], out_node.inputs["Surface"])
+    return mix.inputs[0]
+
+
 def _set_visibility(renderer, obj, body) -> None:
     """Cycles ray visibility for one body.
 
@@ -222,7 +253,7 @@ def simulate(spec, scene, simulator, objs) -> Trajectory:
 GONE_Z = -1000.0
 
 
-def replay(spec, objs, traj: Trajectory) -> None:
+def replay(spec, objs, traj: Trajectory, renderer=None) -> None:
     """Write a trajectory back onto the scene as keyframes -- the seam's read side.
 
     Same mechanism Kubric's own simulator.run uses to hand animation to Blender
@@ -231,6 +262,7 @@ def replay(spec, objs, traj: Trajectory) -> None:
     present = traj.present
     scale_mul = traj.scale_mul
     colour = traj.colour
+    opacity = traj.opacity
     for j, b in enumerate(spec.bodies):
         obj = objs[b.name]
         # Scale is keyframed on EVERY body, every frame, whether or not this
@@ -250,9 +282,16 @@ def replay(spec, objs, traj: Trajectory) -> None:
         # f)` writes one fcurve per RGBA channel on the Principled BSDF's Base
         # Colour and the render follows it. The dome is excluded because its
         # material carries the HDRI, not a colour.
-        recolour = (b.kind != "dome"
-                    and float(np.abs(colour[:, j, :]
-                                     - np.asarray(b.color, np.float32)).max()) > 1e-6)
+        # Unconditional, for the same reason `resize` is: one worker run renders
+        # several families through the same scene object, and a keyframe nobody
+        # overwrites simply stays. Setting it only when a trajectory changes the
+        # colour meant `colour_shift` recoloured the actor for every family
+        # rendered after it in the same run -- so a `solidity` clip shipped with
+        # the object turning green as well.
+        recolour = b.kind != "dome"
+        fades = (b.kind != "dome"
+                 and float(np.abs(opacity[:, j] - 1.0).max()) > 1e-6)
+        fade_socket = _fade_control(renderer, obj) if fades else None
         for f in range(traj.num_frames):
             if present is not None and not bool(present[f, j]):
                 obj.position = (0.0, 0.0, GONE_Z)
@@ -268,6 +307,9 @@ def replay(spec, objs, traj: Trajectory) -> None:
             if recolour:
                 obj.material.color = kb.Color(*(float(x) for x in colour[f, j]))
                 obj.material.keyframe_insert("color", f)
+            if fade_socket is not None:
+                fade_socket.default_value = float(opacity[f, j])
+                fade_socket.keyframe_insert("default_value", frame=f)
 
 
 def render_and_save(renderer, scene, spec, objs, outdir, tag: str):
@@ -342,7 +384,7 @@ def main() -> int:
     scenarios.get(a.scenario).script(spec, traj_valid)
     traj_valid.save(os.path.join(outdir, "traj_valid.npz"))
 
-    replay(spec, objs, traj_valid)
+    replay(spec, objs, traj_valid, renderer)
     t_valid, shapes = render_and_save(renderer, scene, spec, objs, outdir, "valid")
 
     families = [f.strip() for f in a.family.split(",") if f.strip()]
@@ -387,7 +429,7 @@ def main() -> int:
                 json.dump({"pair_uid": pair_uid, "spec": spec.to_dict(),
                            "plan": plan.to_dict()}, fh, indent=2, sort_keys=True)
 
-            replay(spec, objs, traj_invalid)
+            replay(spec, objs, traj_invalid, renderer)
             dt, _ = render_and_save(renderer, scene, spec, objs, vdir, "invalid")
             timings[tag] = round(dt, 2)
             variants.append({"family": family, "severity": sev, "ok": True,

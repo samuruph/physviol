@@ -139,6 +139,7 @@ class Injector:
         out.present = traj.present.copy()
         out.scale_mul = traj.scale_mul.copy()
         out.colour = traj.colour.copy()
+        out.opacity = traj.opacity.copy()
         out.meta = dict(traj.meta)
         return out
 
@@ -376,7 +377,8 @@ class Injector:
     # ------------------------------------------------------------------ #
     def _rewrite_from(self, spec, traj: Trajectory, out: Trajectory, body,
                       t0: int, v0=None, p0=None, g_per_frame=None,
-                      restitution=None, obstacles=None, solid=True) -> None:
+                      restitution=None, obstacles=None, solid=True,
+                      floorless=False) -> None:
         """Re-integrate one body from frame `t0`, on the surface it belongs to.
 
         The workhorse behind most families: an intervention is usually "change
@@ -397,7 +399,7 @@ class Injector:
         start_p = traj.pos[t0 - 1, bi] if p0 is None else np.asarray(p0, np.float64)
         pos, vel = self._integrate_profile(
             start_p, start_v, np.asarray(g_per_frame, np.float64),
-            traj.dt, (self._no_floor(spec, body) if not solid
+            traj.dt, (self._no_floor(spec, body) if floorless
                       else _geom.floor_fn(spec, body)), float(traj.radius[bi]),
             float(body.restitution if restitution is None else restitution),
             obstacles=self._obstacles(spec, traj, body, obstacles, solid),
@@ -422,7 +424,14 @@ class Injector:
 
     @staticmethod
     def _no_floor(spec, body):
-        """A ground plane far below everything -- for the one family that removes it."""
+        """A ground plane far below everything, for the one case that removes it.
+
+        Kept separate from `solid`, which governs *obstacles*. Conflating the
+        two was a real regression: `solidity` passing a ball through a wall also
+        turned the ground off, so the ball sank through the floor mid-window and
+        was bounced back out when contact resumed -- a clip that was supposed to
+        show one thing showing three.
+        """
         return lambda x, y: -1.0e4
 
     @staticmethod

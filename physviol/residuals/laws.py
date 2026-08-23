@@ -253,17 +253,16 @@ def shape_continuity(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
 def mass_dissolution(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """How much of the body has ceased to exist, as a fraction, over time.
 
-    Continuous where `mass_continuity` is a step: it follows the body down from
-    its own frame-0 volume to nothing and stays at 1.0 once it is removed. That
+    Continuous where `mass_continuity` is a step: it follows the body's opacity
+    down from solid to invisible and stays at 1.0 once it is removed. That
     difference is the whole distinction between `dissolve` and `permanence` --
     the same end state, reached in a way a model has to notice as a *trend*
     rather than as a single-frame discontinuity.
     """
-    s = np.asarray(traj.scale_mul[:, b, :], np.float64)
-    vol = np.prod(np.maximum(np.abs(s), 1e-9), axis=1)
-    remaining = np.clip(vol / max(float(vol[0]), 1e-9), 0.0, 1.0)
-    gone = 1.0 - remaining
-    return np.maximum(gone, 1.0 - traj.present[:, b].astype(np.float64))
+    opaque = np.clip(np.asarray(traj.opacity[:, b], np.float64), 0.0, 1.0)
+    gone = 1.0 - opaque / max(float(opaque[0]), 1e-9)
+    return np.maximum(np.clip(gone, 0.0, 1.0),
+                      1.0 - traj.present[:, b].astype(np.float64))
 
 
 @register("object_count")
