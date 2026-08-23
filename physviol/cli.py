@@ -27,9 +27,14 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------------------------------------------------------- taxonomy
 def cmd_taxonomy(a) -> int:
-    from .taxonomy import (COMPATIBILITY, DOMAINS, FAMILIES, SCENARIOS,
-                           build_cells, validate_taxonomy)
+    from .taxonomy import (COMPATIBILITY, DOMAINS, FAMILIES, MEDIA, SCENARIOS,
+                           SEVERITY_BINS, build_cells, validate_taxonomy)
     validate_taxonomy()
+    print("MEDIA (%d)  -- level 0, the LikePhys-style macro-category" % len(MEDIA))
+    for m, why in MEDIA.items():
+        staged = sorted(n for n, v in SCENARIOS.items() if v.physics_medium == m)
+        print("  %-11s %-58s %s" % (m, why, ", ".join(staged) or "(none staged)"))
+    print()
     print("DOMAINS (%d)" % len(DOMAINS))
     for d, q in DOMAINS.items():
         fams = [f for f, v in FAMILIES.items() if v.domain == d]
@@ -43,7 +48,50 @@ def cmd_taxonomy(a) -> int:
     if a.verbose:
         for scen, fam in cells:
             print("  %-16s x %s" % (scen, fam))
+    _print_release_size(cells, a)
     return 0
+
+
+#: Measured wall-clock per rendered clip, including annotation and the overlay
+#: video. Tier A is 4x the pixels and ~2x the frames of Tier D; L1's HDRI
+#: environment costs about 5.5x an L0 render.
+SECONDS_PER_CLIP = {("D", "L0"): 8.0, ("D", "L1"): 44.0,
+                    ("A", "L0"): 62.0, ("A", "L1"): 340.0,
+                    ("B", "L0"): 250.0, ("B", "L1"): 1370.0}
+
+
+def _print_release_size(cells, a) -> None:
+    """What a given configuration would actually produce, and how long it takes.
+
+    The question "how many clips is this" has a non-obvious answer, because a
+    valid twin is shared by every family and severity staged on the same
+    scenario and seed. Counting cells times bins times variants overstates the
+    render cost by about a third.
+    """
+    from .taxonomy import SCENARIOS, SEVERITY_BINS
+    n_bins = len(SEVERITY_BINS) if a.severity == "all" else 1
+    variants = max(1, a.variants)
+    scenarios = {s for s, _ in cells}
+
+    invalid = len(cells) * n_bins * variants
+    valid = len(scenarios) * variants          # one per scenario+seed, shared
+    renders = invalid + valid
+    rate = SECONDS_PER_CLIP.get((a.tier, a.complexity), 60.0)
+    serial = renders * rate
+
+    print("\n-- a release at tier %s / %s / severity %s / %d variant(s)"
+          % (a.tier, a.complexity, a.severity, variants))
+    print("   %d cells x %d bin(s) x %d variant(s) = %d invalid clips"
+          % (len(cells), n_bins, variants, invalid))
+    print("   + %d valid twins (one per scenario+seed, shared across families"
+          "\n     and bins because the prefix is bit-identical) = %d renders"
+          % (valid, renders))
+    print("   ~%.1f h serial, ~%.1f h at the measured 1.92x on four workers"
+          % (serial / 3600.0, serial / 3600.0 / 1.92))
+    print("   media: %s" % ", ".join(
+        "%s %d" % (m, sum(1 for s, _ in cells
+                          if SCENARIOS[s].physics_medium == m))
+        for m in sorted({SCENARIOS[s].physics_medium for s, _ in cells})))
 
 
 # ---------------------------------------------------------------- generate
@@ -186,8 +234,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="physviol")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("taxonomy", help="print domains/families/scenarios")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p = sub.add_parser("taxonomy",
+                       help="print the taxonomy, and size a release")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="list every (scenario, family) cell")
+    p.add_argument("--tier", default="A")
+    p.add_argument("--complexity", default="L0")
+    p.add_argument("--severity", default="all")
+    p.add_argument("--variants", type=int, default=5)
     p.set_defaults(fn=cmd_taxonomy)
 
     p = sub.add_parser("generate", help="simulate+render+annotate end to end")

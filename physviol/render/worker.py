@@ -123,8 +123,9 @@ def _fade_control(renderer, obj):
     transparent shader. The returned socket is 1 for solid and 0 for invisible,
     and it keyframes like anything else.
 
-    Built lazily, and only for bodies something actually fades, because it edits
-    the material's node graph directly.
+    Built once per body and reused -- the node is looked up by name on repeat
+    calls, so re-rendering the same scene for the next family does not stack up
+    mix shaders.
     """
     bmat = obj.material.linked_objects.get(renderer)
     if bmat is None or getattr(bmat, "node_tree", None) is None:
@@ -282,16 +283,24 @@ def replay(spec, objs, traj: Trajectory, renderer=None) -> None:
         # f)` writes one fcurve per RGBA channel on the Principled BSDF's Base
         # Colour and the render follows it. The dome is excluded because its
         # material carries the HDRI, not a colour.
-        # Unconditional, for the same reason `resize` is: one worker run renders
-        # several families through the same scene object, and a keyframe nobody
-        # overwrites simply stays. Setting it only when a trajectory changes the
-        # colour meant `colour_shift` recoloured the actor for every family
-        # rendered after it in the same run -- so a `solidity` clip shipped with
-        # the object turning green as well.
+        # EVERY animated channel is keyframed on EVERY body on EVERY frame,
+        # whether or not this trajectory touches it. This is not defensive
+        # coding, it is the fix for a bug that has now happened three times.
+        #
+        # One worker run renders several families through the same scene object,
+        # and a keyframe nobody overwrites simply stays. Each time a new channel
+        # was added it was keyframed "only when it changes", and each time the
+        # family that used it contaminated every family rendered after it in the
+        # same run: `immutability` enlarged the actor in solidity clips,
+        # `colour_shift` turned it green in everything downstream, and
+        # `dissolve` faded it out of barrier_pass and newton1. All three
+        # produced clips depicting two violations and labelled with one.
+        #
+        # The rule for any channel added later: keyframe it unconditionally.
+        # The cost is a few thousand redundant keyframes; the alternative is a
+        # silent cross-family leak that only shows up by eye.
         recolour = b.kind != "dome"
-        fades = (b.kind != "dome"
-                 and float(np.abs(opacity[:, j] - 1.0).max()) > 1e-6)
-        fade_socket = _fade_control(renderer, obj) if fades else None
+        fade_socket = _fade_control(renderer, obj) if b.kind != "dome" else None
         for f in range(traj.num_frames):
             if present is not None and not bool(present[f, j]):
                 obj.position = (0.0, 0.0, GONE_Z)
