@@ -40,8 +40,8 @@ class Family(NamedTuple):
 FAMILIES: Dict[str, Family] = {
     # -- identity ----------------------------------------------------------
     "permanence": Family(
-        "identity", "remove / duplicate a body, ideally while occluded",
-        "mass_ratio", "instant", "mass_continuity", "permanence", "rigid_body"),
+        "identity", "remove a body, ideally while occluded",
+        "mass_ratio", "sustained", "mass_continuity", "permanence", "rigid_body"),
     "immutability": Family(
         "identity", "the body grows or shrinks, ideally behind an occluder",
         "volume_ratio", "sustained", "shape_continuity", "immutability", "rigid_body"),
@@ -63,7 +63,7 @@ FAMILIES: Dict[str, Family] = {
         "kinematics", "per-body gravity scale g -> alpha*g",
         "gravity_scale_deviation", "sustained", "free_fall", None, "rigid_body"),
     "newton1_inertia": Family(
-        "kinematics", "a resting body accelerates, or a sliding body stops unforced",
+        "kinematics", "a moving body stops dead and stays stopped",
         "dv_over_g_dt", "sustained", "linear_momentum", None, None),
     # -- contact -----------------------------------------------------------
     "solidity": Family(
@@ -208,8 +208,11 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
                          "spin_toss": BUILD,
                          "occluder_pass": DEFER, "resting_table": DEFER,
                          "clutter_toss": DEFER},
-    "newton1_inertia":  {"ramp_slide": BUILD, "resting_table": BUILD, "rolling_ramp": BUILD,
-                         "ball_collision": DEFER},
+    # Not `resting_table`: nothing there is moving, so there is nothing to
+    # halt. A body there *starting* to move is `phantom_impulse`, which is
+    # built on that scenario -- the two used to overlap and now do not.
+    "newton1_inertia":  {"ramp_slide": BUILD, "rolling_ramp": BUILD,
+                         "resting_table": DEFER, "ball_collision": DEFER},
     # Not on `occluder_pass`: the only surface there is the floor, so the
     # violation sank the ball into the ground while it was hidden behind the
     # screen and the clip read as a vanish -- which is `permanence`, also built
@@ -227,17 +230,20 @@ COMPATIBILITY: Dict[str, Dict[str, str]] = {
     # objects, so "the cube is heavy" is a lawful reading of the clip and there
     # is no violation left for a viewer to see. Both Newton families need two
     # bodies that look the same.
-    "newton3_reaction": {"ball_collision": BUILD,
-                         "pyramid_impact": DEFER, "clutter_toss": DEFER},
+    # On `pyramid_impact` these act on two *spheres*, never the cube: the whole
+    # family rests on the two bodies being indistinguishable, and a cube next to
+    # a sphere makes "the cube is heavier" a lawful reading. The scenario names
+    # the eligible pair in `family_targets`.
+    "newton3_reaction": {"ball_collision": BUILD, "pyramid_impact": BUILD,
+                         "clutter_toss": DEFER},
     "phantom_impulse":  {"ball_collision": BUILD, "projectile_toss": BUILD,
                          "resting_table": BUILD, "spin_toss": BUILD,
                          "ramp_slide": BUILD, "stack_topple": BUILD,
                          "granular_pour": BUILD, "ball_drop": BUILD,
                          "occluder_pass": DEFER, "pendulum_swing": DEFER,
                          "rolling_ramp": DEFER, "clutter_toss": DEFER},
-    "newton2_mass":     {"ball_collision": BUILD,
-                         "pyramid_impact": DEFER, "ball_drop": DEFER,
-                         "ramp_slide": DEFER},
+    "newton2_mass":     {"ball_collision": BUILD, "pyramid_impact": BUILD,
+                         "ball_drop": DEFER, "ramp_slide": DEFER},
     "angular_momentum": {"spin_toss": BUILD, "pendulum_swing": BUILD,
                          "rolling_ramp": BUILD, "ball_collision": DEFER,
                          "ramp_slide": DEFER, "projectile_toss": DEFER},

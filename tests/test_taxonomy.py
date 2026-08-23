@@ -38,3 +38,35 @@ def test_novelty_claims_match_prior_art_doc():
     assert len(intphys) + 2 == 8          # "8 map cleanly"
     assert len(any_prior) - len(intphys) - 2 == 3   # "3 discrete-only"
     assert len(t.FAMILIES) == 20
+
+
+def test_declared_kind_matches_what_injectors_emit():
+    """`FAMILIES[f].kind` is what the taxonomy promises a consumer; the plan's
+    `kind` is what the clip actually contains. They drifted apart on
+    `permanence`, which is declared instant and produces a sustained absence --
+    the removal happens at one instant, but the body being gone is an ongoing
+    state, which is the whole reason its strong bin never returns.
+    """
+    import numpy as np
+    import mockroll
+    from physviol import injectors, scenarios
+    from physviol.scenarios import TIERS
+
+    have = set(scenarios.available())
+    checked = 0
+    for scenario, family in t.build_cells():
+        if scenario not in have:
+            continue
+        sc = scenarios.get(scenario)
+        spec = sc.sample(4242, TIERS["D"], "L0")
+        traj = mockroll.roll(spec, sc)
+        inj = injectors.get(family)
+        inj.window_frames = None
+        plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+        if plan is None:
+            continue
+        assert plan.kind == t.FAMILIES[family].kind, (
+            "%s: taxonomy says %r, %s emits %r"
+            % (family, t.FAMILIES[family].kind, scenario, plan.kind))
+        checked += 1
+    assert checked > 50

@@ -71,7 +71,13 @@ class PyramidImpact(Scenario):
                    # first because it takes the impact directly.
                    "family_targets": {
                        "solidity": [self.SEG_BALLS[3], self.SEG_BALLS[0],
-                                    self.SEG_BALLS[1], self.SEG_BALLS[2]]}})
+                                    self.SEG_BALLS[1], self.SEG_BALLS[2]],
+                       # The Newton families need two bodies a viewer cannot
+                       # tell apart, so they get the spheres and never the
+                       # cube -- otherwise "the cube is heavier" is a perfectly
+                       # lawful reading of the clip.
+                       "newton2_mass": list(self.SEG_BALLS),
+                       "newton3_reaction": list(self.SEG_BALLS)}})
 
 
 register(PyramidImpact())

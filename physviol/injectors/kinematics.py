@@ -423,24 +423,28 @@ class NonParabolic(Injector):
 
 
 class Newton1Inertia(Injector):
-    """A body that starts moving, or stops moving, with nothing acting on it.
+    """A moving body stops dead with nothing to stop it, and stays stopped.
 
-    Which of the two happens is decided by the body's *state*, not by the
-    scenario's name -- a resting mug is made to slide, a sliding block is made
-    to stop dead. That is the rule that keeps one injector working across
-    `resting_table`, `ramp_slide` and `rolling_ramp`.
+    Halting only. It used to do double duty -- halt a moving body *or* shove a
+    resting one -- and the second half was `phantom_impulse` wearing a different
+    label: an uncaused velocity change on a body with nothing touching it. Two
+    families that overlap on half their cases cannot be scored independently,
+    which is the whole point of keeping them apart, so the shove belongs to
+    `phantom_impulse` and the halt belongs here.
 
-    The two branches also get different windows, and the difference is
-    physical. A body that stops dead is breaking Newton 1 for as long as it sits
-    there, so the window runs to the end of the clip. A body given a shove is
-    breaking it only at the shove; everything after is lawful ballistic motion,
-    which is why the window is short and the consequences are not annotated as
-    the violation.
+    That also settles the family's `kind`. The two branches disagreed --
+    stopping is a state that persists, shoving is an event -- so the taxonomy
+    could only be right about one of them. Now the window runs to the end of the
+    clip, because a body sitting motionless where it should still be sliding is
+    violating Newton 1 for every frame it sits there.
     """
 
     family = "newton1_inertia"
-    KICK_BY_BIN = {"weak": 0.9, "medium": 2.0, "strong": 3.6}   # m/s
-    AT_REST = 0.25                                              # m/s
+    persistent = True
+    #: How much of the body's speed is removed. Below 1.0 it merely slows,
+    #: which reads as friction; at 1.0 it stops dead, which reads as wrong.
+    HALT_BY_BIN = {"weak": 0.55, "medium": 0.85, "strong": 1.0}
+    MOVING = 0.3                                                # m/s
     STRONG_REFERENCE = 3.0                                      # dv / (g*dt)
 
     def strong_residual_reference(self, spec) -> float:
@@ -452,66 +456,52 @@ class Newton1Inertia(Injector):
             return None
         T = traj.num_frames
         bi = traj.index_of(int(actor.segmentation_id))
-        t0 = max(1, T // 3)
-        if t0 >= T - 1:
-            return None
-        speed = float(np.linalg.norm(traj.lin_vel[t0, bi]))
-        mode = "halt" if speed > self.AT_REST else "start"
+        speed = np.linalg.norm(traj.lin_vel[:, bi, :].astype(np.float64), axis=1)
+        moving = np.flatnonzero(speed > self.MOVING)
+        moving = moving[(moving >= 1) & (moving < T - 2)]
+        if not moving.size:
+            return None                 # nothing to halt: not a cell we can build
+        t0 = int(max(moving[0], min(moving[-1], T // 3)))
 
-        if mode == "halt":
-            windows = [(t0, T - 1)]
-            dv = speed
-            params = {"type": "velocity_zero", "frames": int(T - t0)}
-        else:
-            n_win = self._window_len(2, t0, T)
-            windows = [(t0, min(T - 1, t0 + n_win - 1))]
-            heading = float(rng.uniform(0.0, 2.0 * np.pi))
-            unit = np.array([np.cos(heading), np.sin(heading), 0.0])
-            nominal = unit * self.KICK_BY_BIN[severity_bin]
-            strongest = unit * self.KICK_BY_BIN["strong"]
-            scale, _ = self._fit_to_frame(
-                spec, traj, [actor], t0, strongest,
-                lambda k: self._shoved(spec, traj, actor, t0, strongest * k))
-            push = nominal * scale
-            dv = float(np.linalg.norm(push))
-            params = {"type": "velocity_set", "delta_v": push.tolist(),
-                      "frame_fit_scale": scale}
-
+        fraction = float(self.HALT_BY_BIN[severity_bin])
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         return InterventionPlan(
-            family=self.family, kind="sustained" if mode == "halt" else "instant",
-            t_event=t0, windows=windows,
+            family=self.family, kind="sustained", t_event=t0,
+            windows=[(t0, T - 1)],
             causal_body_ids=[int(actor.segmentation_id)],
-            params=dict(params, mode=mode),
-            magnitude=float(dv / max(g_dt, 1e-9)),
+            params={"type": "velocity_damp", "removed_fraction": fraction},
+            magnitude=float(speed[t0] * fraction / max(g_dt, 1e-9)),
             magnitude_unit="dv_over_g_dt", severity_bin=severity_bin,
-            notes={"mode": mode, "radius": float(actor.bounding_radius),
+            notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "speed_at_event": speed})
-
-    def _shoved(self, spec, traj, actor, t0: int, delta_v) -> Trajectory:
-        out = self._clone(traj)
-        bi = traj.index_of(int(actor.segmentation_id))
-        v0 = (traj.lin_vel[t0 - 1, bi].astype(np.float64)
-              + np.asarray(delta_v, np.float64))
-        self._rewrite_from(spec, traj, out, actor, t0, v0=v0)
-        return out
+                   "removed_fraction": fraction,
+                   "speed_at_event": float(speed[t0])})
 
     def apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
         t0 = plan.t_event
+        keep = 1.0 - float(plan.notes["removed_fraction"])
 
-        if plan.notes["mode"] == "halt":
-            # Frozen where it was: position held, velocity zero, spin zero.
+        if keep <= 1e-6:
+            # Frozen exactly where it was. Held rather than re-integrated: a
+            # body that stops on a slope must stay on the slope, and gravity
+            # would slide it back off.
             out.pos[t0:, bi, :] = traj.pos[t0 - 1, bi][None, :]
             out.quat[t0:, bi, :] = traj.quat[t0 - 1, bi][None, :]
             out.lin_vel[t0:, bi, :] = 0.0
             out.ang_vel[t0:, bi, :] = 0.0
         else:
-            out = self._shoved(spec, traj, actor, t0,
-                               np.asarray(plan.params["delta_v"], np.float64))
+            # Partly damped: follow the body's own lawful path at a slower rate,
+            # so it stays on whatever surface it was travelling along.
+            n = traj.num_frames - t0
+            u = float(t0 - 1) + np.cumsum(np.full((n,), keep))
+            pos = _geom.path_sample(traj.pos[:, bi, :], u)
+            out.pos[t0:, bi, :] = pos.astype(np.float32)
+            out.quat[t0:, bi, :] = traj.quat[t0 - 1, bi][None, :]
+            out.ang_vel[t0:, bi, :] = (traj.ang_vel[t0:, bi, :] * keep)
+            self._sync_velocity(traj, out, bi, t0)
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()

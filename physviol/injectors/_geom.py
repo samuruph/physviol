@@ -128,15 +128,15 @@ def first_contact_any(traj, body_id: int, exclude=()) -> Optional[Tuple[int, int
     return best
 
 
-def first_dynamic_pair_contact(spec, traj, prefer: Optional[int] = None
-                               ) -> Optional[Tuple[int, int, int]]:
+def first_dynamic_pair_contact(spec, traj, prefer: Optional[int] = None,
+                               only=None) -> Optional[Tuple[int, int, int]]:
     """(frame, id_a, id_b) of the first contact between two *dynamic* bodies.
 
     The event `newton2_mass` and `newton3_reaction` need: two things that both
     ought to respond, so that only one responding is visibly wrong.
 
-    `prefer` is the actor, and contacts involving it win outright rather than
-    merely breaking ties. In `pyramid_impact` the base spheres settle against
+    `only` restricts both bodies to a declared set; `prefer` is the actor, and
+    contacts involving it win outright rather than merely breaking ties. In `pyramid_impact` the base spheres settle against
     each other on frame 1, so the earliest dynamic pair is a nudge between two
     props -- an eventless violation with a one-frame lawful prefix -- while the
     collision the scenario exists to stage is the cube landing on the apex five
@@ -144,6 +144,10 @@ def first_dynamic_pair_contact(spec, traj, prefer: Optional[int] = None
     """
     dyn = {b.segmentation_id for b in spec.bodies
            if not b.static and not b.dormant}
+    if only:
+        # Restrict to a declared set, so a family that needs two bodies the
+        # viewer cannot tell apart is not handed a cube and a sphere.
+        dyn &= {int(i) for i in only}
     c = traj.contacts
     best, best_with_actor = None, None
     for k in range(len(c)):

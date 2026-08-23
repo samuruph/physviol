@@ -568,9 +568,11 @@ class _CollisionEdit(Injector):
         return self.STRONG_REFERENCE
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
+        eligible = (spec.notes.get("family_targets") or {}).get(self.family)
         actor = self._primary(spec)
         actor_id = int(actor.segmentation_id) if actor is not None else None
-        hit = _geom.first_dynamic_pair_contact(spec, traj, prefer=actor_id)
+        hit = _geom.first_dynamic_pair_contact(spec, traj, prefer=actor_id,
+                                               only=eligible)
         if hit is None:
             return None
         t0, id_a, id_b = hit
