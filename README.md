@@ -4,7 +4,7 @@
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
 — all derived from the simulator, not from human annotation.
 
-> **Status: every build cell generates, annotates and validates.** 15 scenarios × 20
+> **Status: every build cell generates, annotates and validates.** 15 scenarios × 23
 > violation families compose through the trajectory seam, and `physviol generate` walks the
 > whole matrix in one command. Each clip depicts *one* violation — that is asserted, not
 > hoped for; see [§7](#7-orthogonality-what-the-labels-guarantee).
@@ -44,9 +44,9 @@ python -m physviol.cli generate --debug --complexity L0 \
     --scenario occluder_pass --family permanence --seed 777
 ```
 
-`--debug` is Tier D: 128², 13 frames, 16 spp. `--complexity L0` is a solid background with a
+`--debug` is Tier D: 128², 25 frames, 16 spp. `--complexity L0` is a solid background with a
 sun lamp, which needs no network and renders ~4.6× faster than the photographic L1. Roughly
-**~17 s per pair**, including annotation and the overlay video. This is the loop to iterate
+**~14 s per pair**, including annotation and the overlay video. This is the loop to iterate
 in — a bug found at Tier D is fixed for all three tiers.
 
 ### b. Small subset — every family, one scenario, or a slice of the matrix
@@ -71,8 +71,8 @@ what you want for a sweep.
 ### c. The full dataset
 
 ```bash
-# Tier A (256px, 25 frames), photographic backgrounds, 6 randomisations per cell.
-# 48 cells x 6 = 288 invalid clips, sharing 78 valid twins (one per
+# Tier A (256px, 49 frames), photographic backgrounds, 6 randomisations per cell.
+# 177 cells x 6 = 1062 invalid clips, sharing 90 valid twins (one per
 # scenario+seed, since every family of a scenario renders in the same run).
 python -m physviol.cli generate --tier A --complexity L1 \
     --variants 6 --seed 100000 --severity strong --keep-going \
@@ -153,7 +153,7 @@ occlusion lag, and `occluder_pass` is the scenario built to produce it.
 ## 4. Every command
 
 ```bash
-# Taxonomy: 8 domains, 20 families, 15 scenarios, and every build cell
+# Taxonomy: 5 media, 23 families, 15 scenarios, and every build cell
 python -m physviol.cli taxonomy
 python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
 
@@ -174,7 +174,7 @@ python -m physviol.cli coverage out/release
 # Schema + cross-checks over a whole release (13 structural checks)
 python -m physviol.cli validate out/release
 
-# Tests -- including one that plans and applies all 48 cells without docker
+# Tests -- including one that plans and applies all 177 cells without docker
 python -m pytest tests/ -q
 python -m pytest tests/test_all_cells.py -q
 ```
@@ -366,7 +366,7 @@ physviol/
   schema/validate.py  cross-checks
   cli.py
 tests/                prefix identity, mask union, windows, grids, taxonomy,
-                      mockroll.py + test_all_cells.py (all 48 cells, no docker)
+                      mockroll.py + test_all_cells.py (all 177 cells, no docker)
 out/                  all generated output (gitignored)
 ```
 
