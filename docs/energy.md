@@ -1,7 +1,7 @@
 # Energy annotation
 
-**Status: designed and measured, implementation in progress.** Numbers here are from real
-PyBullet rollouts at tier `debug`, not estimates.
+**Status: built and shipping.** Numbers here are from real PyBullet rollouts at tier
+`debug`, not estimates. `tests/test_energy.py` covers it host-side, no docker.
 
 ## Why
 
@@ -85,7 +85,7 @@ scored against its own twin rather than against a global constant.
 
 | file | contents |
 |---|---|
-| `energy.npz` | `total[T]`, `kinetic_translational[T]`, `kinetic_rotational[T]`, `potential[T]`, `by_body[T,B]`, `body_ids[B]`, `dissipated[T]`, `free_anomaly[T]`, `contact_anomaly[T]` |
+| `energy.npz` | `total[T]`, `kinetic_translational[T]`, `kinetic_rotational[T]`, `potential[T]`, `by_body[T,B]`, `body_ids[B]`, `dissipated[T]`, `free_anomaly[T]`, `contact_anomaly[T]`, `excess_loss[T]` |
 | `energy_map.npz` | `energy[T,H,W]` -- each body's energy painted onto its pixels through the segmentation pass, the same mechanism `severity_map` already uses |
 | `meta.json` | an `energy` block: `E0`, `E_end`, `peak_free_anomaly`, `peak_contact_anomaly`, `total_dissipated`, all normalised by `E₀` as well as in joules |
 
@@ -109,3 +109,66 @@ it already checks the exclusive laws.
   earlier residual bimodality. The free-energy channel deliberately needs no force at all,
   and the restitution budget uses velocities rather than the reported impulse, so neither
   depends on resolving this.
+
+
+## The third channel: excess loss
+
+Energy may be lost at a contact, but only up to the kinetic energy actually available at the
+**start** of the step. A perfectly inelastic stop takes all of it and no more; potential
+energy cannot be dissipated at all, only converted by the body moving, which the balance
+already accounts for.
+
+Getting that end wrong is worth recording: budgeting against the kinetic energy at the *end*
+of the step reads 77% excess loss on a perfectly lawful `drop`, because at the impact frame
+the ball has already stopped and every joule the floor legitimately absorbed looks
+unexplained.
+
+This channel is deliberately not tuned to catch everything. `newton1_inertia` halts a body on
+the ground, which costs exactly its kinetic energy and is therefore within budget — a body
+stopping dead is energetically identical to one that hit something. That is a momentum
+violation and `linear_momentum` is what scores it.
+
+## Measured, per family
+
+Peak anomaly as % of `E0`, worst scenario per family, from real rollouts:
+
+| family | free | gain at contact | excess loss |
+|---|---|---|---|
+| immutability | — | **768** | — |
+| support | — | **400** | — |
+| fission | — | **304** | — |
+| superelastic | — | **191** | — |
+| non_parabolic | **48** | 157 | 1 |
+| solidity | **146** | — | — |
+| global_gravity | — | **145** | — |
+| phantom_impulse | — | **111** | — |
+| dissolve / permanence | — | — | **70** |
+| fusion | — | 52 | 36 |
+| time_slip | — | **38** | — |
+| newton2_mass | — | 25 | — |
+| antigravity | 20 | 13 | 4 |
+| friction | — | 14 | — |
+| angular_momentum | **14** | — | — |
+| newton1_inertia | — | 7 | — |
+| **colour_shift, continuity, deformation, newton3_reaction** | **at the valid floor** | | |
+
+Valid-clip floors, worst of all three channels: `occluder_pass` 0.000%, `barrier_pass`
+0.005%, `collision` 0.007%, `pendulum_swing` 0.31%, `drop` 1.7% (a hard impact strains the
+discrete-time balance).
+
+Four families sit at the floor and three of them should: `colour_shift` and `deformation` are
+appearance and volume-preserving shape, and `continuity` teleports a body without changing
+its height or speed. `newton3_reaction` is the interesting one — suppressing one body's
+response breaks momentum without necessarily moving the energy budget, which is a real
+statement about the violation rather than a gap in the measurement.
+
+## The scored law is narrower than the shipped trace
+
+`energy_balance` is the **per-body free-energy anomaly**: this body's energy moved while
+nothing was touching it. That is the only one of the three channels honestly attributable to
+a single body — a body's energy may legitimately jump at a contact because a partner supplied
+it, and untangling that needs pairwise bookkeeping the seam does not carry.
+
+So the law claims less than `energy.npz` shows, on purpose. `permanence` and `dissolve` are a
+scene-level excess loss and the law does not claim them; `energy.npz` and the `meta.json`
+block do.

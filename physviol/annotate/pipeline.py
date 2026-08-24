@@ -19,6 +19,7 @@ from .. import injectors
 from ..residuals import laws
 from ..scenarios import TIERS
 from ..scenarios.base import Tier
+from ..residuals import energy as energy_mod
 from ..sim.trajectory import Trajectory
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of
 from . import grids as grids_mod
@@ -121,6 +122,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # passing the whole block through means adding a law never means touching
     # this file.
     ctx = dict(plan_d.get("notes", {}))
+    # `energy_balance` needs mass and inertia, which live on the spec rather
+    # than the trajectory. Laws that do not want it simply never read the key.
+    ctx["spec"] = spec
     surface_top = ctx.get("surface_top", spec.floor_level)
     ctx["surface_top"] = surface_top
     if "support_bounds" not in ctx:
@@ -253,8 +257,19 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         p = pv if label == "valid" else pi
         traj = traj_v if label == "valid" else traj_i
 
+        seg_here = seg_v if label == "valid" else seg_i
         np.savez_compressed(os.path.join(cdir, "seg.npz"),
-                            seg=(seg_v if label == "valid" else seg_i).astype(np.uint16))
+                            seg=seg_here.astype(np.uint16))
+
+        # Mechanical energy, on BOTH twins -- the valid clip's trace is the
+        # baseline every anomaly is judged against, and shipping it means a
+        # consumer never has to load the twin to know what lawful looked like.
+        etrace = energy_mod.compute(traj, spec)
+        np.savez_compressed(os.path.join(cdir, "energy.npz"), **etrace.to_npz())
+        np.savez_compressed(
+            os.path.join(cdir, "energy_map.npz"),
+            energy=energy_mod.energy_map(etrace, seg_here))
+        energy_summary = etrace.summary()
         # Shipped on BOTH twins: the lawful footprint of the bodies the
         # violation acts on, so "where it should be" is always available
         # without having to load the other clip.
@@ -295,7 +310,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
         meta = _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier,
                            tinfo, floor, law_name, r_invalid, s_invalid, family,
-                           scenario, seed, primary_id, sev_bin, prefix_diff)
+                           scenario, seed, primary_id, sev_bin, prefix_diff,
+                           energy_summary)
         with open(os.path.join(cdir, "meta.json"), "w") as fh:
             json.dump(meta, fh, indent=2, sort_keys=True)
         written[label] = cdir
@@ -320,7 +336,9 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
 def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 floor, law_name, r_inv, s_inv, family, scenario, seed,
-                primary_id, sev_bin, prefix_diff: int = 0) -> Dict[str, object]:
+                primary_id, sev_bin, prefix_diff: int = 0,
+                energy_summary: Optional[Dict[str, float]] = None
+                ) -> Dict[str, object]:
     fam = FAMILIES[family]
     twin = "%s/%s" % (pair_uid, "invalid_%s_%s" % (family, sev_bin)
                       if label == "valid" else "valid")
@@ -356,6 +374,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "prefix_differing_pixels": int(prefix_diff),
             "prefix_identical_upto_frame": tinfo["t_event_frame"],
         },
+        "energy": energy_summary or {},
         "noise_floor": {law_name: floor.to_dict()},
         "real2sim": None,
     }

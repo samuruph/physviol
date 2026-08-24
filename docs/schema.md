@@ -132,6 +132,20 @@ archaeology project.
 ### `provenance`
 
 `generator_commit`, `kubric_image_digest`, `blender_version`, `render_seed`,
+### `energy.npz` and `energy_map.npz`
+
+Shipped on **both** twins, because the valid clip's trace is the baseline every anomaly is
+judged against. `energy.npz`: `total[T]`, `kinetic_translational[T]`,
+`kinetic_rotational[T]`, `potential[T]`, `by_body[T,B]`, `body_ids[B]`, `dissipated[T]`,
+`free_anomaly[T]`, `contact_anomaly[T]`, `excess_loss[T]`. `energy_map.npz`: `energy[T,H,W]`,
+each body's energy painted onto its own pixels through the segmentation pass — constant
+inside a rigid body's silhouette, which is the honest spatial resolution.
+
+`meta.json` carries an `energy` block: `E0`, `E_end`, `total_dissipated`,
+`total_dissipated_fraction`, `peak_free_anomaly`, `peak_contact_anomaly`, `peak_excess_loss`.
+Anomalies are fractions of `E0`. See [energy.md](energy.md) for the three channels and the
+measured floors.
+
 `prefix_identical_verified` (bool), `prefix_differing_pixels` (int),
 `prefix_identical_upto_frame` (int).
 

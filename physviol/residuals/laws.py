@@ -455,6 +455,25 @@ def phase_consistency(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     return out
 
 
+@register("energy_balance")
+def energy_balance(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
+    """Energy that moved while nothing was touching this body.
+
+    Fraction of the clip's initial mechanical energy, per frame. Needs the scene
+    spec (for mass and inertia), which the annotation pipeline puts in
+    `ctx["spec"]`; without it the law is silent rather than wrong.
+
+    Measured floor on valid clips: 0.000% on `occluder_pass`, 1.7% on `drop`,
+    where a hard impact strains the discrete-time balance. Violating families
+    land between 7% and 768%. See docs/energy.md.
+    """
+    spec = ctx.get("spec")
+    if spec is None:
+        return np.zeros((traj.num_frames,), np.float64)
+    from . import energy as _energy
+    return _energy.per_body_free_anomaly(traj, spec)[:, b]
+
+
 @register("shadow_consistency")
 def shadow_consistency(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """Optical: how far the cast shadow sits from where its caster puts it.
