@@ -24,13 +24,21 @@ REL=$($PV config-path --config "$CONFIG" 2>/dev/null || echo "out/release")
 echo "== validate =="
 $PV validate "$REL" || true
 
-echo "== coverage: every invalid clip in one video =="
-$PV coverage "$REL" || true
+# Which severity bins this release actually contains.
+BINS=$(find "$REL/clips" -mindepth 4 -maxdepth 4 -type d -name 'invalid_*' \
+       | sed -n 's/.*_\(weak\|medium\|strong\)$/\1/p' | sort -u)
+BINS=${BINS:-strong}
 
-echo "== sheets: every family of a scenario at once, per view =="
+echo "== coverage: scenario x family lattice, one per severity =="
+for BIN in $BINS; do
+  $PV coverage "$REL" --severity "$BIN" \
+      --out "$REL/coverage_$BIN.mp4" || true
+done
+
+echo "== sheets: every family of a scenario, every annotation, in one frame =="
 for PAIR in $(find "$REL/clips" -mindepth 3 -maxdepth 3 -type d | sort); do
-  for VIEW in mask energy; do
-    $PV sheet "$PAIR" --view "$VIEW" || true
+  for BIN in $BINS; do
+    $PV sheet "$PAIR" --severity "$BIN" || true
   done
 done
 
@@ -44,6 +52,6 @@ done
 
 echo
 echo "done -> $REL"
-echo "  coverage.mp4        every cell in one video -- open this first"
-echo "  clips/*/*/*/sheet_mask.mp4    every family of a scenario, side by side"
-echo "  clips/*/*/*/grid_<family>.mp4 one family, every severity, every view"
+echo "  coverage_strong.mp4            scenario x family lattice -- open this first"
+echo "  clips/*/*/*/sheet_strong.mp4   one scenario: every family x every annotation"
+echo "  clips/*/*/*/grid_<family>.mp4  one family: every severity x every annotation"

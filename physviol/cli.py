@@ -59,6 +59,12 @@ def cmd_taxonomy(a) -> int:
 #: 1.75 s at 256sq and 7.16 s at 512sq, all seven passes -- times the tier's
 #: frame count, and times ~4.6 for L1's HDRI environment. Both published tiers
 #: are 512sq now, so both are priced off the same 7.16 s.
+#: Measured on this box (8 cores), 8 independent jobs of 14 cells each:
+#: 1826 s at one worker, 729 s at four, 685 s at eight. Blender already uses
+#: every core per render, so workers oversubscribe and the curve flattens hard
+#: after four -- doubling to eight buys 7%.
+SPEEDUP = {1: 1.0, 2: 1.6, 4: 2.50, 8: 2.67}
+
 SECONDS_PER_CLIP = {("debug", "L0"): 8.0, ("debug", "L1"): 44.0,
                     ("v0", "L0"): 637.0, ("v0", "L1"): 2930.0,
                     ("v1", "L0"): 695.0, ("v1", "L1"): 3195.0}
@@ -90,8 +96,10 @@ def _print_release_size(cells, a) -> None:
     print("   + %d valid twins (one per scenario+seed, shared across families"
           "\n     and bins because the prefix is bit-identical) = %d renders"
           % (valid, renders))
-    print("   ~%.1f h serial, ~%.1f h at the measured 1.92x on four workers"
-          % (serial / 3600.0, serial / 3600.0 / 1.92))
+    workers = max(1, int(getattr(a, "workers", 0) or 4))
+    speedup = SPEEDUP.get(workers, SPEEDUP[max(SPEEDUP)])
+    print("   ~%.1f h serial, ~%.1f h at the measured %.2fx on %d worker(s)"
+          % (serial / 3600.0, serial / 3600.0 / speedup, speedup, workers))
     print("   media: %s" % ", ".join(
         "%s %d" % (m, sum(1 for s, _ in cells
                           if SCENARIOS[s].physics_medium == m))
@@ -294,14 +302,14 @@ def cmd_grid(a) -> int:
 
 def cmd_sheet(a) -> int:
     from .viz.grid import sheet
-    print(json.dumps(sheet(a.pair_dir, a.out, view=a.view, cell=a.cell),
-                     default=str))
+    print(json.dumps(sheet(a.pair_dir, a.out, view=a.view, cell=a.cell,
+                           severity=a.severity), default=str))
     return 0
 
 
 def cmd_coverage(a) -> int:
     from .viz.grid import coverage
-    print(json.dumps(coverage(a.root, a.out), default=str))
+    print(json.dumps(coverage(a.root, a.out, severity=a.severity), default=str))
     return 0
 
 
@@ -365,6 +373,8 @@ def _build(suppress: bool = False):
     p.add_argument("--complexity", default="L0")
     p.add_argument("--severity", default="all")
     p.add_argument("--variants", type=int, default=5)
+    p.add_argument("--workers", type=int, default=4,
+                   help="price the run at this many parallel workers")
     p.set_defaults(fn=cmd_taxonomy)
 
     p = add_parser("generate", help="simulate+render+annotate end to end")
@@ -436,7 +446,10 @@ def _build(suppress: bool = False):
     p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
     p.add_argument("--view", default="mask",
                    choices=["rgb", "mask", "sev", "causal", "div", "energy"],
-                   help="which annotation view fills every cell")
+                   help="kept for single-view sheets; the default shows every "
+                        "view the clips carry, one per row")
+    p.add_argument("--severity", default="strong",
+                   help="which bin fills the columns")
     p.add_argument("--out")
     p.add_argument("--cell", type=int)
     p.set_defaults(fn=cmd_sheet)
@@ -445,6 +458,8 @@ def _build(suppress: bool = False):
                        help="one video tiling every invalid clip in a release")
     p.add_argument("root", nargs="?", default="out/release")
     p.add_argument("--out")
+    p.add_argument("--severity", default="strong",
+                   help="which bin to tile; one lattice per bin")
     p.set_defaults(fn=cmd_coverage)
 
     p = add_parser("config-path",

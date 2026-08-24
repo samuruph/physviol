@@ -242,11 +242,23 @@ python -m pytest tests/test_all_cells.py -q   # plans and applies all 180 cells
 | `--outdir` / `--workdir` | where the release and the raw passes go |
 | `--frames N` `--fps N` `--resolution N` `--spp N` | override one field of a tier — section 8 |
 
-### `grid` and `sheet` views
+### The three videos
 
-Both take the same annotation views: `rgb`, `mask`, `sev`, `causal`, `div`, `energy`.
-`grid --views a,b,c` shows several as rows (default: every view the clips have);
-`sheet --view a` fills every cell with one.
+All three are laid out **wide**, and all three put every annotation view in one frame.
+
+| video | rows | columns |
+|---|---|---|
+| `grid` | severity (valid, weak, medium, strong) | annotation view |
+| `sheet` | annotation view | valid + every family of one scenario |
+| `coverage` | scenario | family — **black where a cell is not built** |
+
+A `sheet` column is the single-clip overlay turned on its side, so reading across a row
+compares the same annotation over every violation at the same instant. `coverage` is a fixed
+scenario × family lattice rather than a reflowed block, so a missing cell is a black square
+in a known place instead of a gap the tiles close up around.
+
+Views are `rgb`, `mask`, `sev`, `causal`, `div`, `energy`. `grid --views a,b,c` restricts the
+columns; `sheet --severity BIN` and `coverage --severity BIN` pick which bin to show.
 
 ### Running a worker in the container directly
 
