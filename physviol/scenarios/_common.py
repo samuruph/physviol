@@ -14,6 +14,24 @@ from typing import List, Tuple
 from .base import BodySpec, Complexity, LightSpec
 
 
+def appearance_rng(seed: int) -> "np.random.RandomState":
+    """A stream for how a scene LOOKS, independent of how it behaves.
+
+    Appearance draws must not come off the physics stream. `pick_hdri(rng)` did,
+    and because it only fires at L1 the extra draw shifted every physics value
+    after it -- so the same seed produced a different rollout at L0 and L1, and
+    the two could not be paired.
+
+    That pairing is what v1 is for: the same physics rendered plainly and
+    photographically, so a benchmark can ask whether a model's grasp of the
+    physics survives the realism. A salted, separate `RandomState` costs nothing
+    and makes the two streams independent by construction.
+    """
+    import numpy as np
+    return np.random.RandomState((int(seed) * 2654435761 + 0x9E3779B9)
+                                 % (2 ** 31 - 1))
+
+
 def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
     """At L0 a plain cube; from L1 up KuBasic's `dome`, which doubles as the
     HDRI backdrop -- the same trick MOVi uses."""

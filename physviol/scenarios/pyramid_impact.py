@@ -61,7 +61,7 @@ class PyramidImpact(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.5)),
             camera_position=(3.0, -4.6, 2.0), camera_look_at=(0.0, 0.0, 0.6),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"radius": r, "apex_z": apex_z, "drop_height": drop,
                    "pyramid_ids": list(self.SEG_BALLS),
                    # The falling cube is the actor, but it is not the

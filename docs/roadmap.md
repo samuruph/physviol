@@ -84,53 +84,123 @@ moving the light moves the shadow, so the two must not be built on the same scen
 
 ---
 
-## 3. v1 — the realistic twin, and randomisation
+## 3. v1 — the same physics under harder conditions
 
-The v0 goal is *coverage*: every meaningful law × scene combination, staged as plainly as
-possible. v1's goal is *variety*, and it is three separate pieces of work.
+**v1 is not a bigger render.** It has exactly the same tier geometry as v0 — 512×512, 30 fps,
+89 frames — and differs on two other axes:
 
-### 3a. Population — single vs multi
+| axis | v0 | v1 |
+|---|---|---|
+| tier | 512², 30 fps, 89 f | **the same** |
+| complexity | `L0` — solid background, one sun lamp | `L1` — HDRI environment, photographic objects |
+| population | `single` | `single` **and** `multi` |
 
-The remaining structural piece from the original plan. A `--population` axis putting 3–6
-independent movers in the existing scenarios, and multi-culprit annotation with per-body
-windows so a violation can hit a random subset at staggered times.
+Making v1 a resolution step *as well* would confound the axes. A model that scored worse on
+v1 could be failing at realism, at clutter, or merely at a resolution it had not been trained
+on, and the release could not say which. Fixing the geometry is what makes v0 and v1
+**paired**, which is the entire point of the axis.
 
-The design is written up already (`Culprit` records, an additive `[T,N]` body axis beside the
-existing arrays, three new validator checks, a five-step migration that is green at every
-step). **The largest single item on this list**, and the one that makes `antigravity` and
-`global_gravity` differ in *every* scenario rather than only where several bodies already
-move.
+### 3a. The complexity twin — and the one thing blocking it
 
-### 3b. The realistic twin
+The design is that `(scenario, seed)` names *the same physical event*, rendered plainly in v0
+and photographically in v1. A benchmark can then ask the question that matters: does a model's
+grasp of the physics survive the realism, or was it reading the plain background?
 
-Not new scenarios — **the same 15 scenarios re-rendered at higher complexity**, so every clip
-has a plain counterpart and a realistic one. The complexity ladder (`L0`..`L4`, mirroring
-MOVi-A..F) is already scaffolded; `L2`–`L4` add GSO objects, distractors and camera motion,
-and currently raise rather than silently degrade.
+That requires the rollout to be **bit-identical across complexity**, and today it is not.
 
-That pairing is the point: it isolates "understands physics" from "copes with clutter",
-because the physics is bit-identical across the pair and only the scene changed.
+- **Fixed.** `pick_hdri(rng)` drew from the physics stream, and because it only fires at L1
+  the extra draw shifted every physics value after it. Appearance now has its own salted
+  stream (`_common.appearance_rng`), so the draw order no longer depends on complexity.
+- **Still open.** `C.ground` returns a **cube** at L0 and a KuBasic **dome** at L1. That is a
+  genuine geometry change — different collision surface, different support height — so the
+  same seed still produces a different rollout.
 
-**The cost is the thing to decide, not the code.** L1 already costs ~5.5× L0 per render, and
-L2–L4 add GSO fetches and more geometry on top. A full-ladder release at L1 is a week of
-rendering where the same release at L0 is an overnight job. The recommendation is to build
-the code, then choose the tier and complexity per release rather than committing now.
+  The fix is to make the collision geometry identical at both levels and let complexity vary
+  only the *material*, the lighting and the backdrop. Two candidates, neither yet chosen:
+  use the dome at L0 too, shaded flat instead of with an HDRI; or keep the cube at L1 and add
+  the dome as a non-colliding backdrop body. The second changes body counts and segmentation
+  ids across complexity, which the first does not, so the first is probably right.
 
-### 3c. Randomisation depth
+  **Until this is fixed there is no complexity twin**, only two independent releases that
+  happen to share a seed. `tests/` should grow a check that
+  `sample(seed, tier, "L0")` and `sample(seed, tier, "L1")` roll identically, so the property
+  cannot regress once it holds.
 
-Today one seed varies sizes, speeds, restitution, colours, camera, HDRI, and — where
-physically neutral — actor shape. v1 should add:
+### 3b. Population — single vs multi
 
-- **object identity** — draw actors from GSO's 1033 scanned objects rather than five
-  primitives (needs the `kubasic:`/GSO kind support, half-built already)
-- **backgrounds** — 509 HDRI environments are reachable; currently one is picked per clip,
-  and the set is curated down to 44 for determinism
-- **layout** — spawn positions, camera framing and lighting direction sampled more widely,
-  with the frustum fit already in place to keep the culprit in shot
+A third orthogonal axis beside severity and complexity, in `physviol/scenarios/base.py`
+next to `TIERS` and `COMPLEXITY`:
 
-All three are per-seed, so `--variants N` picks them up without further work.
+```python
+POPULATIONS = {
+    "single": Population("single", n_actors=(1, 1), varied=False),
+    "multi":  Population("multi",  n_actors=(3, 6), varied=True),
+}
+```
 
----
+Two settings, not three. A `crowd` level would add render cost without adding a distinct kind
+of violation — `pour` and `clutter_toss` are purpose-built for dense scenes and cover that
+ground better.
+
+`Scenario.sample` is already a template method, so the expansion happens in one place:
+`_sample` stages the physics, `_vary` moves the camera, and a new `_populate` clones the
+primary actor into N siblings with their own kinds, sizes, colours and jittered initial
+state, drawing from a scenario-declared `notes["spawn_box"]`. Scenarios needing bespoke
+placement (`resting_table`, `stack_topple`, `collision`) override it; inherently fixed ones
+(`pendulum_swing`, `shadow_track`, `pour`) set `supports_population = False`.
+
+**Varied object kinds.** `BodySpec.kind` gains a `"kubasic:<id>"` form, built with the same
+`AssetSource.create(...)` call the dome already uses. Usable ids, confirmed against the
+manifest: `cone, cube, cylinder, gear, sphere, sponge, spot, suzanne, teapot, torus,
+torus_knot`. Two traps, both verified:
+
+- **`torus_knot` takes an underscore.** Kubric's own `KUBASIC_OBJECTS` lists `torusknot`,
+  which does not exist — `get_random_kubasic_object` crashes about one time in eleven. Ship
+  our own tuple.
+- **Bounds are not all ±0.5.** `cone`, `torus`, `gear`, `spot`, `suzanne`, `teapot` and
+  `torus_knot` are asymmetric, and `bounding_radius` feeds residual normalisation, every
+  support test, and now the inertia tensor in `residuals/energy.py`. Bake an id → (bounds,
+  mass) table into `scenarios/_kubasic.py`, the way `_hdri.py` bakes HDRI ids, so host-side
+  sampling needs no network.
+
+### 3c. Multi-culprit annotation
+
+`multi` is what forces it: three of five objects starting to slide at frames 3, 5 and 8 is
+one clip with three culprits and three different windows.
+
+**A culprit becomes a record inside the plan; the clip-level fields become derived reductions
+over those records.** `plan.windows` is *defined* as the merged union, `t_event` as the min
+over culprits, `causal_body_ids` as the list of their ids. A third role, `participant`,
+covers a body that is in `causal_body_ids` but is not independently scored — the static floor
+a ball sinks through, the victim of `newton3_reaction`, the second half of a `fission`. It
+inherits the primary's windows and score, **which is exactly what the pipeline does today**,
+so the first migration step is a no-op provable by byte-diffing a regenerated release.
+
+The released format grows a body axis **beside** the union, never instead of it:
+`timelines.npz` keeps `active[T]` and gains `active_by_body[T,N]`; `violation_mask.npz` keeps
+`mask[T,H,W]` and gains `mask_by_body[T,N,H,W]`. Additive, because N is not a fixed axis
+(`pour` has ~40 culprits, `global_gravity` has none), because the union is the documented
+training target and a CLAUDE.md non-negotiable, and because two independently computed views
+can be **checked against each other** — `mask == mask_by_body.any(1)`. A single source of
+truth would make a window attached to the wrong body id perfectly self-consistent and
+undetectable.
+
+### 3d. Randomisation depth
+
+`--variants N` already redraws every free parameter a scenario has. What v1 adds is *what
+there is to draw from*: GSO objects instead of primitives, the full HDRI set instead of the
+baked shortlist, and wider camera and layout sampling. This is the cheapest of the three
+pieces and should land last, because it multiplies whatever the other two produce.
+
+### Order
+
+1. **Make the complexity twin real** — the floor-geometry fix in 3a, plus the regression test.
+   Nothing else in v1 means anything until `(scenario, seed)` names one physical event.
+2. **Population axis in the scenes**, still one culprit per clip. All 180 cells run unchanged
+   in a busier scene, which is what makes this safe to land on its own.
+3. **Multi-culprit annotation**, one family at a time. `support` and `friction` first — they
+   *are* the "three of five objects start sliding" case.
+4. **Randomisation depth.**
 
 ## Where this stands
 

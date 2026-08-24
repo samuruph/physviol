@@ -81,7 +81,7 @@ class Collision(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.4)),
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,
                    "identical_actors": True, "target_at_rest": True,
                    "striker_id": self.SEG_A, "target_id": self.SEG_B})

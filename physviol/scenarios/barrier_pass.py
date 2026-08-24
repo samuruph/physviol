@@ -81,7 +81,7 @@ class BarrierPass(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 0.5)),
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"radius": radius, "speed": speed, "wall_x": wall_x,
                    "wall_id": self.SEG_WALL,
                    "family_targets": {"solidity": [self.SEG_BALL]}})

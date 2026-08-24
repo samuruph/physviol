@@ -155,37 +155,65 @@ def cmd_generate(a) -> int:
     rel = a.outdir or os.path.join("out", "release")
 
     done, failed, t0 = [], [], time.perf_counter()
-    for v in range(a.variants):
-        for scenario, families in sorted(by_scenario.items()):
-            seed = a.seed + v
-            rc, info = _run_worker(scenario, seed, tier, ",".join(families),
-                                   a.severity, work, complexity=a.complexity,
-                                   window=a.window,
-                                   dials={"resolution": a.resolution,
-                                          "fps": a.fps, "frames": a.frames,
-                                          "spp": a.spp})
-            if rc != 0:
-                print("worker failed for %s/%d: %s"
-                      % (scenario, seed, str(info)[:400]), file=sys.stderr)
-                failed.append((scenario, seed, "worker"))
-                if not a.keep_going:
-                    return rc
-                continue
-            for bad in [x for x in info.get("variants", []) if not x.get("ok")]:
-                failed.append((scenario, bad.get("family"), bad.get("error")))
-                print("  !! %-15s %-17s %-6s %s"
-                      % (scenario, bad.get("family"), bad.get("severity"),
-                         bad.get("error")), file=sys.stderr)
-            produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
-            for res in _annotate(info["outdir"], rel,
-                                 overlay=not a.no_overlay, only=produced):
-                done.append(res)
-                print("  %-15s seed=%-5d %-17s %-6s t_event=%-3d lag=%-2d "
-                      "vwin=%-13s sev=%.2f"
-                      % (scenario, seed, res["family"], res["severity"],
-                         res["t_event"], res["observability_lag"],
-                         str(res["violation_windows"])[:13],
-                         res.get("peak_severity", res["peak_score"])))
+    # One (variant, scenario) is one container run writing to its own
+    # directory, so the units are independent and the order they finish in
+    # cannot change what any of them produces: the per-clip rng is keyed by
+    # (seed, family, severity) through crc32, never by position in a queue.
+    # `tests/test_parallel_determinism.py` pins that.
+    jobs = [(v, scenario, families)
+            for v in range(a.variants)
+            for scenario, families in sorted(by_scenario.items())]
+
+    def run_one(job):
+        v, scenario, families = job
+        seed = a.seed + v
+        rc, info = _run_worker(scenario, seed, tier, ",".join(families),
+                               a.severity, work, complexity=a.complexity,
+                               window=a.window,
+                               dials={"resolution": a.resolution, "fps": a.fps,
+                                      "frames": a.frames, "spp": a.spp})
+        if rc != 0:
+            return {"scenario": scenario, "seed": seed, "rc": rc, "info": info,
+                    "results": [], "bad": []}
+        bad = [x for x in info.get("variants", []) if not x.get("ok")]
+        produced = [x["dir"] for x in info.get("variants", []) if x.get("ok")]
+        results = list(_annotate(info["outdir"], rel,
+                                 overlay=not a.no_overlay, only=produced))
+        return {"scenario": scenario, "seed": seed, "rc": 0, "info": info,
+                "results": results, "bad": bad}
+
+    workers = max(1, int(getattr(a, "workers", 1) or 1))
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            outcomes = list(pool.map(run_one, jobs))
+    else:
+        outcomes = [run_one(j) for j in jobs]
+
+    # Reported in job order, not completion order, so two runs at different
+    # worker counts produce the same transcript.
+    for out in outcomes:
+        scenario, seed = out["scenario"], out["seed"]
+        if out["rc"] != 0:
+            print("worker failed for %s/%d: %s"
+                  % (scenario, seed, str(out["info"])[:400]), file=sys.stderr)
+            failed.append((scenario, seed, "worker"))
+            if not a.keep_going:
+                return out["rc"]
+            continue
+        for bad in out["bad"]:
+            failed.append((scenario, bad.get("family"), bad.get("error")))
+            print("  !! %-15s %-17s %-6s %s"
+                  % (scenario, bad.get("family"), bad.get("severity"),
+                     bad.get("error")), file=sys.stderr)
+        for res in out["results"]:
+            done.append(res)
+            print("  %-15s seed=%-5d %-17s %-6s t_event=%-3d lag=%-2d "
+                  "vwin=%-13s sev=%.2f"
+                  % (scenario, seed, res["family"], res["severity"],
+                     res["t_event"], res["observability_lag"],
+                     str(res["violation_windows"])[:13],
+                     res.get("peak_severity", res["peak_score"])))
     dt = time.perf_counter() - t0
     print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
           % (len(done), dt, dt / max(len(done), 1), rel))
@@ -335,6 +363,11 @@ def _build(suppress: bool = False):
     p.add_argument("--seed", type=int, default=91731)
     p.add_argument("--scenario", help="restrict to one scenario")
     p.add_argument("--family", help="restrict to one family")
+    p.add_argument("--workers", type=int, default=1,
+                   help="container runs in parallel. Each render already uses "
+                        "every core, so N workers oversubscribe -- measured "
+                        "1.92x at 4 on this box, not 4x. Output is identical "
+                        "at any N.")
     p.add_argument("--keep-going", action="store_true",
                    help="carry on past a failing cell and list them at the end")
     p.add_argument("--severity", default="strong",

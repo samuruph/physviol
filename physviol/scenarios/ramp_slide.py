@@ -58,7 +58,7 @@ class RampSlide(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 1.0)),
             camera_position=(0.5, -6.6, 2.5), camera_look_at=(0.0, 0.0, 1.0),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"tilt_rad": tilt, "mu": mu, "half_extent": half,
                    "down_slope": list(d), "ramp_id": self.SEG_RAMP})
 

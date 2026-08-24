@@ -109,7 +109,7 @@ TIERS: Dict[str, Tier] = {
     #                             res  fps  frames  spp  F_lat  HW_lat  publish
     "debug": Tier("debug", 128, 12, 25, 16, 7, 8, False),
     "v0":    Tier("v0",    512, 30, 89, 64, 23, 16, True),
-    "v1":    Tier("v1",    512, 24, 97, 64, 25, 16, True),
+    "v1":    Tier("v1",    512, 30, 89, 64, 23, 16, True),
 }
 # v0 is 512x512 / 30 fps / 89 frames = 2.97 s.
 #
@@ -118,10 +118,18 @@ TIERS: Dict[str, Tier] = {
 # frame count must be 4k+1 for exact VAE latent alignment -- 90 is not, and 89
 # is the closest that is.
 #
-# `latent_hw` stays 16 at 512, matching v1 rather than following the /16 rule
-# the smaller tiers use. That is deliberate and predates this change: the token
-# grid is a fixed 16x16 for both published tiers so a model trained on one
-# transfers to the other without reshaping.
+# `latent_hw` stays 16 at 512 rather than following the /16 rule the debug tier
+# uses: the token grid is a fixed 16x16 for both published tiers so a model
+# trained on one transfers to the other without reshaping.
+#
+# **v0 and v1 are the same tier geometry on purpose.** v1 is not a bigger
+# render, it is the same physics under harder conditions -- photographic
+# backgrounds and objects (complexity L1) and crowded scenes (population
+# multi). Making it a resolution step as well would confound the two: a model
+# that scored worse on v1 could be failing at realism, at clutter, or merely at
+# a resolution it had not been trained on, and the release could not say which.
+# Keeping the geometry fixed makes v0 and v1 *paired*, which is the comparison
+# the axis exists for. See docs/roadmap.md.
 
 #: The letters this project used until 2026-08-24. Accepted with a pointer to
 #: the new name rather than silently, so an old script or a stale note fails

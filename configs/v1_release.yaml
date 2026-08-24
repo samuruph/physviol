@@ -1,20 +1,29 @@
 # ============================================================================
-# v1_release -- the high-resolution release.
+# v1_release -- the same physics as v0, under harder conditions.
 #
 #   python -m physviol.cli taxonomy --config v1_release   # price it FIRST
-#   python -m physviol.cli generate --config v1_release
+#   bash scripts/run.sh v1_release
 #
-# See configs/review.yaml for what every key means.
+# v1 is NOT a bigger render. Same tier geometry as v0 -- 512x512, 30 fps, 89
+# frames -- so a model that scores worse here is failing at realism or clutter,
+# not at a resolution it was never trained on. That pairing is the whole point
+# of the axis; see docs/roadmap.md section 3.
+#
+# NOTE: the complexity twin is not real yet. `C.ground` returns a cube at L0 and
+# a dome at L1, which is a genuine collision-geometry change, so the same seed
+# does not yet roll identically at both levels. Until that is fixed this config
+# produces an independent release rather than v0's twin.
 # ============================================================================
 
 defaults:
   seed: 20260824
-  tier: v1             # 512x512, 24 fps, 97 frames
-  complexity: L1       # photographic HDRI environments -- ~5.5x an L0 render
+  tier: v1             # 512x512, 30 fps, 89 frames -- identical to v0
+  complexity: L1       # HDRI environment + photographic objects, ~4.6x an L0 render
   severity: all
   variants: 3
 
 generate:
   keep_going: true
+  workers: 4
   workdir: out/work_v1
   outdir: out/physviol_v1

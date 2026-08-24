@@ -41,7 +41,7 @@ Three configs, one command each. `conda activate physviol` first.
 |---|---|---|---|
 | **review** | `configs/review.yaml` | every cell once, `strong`, 128², 25 f | **~25 min** |
 | **v0** | `configs/v0_release.yaml` | 512², 30 fps, 89 f (2.97 s), all three bins, 3 variants | ~6.4 days |
-| **v1** | `configs/v1_release.yaml` | 512², 97 f, photographic (L1) | weeks |
+| **v1** | `configs/v1_release.yaml` | **same geometry as v0**, photographic (L1) + multi-object | weeks |
 
 ### The review sweep — run this before anything else
 
@@ -111,6 +111,18 @@ python -m physviol.cli generate --config review --tier v0
 
 `--keep-going` carries on past a cell that fails and lists the failures at the end; the
 shipped configs set it.
+
+### Parallelism
+
+`--workers N` runs N container jobs at once. A job is one `(variant, scenario)` — so
+parallelism only helps when a run spans several scenarios or several variants, and
+`--scenario drop` on its own is a single job however high you set N.
+
+**Output is byte-identical at any worker count**: each job writes its own directory, and the
+per-clip rng is keyed by `(seed, family, severity)` through `crc32`, never by position in a
+queue. Verified by hashing all 295 files of a run at `--workers 1` against the same run at
+`--workers 4` — zero differences. Results are also printed in job order rather than
+completion order, so two runs produce the same transcript.
 
 ### Config files
 
@@ -385,11 +397,18 @@ which, and what that means for a confusion matrix.
 | | `debug` | `v0` (`physviol_v0`) | `v1` (`physviol_v1`) |
 |---|---|---|---|
 | resolution | 128² | 512² | 512² |
-| frames @ fps | 25 @ 12 | 89 @ 30 | 97 @ 24 |
-| duration | 2.08 s | 2.97 s | 4.04 s |
-| latent grid | 7×8×8 | 23×16×16 | 25×16×16 |
-| render cost | ~0.44 s/frame | ~7.16 s/frame | ~7.16 s/frame |
+| frames @ fps | 25 @ 12 | 89 @ 30 | 89 @ 30 |
+| duration | 2.08 s | 2.97 s | 2.97 s |
+| latent grid | 7×8×8 | 23×16×16 | 23×16×16 |
+| complexity | `L0` | `L0` | **`L1`** |
+| population | single | single | **single + multi** |
 | published | never | yes | yes |
+
+**v0 and v1 are the same tier geometry on purpose.** v1 is not a bigger render — it is the
+same physics under harder conditions: photographic backgrounds and objects, and crowded
+scenes. Making it a resolution step as well would confound the axes, since a model scoring
+worse on v1 could be failing at realism, at clutter, or merely at an unfamiliar resolution.
+Fixing the geometry is what makes the two **paired**. See [docs/roadmap.md](docs/roadmap.md).
 
 **v0 is 30 fps** so the release downsamples cleanly to 15 and 10 without resampling, which a
 12 fps master cannot do. 89 frames rather than 90 because every frame count must be `4k+1`

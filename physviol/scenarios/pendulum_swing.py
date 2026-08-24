@@ -69,7 +69,7 @@ class PendulumSwing(Scenario):
             lights=C.lights(cx, look_at=(0, 0, 1.4)),
             camera_position=(0.2, -6.8, 1.9), camera_look_at=(0.0, 0.0, 1.5),
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"constraint": "pivot", "pivot": list(pivot), "arm": arm,
                    "theta0": theta0, "omega": omega,
                    "omega_ref": abs(theta0) * omega,

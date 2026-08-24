@@ -19,7 +19,10 @@ beyond `physviol/render/worker_smoke.py`.
   (`physviol_v0`, build now): **512×512, 30 fps, 89 frames = 2.97 s**, ~637 s/clip.
   30 fps so the release downsamples cleanly to 15 and 10; 89 rather than 90 because every
   frame count must be `4k+1` for VAE latent alignment.
-  tier v1 (`physviol_v1`, later): 512×512, 24 fps, 97 frames. Same generators, one config
+  tier v1 (`physviol_v1`, later): **the same geometry as v0**; it differs by
+  complexity (L1, photographic) and population (multi), not by resolution — so a
+  model scoring worse on v1 is failing at realism or clutter, not at an unfamiliar
+  render size. See docs/roadmap.md §3. Same generators, one config
   block apart. **Debug at the debug tier; a bug found there is fixed for all three.**
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
   `traj.npz`, which is scenario-agnostic, so 14 scenarios x 17 families needs 13 + 6 files,

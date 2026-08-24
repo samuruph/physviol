@@ -65,7 +65,7 @@ class OccluderPass(Scenario):
             role="occluder")
 
         occ = _occluded_frames(eye, ball, screen, tier, radius, y_path)
-        hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
+        hdri_id = pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,

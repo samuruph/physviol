@@ -64,7 +64,7 @@ class Tumble(Scenario):
                             scale=f.scene_scale),
             camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity,
-            hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
+            hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"half_extent": half, "spin": list(spin),
                    "v0": [vx, 0.0, f.vz], "flight_seconds": flight,
                    "apex": f.apex, "scene_scale": f.scene_scale,

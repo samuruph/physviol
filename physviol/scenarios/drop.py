@@ -36,7 +36,7 @@ class Drop(Scenario):
         vx, vy = float(rng.uniform(-0.5, 0.5)), float(rng.uniform(-0.5, 0.5))
         hue = float(rng.uniform(0.0, 1.0))
 
-        hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
+        hdri_id = pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None
         floor = C.ground(cx, self.SEG_FLOOR)
 
         # Sphere or cube: both fall and bounce, so the shape is free to vary

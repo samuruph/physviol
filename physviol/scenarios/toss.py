@@ -42,7 +42,7 @@ class Toss(Scenario):
         # never near an edge at either end of the clip.
         x0 = -vx * flight * 0.5
 
-        hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
+        hdri_id = pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None
         kind = "sphere" if rng.rand() < 0.6 else "cube"
         ball = BodySpec(
             name="ball", kind=kind, position=(x0, 0.0, f.launch_z),
