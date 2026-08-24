@@ -90,6 +90,7 @@ Optical Consistency, Material Response.
 | **Support / static equilibrium** | — | none | **new** — severity = clearance above the surface actually beneath the body |
 | **Friction inversion** | — | Block Slide is the setting, not the violation | **new** — severity = effective µ vs declared µ |
 | **Shadow / optical** (position) | — | Moving Shadow, Orbit Shadow / Optical Consistency | covered as a category, but **ours is the only one with a mask that is not on the object** |
+| **Shadow inverted** | — | Moving Shadow "shadow inverts onto the ceiling" | covered, and the **only family in v0 that is wrong from frame 0** — nothing changes mid-clip, so there is no moment to catch and a model has to compare the shadow's bearing against the key light |
 | **Shadow shape** | — | Moving Shadow "shape mismatches the object" | covered, and **split from shadow position on purpose** — a benchmark asking whether a model tracks where a shadow goes should not be scored on clips where it is also the wrong shape |
 | **Deformation** | — | nearest is Cloth "impossible folds", which is continuum | **new** for rigid bodies — the path stays lawful and only the proportions change |
 | **Global gravity scale** | — | none | **new** — internally consistent, mask is the whole frame, no localized culprit |
@@ -106,11 +107,13 @@ Optical Consistency, Material Response.
 
 ### What this table is claiming
 
-Of the 17 violation families in v0, **6 map cleanly onto prior art** (Permanence,
-Immutability, Fission, Continuity, Solidity, Shadow), **3 exist there only as discrete flags**
-where we make them continuous (anti-gravity, phantom impulse, super-elastic), and **8 are
-new**. The novelty is not primarily in the taxonomy anyway — it is that every one of these
-ships with a mask, three clocks and a residual. Re-check this table whenever Part 2 changes.
+Of the 23 violation families in v0, **11 map cleanly onto prior art** (Permanence, Dissolve,
+Immutability, Fission, Fusion, Continuity, Solidity, Colour shift, Shadow, Shadow shape,
+Shadow inverted), **3 exist there only as discrete flags** where we make them continuous
+(anti-gravity, phantom impulse, super-elastic), and **9 are new**. The novelty is not
+primarily in the taxonomy anyway — it is that every one of these ships with a mask, three
+clocks and a residual. `tests/test_taxonomy.py` asserts these three counts, so the table
+cannot drift from the code without something going red.
 
 `fission` is counted as covered rather than new because it is the appearance half of IntPhys
 2's permanence principle — an object arriving where there was none. What is new is staging it

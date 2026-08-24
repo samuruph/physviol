@@ -11,6 +11,7 @@ Pure free flight for the whole clip: no contact, so the angular-momentum law's
 """
 from __future__ import annotations
 
+from .. import camera as cam
 from . import _common as C
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
@@ -28,34 +29,46 @@ class Tumble(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        half = float(rng.uniform(0.26, 0.34))
+        # Airborne from the first frame to the last -- if it lands, the contact
+        # gives the spin a lawful way to change and the angular-momentum
+        # residual's contact gate blanks exactly the frames we care about. The
+        # arc's duration is therefore the clip's, and the shot is derived from
+        # it rather than hand-tuned; see `camera.frame_flight`.
         flight = tier.num_frames / float(tier.fps)
-        # Apex mid-clip and still airborne at the last frame -- if it lands, the
-        # contact would give the spin a lawful way to change and the residual's
-        # contact gate would blank exactly the frames we care about.
-        vz = float(9.81 * flight * rng.uniform(0.58, 0.70))
-        vx = float(rng.uniform(1.4, 2.4) * rng.choice([-1.0, 1.0]))
+        f = cam.frame_flight(flight,
+                             angular_radius=float(rng.uniform(0.086, 0.100)))
+        camera_position, camera_look_at = cam.flight_camera(f)
+
+        half = f.radius
+        vx = float(f.x_travel / flight * rng.choice([-1.0, 1.0]))
+        x0 = -vx * flight * 0.5
+        # Spin rate is a rate, not a length, so it does NOT scale with the
+        # scene: a cube turning three times over the flight looks the same
+        # whether the flight is two metres or twenty.
         spin = (float(rng.uniform(-1.5, 1.5)), float(rng.uniform(3.5, 5.5)),
                 float(rng.uniform(-1.5, 1.5)))
 
         cube = BodySpec(
-            name="cube", kind="cube",
-            position=(-vx * flight * 0.45, 0.0, float(rng.uniform(0.7, 1.1))),
-            scale=(half,) * 3, velocity=(vx, 0.0, vz), angular_velocity=spin,
+            name="cube", kind="cube", position=(x0, 0.0, f.launch_z),
+            scale=(half,) * 3, velocity=(vx, 0.0, f.vz), angular_velocity=spin,
             mass=1.0, friction=0.4, restitution=0.4,
             color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_CUBE, role="actor")
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), cube,
-                    C.understudy(cube, self.SEG_SPLIT)],
-            lights=C.lights(cx, look_at=(0, 0, 1.4)),
-            camera_position=(0.3, -7.6, 2.0), camera_look_at=(0.0, 0.0, 1.7),
+            bodies=[C.ground(cx, self.SEG_FLOOR,
+                             size=max(6.0, 1.6 * f.half_extent)),
+                    cube, C.understudy(cube, self.SEG_SPLIT)],
+            lights=C.lights(cx, look_at=(0.0, 0.0, f.look_z * 0.4),
+                            scale=f.scene_scale),
+            camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"half_extent": half, "spin": list(spin),
-                   "v0": [vx, 0.0, vz]})
+                   "v0": [vx, 0.0, f.vz], "flight_seconds": flight,
+                   "apex": f.apex, "scene_scale": f.scene_scale,
+                   "frame_half_extent": f.half_extent})
 
 
 register(Tumble())

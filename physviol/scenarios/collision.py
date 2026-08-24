@@ -7,10 +7,16 @@ Grounded in LikePhys *Ball Collision*.
 """
 from __future__ import annotations
 
+from .. import camera as cam
 from . import _common as C
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
+
+
+#: Hand-composed, and now also the reference the ball speed is derived from.
+CAMERA = (0.3, -6.0, 1.7)
+LOOK_AT = (0.1, 0.0, 0.35)
 
 
 class Collision(Scenario):
@@ -33,8 +39,13 @@ class Collision(Scenario):
         radius = float(rng.uniform(0.28, 0.36))
         r_a = r_b = radius
         hue = float(rng.uniform(0, 1))
-        speed = float(rng.uniform(2.2, 2.8))
         flight = tier.num_frames / float(tier.fps)
+        # Derived from the frame, not picked: the balls are all but frictionless
+        # (0.05, so they roll rather than scrub) and therefore travel `v*T`
+        # whatever we choose. A fixed 2.2-2.8 m/s framed the 13-frame clips it
+        # was tuned against and rolled the struck ball out of shot at 25 and 49.
+        speed = float(cam.traverse_speed(CAMERA, LOOK_AT, flight,
+                                         fraction=float(rng.uniform(0.60, 0.72))))
 
         # A striker into a body at REST, not two balls closing head-on. Both
         # Newton families hinge on how the struck ball responds, and a target
@@ -68,7 +79,7 @@ class Collision(Scenario):
             bodies=[C.ground(cx, self.SEG_FLOOR), striker, target,
                     C.understudy(striker, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.4)),
-            camera_position=(0.3, -6.0, 1.7), camera_look_at=(0.1, 0.0, 0.35),
+            camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,

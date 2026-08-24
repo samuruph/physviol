@@ -22,17 +22,18 @@ SUBSTEPS = 8
 
 
 def _tops(spec):
-    """Static surfaces as (top_z, cx, cy, hx, hy, seg_id), highest first."""
+    """Static surfaces as (top_z, cx, cy, hx, hy, seg_id, mu), highest first."""
     out = []
     for b in spec.bodies:
         if not b.static:
             continue
         if b.kind == "cube":
             out.append((b.position[2] + b.scale[2], b.position[0], b.position[1],
-                        b.scale[0], b.scale[1], int(b.segmentation_id)))
+                        b.scale[0], b.scale[1], int(b.segmentation_id),
+                        float(b.friction)))
         else:
             out.append((spec.floor_level, 0.0, 0.0, 1e6, 1e6,
-                        int(b.segmentation_id)))
+                        int(b.segmentation_id), float(b.friction)))
     return sorted(out, key=lambda r: -r[0])
 
 
@@ -75,10 +76,10 @@ def _box_hit(box, point, radius):
 
 
 def _ground(tops, x, y, floor_level):
-    for top, cx, cy, hx, hy, seg in tops:
+    for top, cx, cy, hx, hy, seg, mu in tops:
         if abs(x - cx) <= hx and abs(y - cy) <= hy:
-            return top, seg
-    return floor_level, 0
+            return top, seg, mu
+    return floor_level, 0, 0.6
 
 
 def roll(spec, scenario=None) -> Trajectory:
@@ -119,13 +120,26 @@ def roll(spec, scenario=None) -> Trajectory:
             for i in range(B):
                 if not free[i]:
                     continue
-                top, sid = _ground(tops, p[i, 0], p[i, 1], spec.floor_level)
+                top, sid, mu_s = _ground(tops, p[i, 0], p[i, 1], spec.floor_level)
                 if p[i, 2] - r[i] <= top and v[i, 2] < 0.0:
                     p[i, 2] = top + r[i]
                     v[i, 2] = -v[i, 2] * float(bodies[i].restitution)
                     if abs(v[i, 2]) < 0.06:
                         v[i, 2] = 0.0
                     note(f, seg[i], sid, [0.0, 0.0, 1.0], p[i].tolist())
+                # Coulomb friction while in contact with the surface below.
+                # The mock ran frictionless until a framing audit used it to ask
+                # "does the actor stay in shot?", and got 0% for `rolling_ramp`
+                # at Tier A because nothing here ever slowed a sliding body
+                # down. Physical fidelity is still the container's job; this is
+                # only enough that a body which should coast to a halt does.
+                if p[i, 2] - r[i] <= top + 1e-4:
+                    mu = float(bodies[i].friction) * mu_s   # PyBullet's default
+                    vt = v[i, :2]
+                    sp = float(np.hypot(vt[0], vt[1]))
+                    if sp > 1e-9:
+                        dv = mu * float(abs(g[2])) * h
+                        v[i, :2] = vt * max(0.0, 1.0 - dv / sp)
                 # Sphere against a static box, treated as axis-aligned. Needed
                 # because a scenario whose central event the mock cannot
                 # produce is a blind spot in the only test that covers every

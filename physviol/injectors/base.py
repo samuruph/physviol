@@ -448,10 +448,20 @@ class Injector:
         trip the teleport detector.
         """
         dt = traj.dt
-        pos = out.pos[t0 - 1:, bi, :].astype(np.float64)
+        # `t0 - 1` is a backward difference, so it needs clamping rather than
+        # letting Python wrap it: at t0 == 0 `out.pos[-1:]` is the *last* frame,
+        # a one-row slice, and this returned silently having synced nothing.
+        # Harmless until the first family with `t_event == 0` -- `shadow_inverted`
+        # -- at which point it is a body whose recorded velocity describes a
+        # path it is not on.
+        lo = max(t0 - 1, 0)
+        pos = out.pos[lo:, bi, :].astype(np.float64)
         if pos.shape[0] < 2:
             return
-        out.lin_vel[t0:, bi, :] = ((pos[1:] - pos[:-1]) / dt).astype(np.float32)
+        v = ((pos[1:] - pos[:-1]) / dt).astype(np.float32)
+        out.lin_vel[lo + 1:, bi, :] = v
+        if t0 == 0:                      # no frame -1 to difference against
+            out.lin_vel[0, bi, :] = v[0]
 
     def _rewrite_group(self, spec, traj: Trajectory, out: Trajectory, bodies,
                        t0: int, g_by_body=None, v0_by_body=None,

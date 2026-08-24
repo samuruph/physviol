@@ -15,10 +15,15 @@ from typing import List, Tuple
 
 import numpy as np
 
+from .. import camera as cam
 from . import _common as C
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
+
+
+CAMERA = (0.0, -8.5, 1.5)
+LOOK_AT = (0.0, 0.4, 0.9)
 
 
 class OccluderPass(Scenario):
@@ -33,11 +38,18 @@ class OccluderPass(Scenario):
             raise NotImplementedError("complexity %s not built" % complexity)
 
         radius = float(rng.uniform(0.26, 0.36))
-        speed = float(rng.uniform(3.0, 3.8))
+        # Derived from the frame -- see `collision`. This also fixes the
+        # occluded *fraction* of the clip, which used to shrink as the tiers got
+        # longer: the screen is a fixed width, so a ball that travels further
+        # spends proportionally less of the clip behind it, and the observability
+        # lag this scenario exists to produce quietly shortened with tier.
+        speed = float(cam.traverse_speed(
+            CAMERA, LOOK_AT, tier.num_frames / float(tier.fps),
+            fraction=float(rng.uniform(0.62, 0.74))))
         y_path = 0.55
         half_w = float(rng.uniform(0.78, 1.02))
         screen_h = float(rng.uniform(1.05, 1.35))
-        cam = (0.0, -8.5, 1.5)
+        eye = CAMERA
 
         x0 = -speed * (tier.num_frames / float(tier.fps)) * 0.5
         ball = BodySpec(
@@ -52,7 +64,7 @@ class OccluderPass(Scenario):
             color=(0.22, 0.24, 0.30), segmentation_id=self.SEG_SCREEN,
             role="occluder")
 
-        occ = _occluded_frames(cam, ball, screen, tier, radius, y_path)
+        occ = _occluded_frames(eye, ball, screen, tier, radius, y_path)
         hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
 
         return SceneSpec(
@@ -60,7 +72,7 @@ class OccluderPass(Scenario):
             bodies=[C.ground(cx, self.SEG_FLOOR), screen, ball,
                     C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.8)),
-            camera_position=cam, camera_look_at=(0.0, 0.4, 0.9),
+            camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
             notes={"radius": radius, "speed": speed,
                    "occluded_frames": occ,

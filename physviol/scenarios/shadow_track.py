@@ -18,10 +18,15 @@ import math
 
 import numpy as np
 
+from .. import camera as cam
 from . import _common as C
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, LightSpec,
                    SceneSpec, Scenario, Tier, register)
+
+
+CAMERA = (0.0, -6.2, 3.1)
+LOOK_AT = (0.0, 0.0, 0.5)
 
 
 class ShadowTrack(Scenario):
@@ -38,11 +43,21 @@ class ShadowTrack(Scenario):
         r = float(rng.uniform(0.30, 0.40))
         height = float(rng.uniform(1.0, 1.35))
         flight = tier.num_frames / float(tier.fps)
-        span = float(rng.uniform(3.2, 4.2))
-        speed = span / flight
 
         lamp = (-2.6, -1.4, 4.2)
         light_dir = _unit(np.array([0.0, 0.0, 0.0]) - np.array(lamp))
+
+        # Derived from the frame, and the shadow is what has to fit -- it is the
+        # culprit of every family staged here, and it does not sit under the
+        # actor. A low key light throws it `height/|Lz|` metres off to one side,
+        # so the pair together span the actor's travel PLUS that offset, and
+        # sizing the travel alone put the shadow past the edge on wide seeds.
+        throw = height / max(abs(float(light_dir[2])), 1e-6)
+        lead = throw * float(np.linalg.norm(light_dir[:2]))
+        budget = 2.0 * cam.frame_extent(CAMERA, LOOK_AT) * float(
+            rng.uniform(0.60, 0.70))
+        span = max(1.0, budget - lead - 2.0 * r)
+        speed = span / flight
 
         actor = BodySpec(
             name="body", kind="sphere", position=(-span / 2.0, 0.0, height),
@@ -81,7 +96,7 @@ class ShadowTrack(Scenario):
             # HDRI on its own gives a soft one with no obvious source.
             lights=[LightSpec("key", position=lamp, look_at=(0.0, 0.0, 0.0),
                               intensity=3.2)],
-            camera_position=(0.0, -6.2, 3.1), camera_look_at=(0.0, 0.0, 0.5),
+            camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"radius": r, "height": height, "speed": speed,

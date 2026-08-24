@@ -48,7 +48,15 @@ def test_cell_plans_and_applies(scenario, family):
     assert plan is not None, "%s x %s produced no plan" % (scenario, family)
 
     T = traj.num_frames
-    assert 1 <= plan.t_event < T, "t_event %d out of range" % plan.t_event
+    # 0 is legal, and exactly one family uses it: `shadow_inverted` is wrong
+    # from the first frame, so its identical prefix is empty. Everything else
+    # needs a lawful prefix for the twin structure to mean anything, and the
+    # bound below is what stops one going missing by accident.
+    assert 0 <= plan.t_event < T, "t_event %d out of range" % plan.t_event
+    if plan.t_event == 0:
+        assert inj.family in ("shadow_inverted",), (
+            "%s claims t_event 0; only families that are wrong from frame 0 "
+            "may, and they have to say so here" % inj.family)
     prev = -2
     for s, e in plan.windows:
         assert s <= e and 0 <= s < T and 0 <= e < T, (s, e, T)

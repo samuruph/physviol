@@ -18,8 +18,8 @@ def test_build_cells_are_all_compatible():
 
 
 def test_novelty_claims_match_prior_art_doc():
-    """docs/prior_art.md claims a specific breakdown of the 22 families:
-    10 map cleanly onto prior art, 3 exist there only as discrete flags where we
+    """docs/prior_art.md claims a specific breakdown of the 23 families:
+    11 map cleanly onto prior art, 3 exist there only as discrete flags where we
     make them continuous, and 9 are genuinely new. A null cross-reference is a
     novelty claim, so the counts must keep agreeing with that table."""
     intphys = [f for f, v in t.FAMILIES.items() if v.intphys2 is not None]
@@ -31,14 +31,13 @@ def test_novelty_claims_match_prior_art_doc():
     assert sorted(intphys) == ["colour_shift", "continuity", "dissolve",
                                "fission", "fusion", "immutability",
                                "permanence", "solidity"]
-    # +shadow, which LikePhys covers but IntPhys 2's four principles do not.
-    # +shadow and +shadow_shape, which LikePhys covers as Optical Consistency
-    # but IntPhys 2's four principles do not reach.
-    assert len(any_prior) == 13, sorted(any_prior)
+    # +shadow, +shadow_shape and +shadow_inverted, which LikePhys covers as
+    # Optical Consistency but IntPhys 2's four principles do not reach.
+    assert len(any_prior) == 14, sorted(any_prior)
     assert len(fully_new) == 9, sorted(fully_new)
-    assert len(intphys) + 2 == 10         # "10 map cleanly"
-    assert len(any_prior) - len(intphys) - 2 == 3   # "3 discrete-only"
-    assert len(t.FAMILIES) == 22
+    assert len(intphys) + 3 == 11         # "11 map cleanly"
+    assert len(any_prior) - len(intphys) - 3 == 3   # "3 discrete-only"
+    assert len(t.FAMILIES) == 23
 
 
 def test_declared_kind_matches_what_injectors_emit():

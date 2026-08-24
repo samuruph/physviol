@@ -14,6 +14,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from .. import camera as _cam
+
 
 # ----------------------------------------------------------------- bodies --
 def actors(spec) -> List:
@@ -417,20 +419,15 @@ def path_sample(pos: np.ndarray, u: np.ndarray) -> np.ndarray:
 # ------------------------------------------------------------------ frame --
 # Kubric's PerspectiveCamera defaults: 50 mm lens on a 36 mm sensor, so the
 # half-angle tangent is 18/50. Square renders make the vertical the same.
-TAN_HALF_FOV = 18.0 / 50.0
+#: Re-exported from `physviol.camera`, which is the single definition. Scene
+#: sampling frames a shot with the same frustum the injectors judge it by, and
+#: two copies of the lens constant is a quiet way for those to disagree.
+TAN_HALF_FOV = _cam.TAN_HALF_FOV
 
 
 def camera_basis(spec):
     """(eye, forward, right, up) for the scenario's camera."""
-    eye = np.asarray(spec.camera_position, np.float64)
-    fwd = np.asarray(spec.camera_look_at, np.float64) - eye
-    fwd /= max(float(np.linalg.norm(fwd)), 1e-9)
-    world_up = np.array([0.0, 0.0, 1.0])
-    right = np.cross(fwd, world_up)
-    n = float(np.linalg.norm(right))
-    right = (np.array([1.0, 0.0, 0.0]) if n < 1e-6 else right / n)
-    up = np.cross(right, fwd)
-    return eye, fwd, right, up
+    return _cam.camera_basis(spec.camera_position, spec.camera_look_at)
 
 
 def in_frame(spec, points: np.ndarray, margin: float = 0.04) -> np.ndarray:
@@ -441,14 +438,8 @@ def in_frame(spec, points: np.ndarray, margin: float = 0.04) -> np.ndarray:
     and the clip then *depicts* an object vanishing while being labelled
     `antigravity` or `continuity` -- a mislabelled clip, not merely a dull one.
     """
-    eye, fwd, right, up = camera_basis(spec)
-    p = np.asarray(points, np.float64) - eye
-    z = p @ fwd
-    with np.errstate(divide="ignore", invalid="ignore"):
-        x = (p @ right) / z
-        y = (p @ up) / z
-    lim = TAN_HALF_FOV * (1.0 - margin)
-    return (z > 1e-3) & (np.abs(x) <= lim) & (np.abs(y) <= lim)
+    return _cam.visible(spec.camera_position, spec.camera_look_at, points,
+                        margin=margin)
 
 
 def first_impact(traj, body_id: int, exclude=(), min_speed: float = 0.3,

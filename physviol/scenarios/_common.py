@@ -27,12 +27,21 @@ def ground(cx: Complexity, seg_id: int, size: float = 6.0) -> BodySpec:
                     segmentation_id=seg_id, role="floor")
 
 
-def lights(cx: Complexity, look_at=(0.0, 0.0, 0.6)) -> List[LightSpec]:
-    """An HDRI environment lights the scene on its own; only L0 needs a sun."""
+def lights(cx: Complexity, look_at=(0.0, 0.0, 0.6),
+           scale: float = 1.0) -> List[LightSpec]:
+    """An HDRI environment lights the scene on its own; only L0 needs a sun.
+
+    `scale` is the scene's linear size relative to the hand-tuned default of
+    roughly four metres across -- see `camera.REFERENCE_HALF_EXTENT`. The
+    free-flight scenarios size themselves from the clip length, and a sun left
+    at 4.5 m while the actor arcs twenty metres up would be a lamp *inside* the
+    trajectory, lighting the underside of everything.
+    """
     if cx.background == "hdri":
         return []
-    return [LightSpec("sun", position=(-2.2, -1.6, 4.5), look_at=look_at,
-                      intensity=2.6)]
+    s = float(scale)
+    return [LightSpec("sun", position=(-2.2 * s, -1.6 * s, 4.5 * s),
+                      look_at=look_at, intensity=2.6)]
 
 
 def hue_rgb(h: float, s: float = 0.62, v: float = 0.88) -> Tuple[float, float, float]:

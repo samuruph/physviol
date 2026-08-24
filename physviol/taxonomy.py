@@ -69,6 +69,7 @@ class Family(NamedTuple):
     requires: Tuple[str, ...] = ()
 
 
+# Category of violations
 FAMILIES: Dict[str, Family] = {
     # -- identity ----------------------------------------------------------
     "permanence": Family(
@@ -150,6 +151,11 @@ FAMILIES: Dict[str, Family] = {
         "optical", "the shadow detaches from its caster and slides away",
         "shadow_caster_offset_radii", "sustained", "shadow_consistency", None, "optical",
         requires=('cast_shadow',)),
+    "shadow_inverted": Family(
+        "optical", "the shadow sits on the lit side of its caster, all clip",
+        "shadow_caster_offset_radii", "sustained", "shadow_consistency", None,
+        "optical",
+        requires=('cast_shadow',)),
     "shadow_shape": Family(
         "optical", "the shadow stays put but stops matching the caster's shape",
         "shadow_aspect_ratio", "sustained", "shape_anisotropy", None, "optical",
@@ -212,6 +218,8 @@ class Scenario(NamedTuple):
     provides: Tuple[str, ...] = ()
 
 
+# Supported scenarios, with a short description and the event structure. The `provides`
+# tuple is what a family must declare in `requires` to be stageable here.
 SCENARIOS: Dict[str, Scenario] = {
     "drop": Scenario(
         "sphere or cube falls to a floor and bounces",

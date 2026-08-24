@@ -18,10 +18,15 @@ same scene, is shown bouncing off it.
 """
 from __future__ import annotations
 
+from .. import camera as cam
 from . import _common as C
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
                    Scenario, Tier, register)
+
+
+CAMERA = (0.1, -6.4, 1.7)
+LOOK_AT = (0.25, 0.0, 0.55)
 
 
 class BarrierPass(Scenario):
@@ -44,7 +49,11 @@ class BarrierPass(Scenario):
         # Solve the approach so the impact lands just under halfway through the
         # clip: early enough that the rebound (or the pass-through) has room to
         # play out, late enough that the lawful approach is established first.
-        speed = float(rng.uniform(2.6, 3.2))
+        # Derived from the frame -- see `collision` for why a fixed speed only
+        # ever frames one clip length. The ball also rebounds, so its budget
+        # covers the approach *and* the run back out.
+        speed = float(cam.traverse_speed(CAMERA, LOOK_AT, flight,
+                                         fraction=float(rng.uniform(0.46, 0.56))))
         gap = speed * 0.45 * flight
         x0 = wall_x - thickness - radius - gap
 
@@ -70,7 +79,7 @@ class BarrierPass(Scenario):
             bodies=[C.ground(cx, self.SEG_FLOOR), wall, ball,
                     C.understudy(ball, self.SEG_SPLIT)],
             lights=C.lights(cx, look_at=(0, 0, 0.5)),
-            camera_position=(0.1, -6.4, 1.7), camera_look_at=(0.25, 0.0, 0.55),
+            camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(rng) if cx.background == "hdri" else None,
             notes={"radius": radius, "speed": speed, "wall_x": wall_x,

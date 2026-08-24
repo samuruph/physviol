@@ -4,9 +4,15 @@ Pure free flight, no contact for the whole clip. This is the **clean control**
 of docs/PLAN.md Part 2: nothing occludes the actor, so `t_event` and
 `t_observable` coincide, and every occluded scenario's observability lag is
 measured against it.
+
+The camera is *derived*, not hand-tuned -- see `camera.frame_flight`. A body
+airborne for the whole clip rises `g*T^2/8`, so the shot has to grow with the
+clip length or the actor leaves frame; deriving it also makes the scenario
+scale-invariant, so the same seed frames identically at every tier.
 """
 from __future__ import annotations
 
+from .. import camera as cam
 from . import _common as C
 from ._hdri import pick as pick_hdri
 from .base import (COMPLEXITY, DEFAULT_COMPLEXITY, BodySpec, SceneSpec,
@@ -24,34 +30,39 @@ class Toss(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        radius = float(rng.uniform(0.30, 0.45))
-        # Aim the arc so the apex lands mid-clip and the body is still airborne
-        # at the last frame -- free flight must cover the whole window.
+        # Airborne from the first frame to the last: the arc's duration is the
+        # clip's, and everything else about the shot follows from it.
         flight = tier.num_frames / float(tier.fps)
-        vz = float(9.81 * flight * rng.uniform(0.48, 0.60))
-        vx = float(rng.uniform(1.6, 2.8) * rng.choice([-1.0, 1.0]))
-        z0 = float(rng.uniform(0.6, 1.1))
+        f = cam.frame_flight(flight, angular_radius=float(rng.uniform(0.100, 0.120)))
+        camera_position, camera_look_at = cam.flight_camera(f)
+
+        radius = f.radius
+        vx = float(f.x_travel / flight * rng.choice([-1.0, 1.0]))
+        # Launch and land symmetrically about the frame centre, so the actor is
+        # never near an edge at either end of the clip.
+        x0 = -vx * flight * 0.5
 
         hdri_id = pick_hdri(rng) if cx.background == "hdri" else None
         kind = "sphere" if rng.rand() < 0.6 else "cube"
         ball = BodySpec(
-            name="ball", kind=kind, position=(-vx * flight * 0.45, 0.0, z0),
-            scale=(radius,) * 3, velocity=(vx, 0.0, vz), mass=1.0,
+            name="ball", kind=kind, position=(x0, 0.0, f.launch_z),
+            scale=(radius,) * 3, velocity=(vx, 0.0, f.vz), mass=1.0,
             friction=0.4, restitution=0.6, color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BALL, role="actor")
 
         return SceneSpec(
             scenario=self.name, seed=seed, tier=tier,
-            bodies=[C.ground(cx, self.SEG_FLOOR), ball,
-                    C.understudy(ball, self.SEG_SPLIT)],
-            lights=C.lights(cx, look_at=(0, 0, 1.2)),
-            # Aimed high with room to spare: `antigravity` and `phantom_impulse`
-            # push the actor *up*, and a frame with no headroom makes them clamp
-            # themselves down to stay in shot.
-            camera_position=(0.4, -10.0, 2.9), camera_look_at=(0.0, 0.0, 2.2),
+            bodies=[C.ground(cx, self.SEG_FLOOR,
+                             size=max(6.0, 1.6 * f.half_extent)),
+                    ball, C.understudy(ball, self.SEG_SPLIT)],
+            lights=C.lights(cx, look_at=(0.0, 0.0, f.look_z * 0.4),
+                            scale=f.scene_scale),
+            camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
-            notes={"radius": radius, "v0": [vx, 0.0, vz],
-                   "flight_seconds": flight, "actor_kind": kind})
+            notes={"radius": radius, "v0": [vx, 0.0, f.vz],
+                   "flight_seconds": flight, "actor_kind": kind,
+                   "apex": f.apex, "scene_scale": f.scene_scale,
+                   "frame_half_extent": f.half_extent})
 
 
 register(Toss())
