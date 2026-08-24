@@ -252,13 +252,15 @@ All three are laid out **wide**, and all three put every annotation view in one 
 | `sheet` | annotation view | valid + every family of one scenario |
 | `coverage` | scenario | family — **black where a cell is not built** |
 
+Nine views, in the same order everywhere — `rgb`, `energy`, `mask`, `sev`, `causal`, `div`,
+`seg`, `depth`, `flow` — so a grid cell, a sheet cell and an overlay panel read the same.
+
 A `sheet` column is the single-clip overlay turned on its side, so reading across a row
 compares the same annotation over every violation at the same instant. `coverage` is a fixed
 scenario × family lattice rather than a reflowed block, so a missing cell is a black square
 in a known place instead of a gap the tiles close up around.
 
-Views are `rgb`, `mask`, `sev`, `causal`, `div`, `energy`. `grid --views a,b,c` restricts the
-columns; `sheet --severity BIN` and `coverage --severity BIN` pick which bin to show.
+`grid --views a,b,c` restricts the columns; `sheet --severity BIN` and `coverage --severity BIN` pick which bin to show.
 
 ### Running a worker in the container directly
 

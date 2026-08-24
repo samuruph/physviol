@@ -436,7 +436,7 @@ def _build(suppress: bool = False):
     p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
     p.add_argument("--family")
     p.add_argument("--out")
-    p.add_argument("--views", help="comma list of rgb,mask,sev,causal,div,energy "
+    p.add_argument("--views", help="comma list of rgb,mask,sev,causal,div,energy,seg,depth,flow "
                                    "(default: every view the clips have)")
     p.add_argument("--cell", type=int, default=224)
     p.set_defaults(fn=cmd_grid)
@@ -445,7 +445,8 @@ def _build(suppress: bool = False):
                    help="one scenario+seed: every family x every severity")
     p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
     p.add_argument("--view", default="mask",
-                   choices=["rgb", "mask", "sev", "causal", "div", "energy"],
+                   choices=["rgb", "mask", "sev", "causal", "div", "energy",
+                            "seg", "depth", "flow"],
                    help="kept for single-view sheets; the default shows every "
                         "view the clips carry, one per row")
     p.add_argument("--severity", default="strong",

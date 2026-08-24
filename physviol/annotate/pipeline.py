@@ -323,7 +323,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         meta = _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier,
                            tinfo, floor, law_name, r_invalid, s_invalid, family,
                            scenario, seed, primary_id, sev_bin, prefix_diff,
-                           energy_summary)
+                           energy_summary,
+                           _instance_table(spec_d, plan_d, seg_here))
         with open(os.path.join(cdir, "meta.json"), "w") as fh:
             json.dump(meta, fh, indent=2, sort_keys=True)
         written[label] = cdir
@@ -346,11 +347,51 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             "noise_floor": floor.to_dict()}
 
 
+def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
+    """One record per body: id, name, semantic label, role, and visibility.
+
+    Standard practice for a tracking dataset and the thing a segmentation map is
+    useless without. `id` is the pixel value in `seg.npz`; it is stable for the
+    whole clip, so it doubles as the track id and there is no separate
+    association step. Visibility is measured from the rendered map rather than
+    assumed, so a body parked out of frame reports zero rather than looking
+    present.
+    """
+    culprits = {int(i) for i in (plan_d or {}).get("causal_body_ids", [])}
+    out: List[Dict[str, object]] = []
+    for b in spec_d.get("bodies", []):
+        bid = int(b["segmentation_id"])
+        seen = (seg == bid)
+        frames = np.flatnonzero(seen.any(axis=(1, 2))) if seen.size else []
+        out.append({
+            "id": bid,
+            "track_id": bid,          # ids are stable, so id == track
+            "name": b["name"],
+            "category": b.get("kind", "unknown"),
+            "role": b.get("role", "unknown"),
+            "static": bool(b.get("static", False)),
+            "dormant": bool(b.get("dormant", False)),
+            "is_culprit": bid in culprits,
+            "mass_kg": b.get("mass"),
+            "friction": b.get("friction"),
+            "restitution": b.get("restitution"),
+            "first_frame": int(frames[0]) if len(frames) else None,
+            "last_frame": int(frames[-1]) if len(frames) else None,
+            "frames_visible": int(len(frames)),
+            "pixels_peak": int(seen.sum(axis=(1, 2)).max()) if seen.size else 0,
+        })
+    return out
+
+
 def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 floor, law_name, r_inv, s_inv, family, scenario, seed,
                 primary_id, sev_bin, prefix_diff: int = 0,
-                energy_summary: Optional[Dict[str, float]] = None
+                energy_summary: Optional[Dict[str, float]] = None,
+                instances: Optional[List[Dict[str, object]]] = None
                 ) -> Dict[str, object]:
+    instances = instances or []
+    seg_names = [("0", "background")] + [
+        (str(i["id"]), i["name"]) for i in instances]
     fam = FAMILIES[family]
     twin = "%s/%s" % (pair_uid, "invalid_%s_%s" % (family, sev_bin)
                       if label == "valid" else "valid")
@@ -373,6 +414,17 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                     "license": "Apache-2.0",
                     "segmentation_id": b["segmentation_id"]}
                    for b in spec_d["bodies"]],
+        # The label space, spelled out. A segmentation map is unusable without
+        # the id -> name table beside it, and burying that in `assets` (which
+        # exists to carry licences) made consumers reconstruct it.
+        "segmentation": {
+            "encoding": "instance",
+            "dtype": "uint16",
+            "background_id": 0,
+            "ids_are_declared": True,
+            "id_to_name": dict(seg_names),
+        },
+        "instances": instances,
         "provenance": {
             "generator_commit": os.environ.get("PHYSVIOL_COMMIT", "uncommitted"),
             "kubric_image_digest": _digest(), "blender_version": "2.93.4",

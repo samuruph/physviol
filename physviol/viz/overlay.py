@@ -58,6 +58,10 @@ def build(clip_dir: str, out_path: Optional[str] = None,
     ref = _npz(clip_dir, "reference_mask.npz", "mask")
     diverg = _npz(clip_dir, "divergence_map.npz", "divergence")
     energy = _npz(clip_dir, "energy_map.npz", "energy")
+    seg = _npz(clip_dir, "seg.npz", "seg")
+    depth = _npz(clip_dir, "depth.npz", "depth")
+    flow = _npz(clip_dir, "flow_fwd.npz", "flow_fwd")
+    normals = _npz(clip_dir, "normals.npz", "normals")
     etrace = _energy_trace(clip_dir)
     etwin = _energy_trace(_twin_dir(clip_dir, meta))
     tl = np.load(os.path.join(clip_dir, "timelines.npz"))
@@ -82,6 +86,12 @@ def build(clip_dir: str, out_path: Optional[str] = None,
         panels.append(("CAUSAL MASK", "causal"))
     if diverg is not None:
         panels.append(("DIVERGENCE (not GT)", "div"))
+    if seg is not None:
+        panels.append(("SEGMENTATION  per-instance tracks", "seg"))
+    if depth is not None:
+        panels.append(("DEPTH  metres, near->far", "depth"))
+    if flow is not None:
+        panels.append(("FLOW  hue=direction val=speed", "flow"))
 
     n = len(panels)
     W = n * panel + (n + 1) * PAD
@@ -96,7 +106,7 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 
         for i, (label, kind) in enumerate(panels):
             img = _panel(kind, t, rgb, mask, sev, causal, diverg, panel, ref,
-                         energy)
+                         energy, seg, depth, flow, normals)
             x = PAD + i * (panel + PAD)
             y = HEADER + PAD
             f[y:y + panel, x:x + panel] = img
@@ -107,6 +117,17 @@ def build(clip_dir: str, out_path: Optional[str] = None,
             if kind == "mask":
                 px = int(mask[t].sum()) if mask is not None else 0
                 _text(f, "%d px" % px, (x + 5, y + panel - 8), C_DIM, 0.40, 1)
+            if kind == "seg" and seg is not None:
+                ids = [int(u) for u in np.unique(seg[t]) if u]
+                _text(f, "ids %s" % ",".join(map(str, ids[:8])),
+                      (x + 5, y + panel - 8), C_DIM, 0.36, 1)
+            if kind == "depth" and depth is not None:
+                d = np.asarray(depth[t], np.float32)
+                d = d[..., 0] if d.ndim == 3 else d
+                here = d < DEPTH_SENTINEL
+                if here.any():
+                    _text(f, "%.1f-%.1f m" % (d[here].min(), d[here].max()),
+                          (x + 5, y + panel - 8), C_DIM, 0.36, 1)
             if kind == "energy":
                 _energy_scale(f, x, y, panel,
                               float(np.abs(energy[t]).max()) if energy is not None
@@ -130,7 +151,20 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 SEV_GAMMA = 0.55   # display-only; see the note in _panel
 
 
-def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None):
+#: Stable per-instance colours for the segmentation panel. Index by
+#: `id % len`, so a body keeps its colour across every clip of a scenario.
+SEG_PALETTE = [
+    (231, 76, 60), (52, 152, 219), (46, 204, 113), (241, 196, 15),
+    (155, 89, 182), (26, 188, 156), (230, 126, 34), (149, 165, 166),
+    (255, 121, 198), (139, 233, 253), (189, 147, 249), (80, 250, 123),
+]
+#: Depth beyond this is the renderer's "nothing here" sentinel (~1e10), not a
+#: distance. Anything past it is background and must not enter the normalisation.
+DEPTH_SENTINEL = 1e6
+
+
+def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None,
+           seg=None, depth=None, flow=None, normals=None):
     import cv2
     base = rgb[t].astype(np.float32)
 
@@ -162,6 +196,44 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None)
                                  cv2.COLORMAP_INFERNO)[..., ::-1].astype(np.float32)
         a = (s > 0)[..., None].astype(np.float32) * 0.88
         img = base * 0.35 * (1 - a) + base * (1 - a) * 0.65 + heat * a
+    elif kind == "seg":
+        # Instance ids in a fixed palette, so the same body is the same colour
+        # in every panel and every clip of a scenario. Background stays dark.
+        lab = seg[t]
+        img = np.zeros(base.shape, np.float32)
+        for uid in np.unique(lab):
+            if uid == 0:
+                continue
+            img[lab == uid] = np.array(
+                SEG_PALETTE[int(uid) % len(SEG_PALETTE)], np.float32)
+        img = img * 0.85 + base * 0.15
+    elif kind == "depth":
+        d = np.asarray(depth[t], np.float32)
+        if d.ndim == 3:
+            d = d[..., 0]
+        here = d < DEPTH_SENTINEL
+        img = np.zeros(base.shape, np.float32)
+        if here.any():
+            lo, hi = float(d[here].min()), float(d[here].max())
+            norm = np.clip((d - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+            heat = cv2.applyColorMap((norm * 255).astype(np.uint8),
+                                     cv2.COLORMAP_TURBO)[..., ::-1]
+            img[here] = heat[here].astype(np.float32)
+    elif kind == "flow":
+        # The standard flow wheel: hue is direction, value is magnitude. Our
+        # flow is (row, col), so the angle is atan2(col, row) to read as screen
+        # direction rather than transposed.
+        fl = np.asarray(flow[t], np.float32)
+        mag = np.linalg.norm(fl, axis=-1)
+        ang = np.arctan2(fl[..., 1], fl[..., 0])
+        hsv = np.zeros(base.shape, np.uint8)
+        hsv[..., 0] = ((ang + np.pi) / (2 * np.pi) * 179).astype(np.uint8)
+        hsv[..., 1] = 255
+        hsv[..., 2] = np.clip(mag / max(float(mag.max()), 1e-6) * 255,
+                              0, 255).astype(np.uint8)
+        img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB).astype(np.float32)
+    elif kind == "normals":
+        img = (np.asarray(normals[t], np.float32) / 65535.0 * 255.0)
     elif kind == "energy":
         # VIRIDIS, deliberately not severity's INFERNO: the two panels sit side
         # by side and answer different questions, so they must not be mistakable

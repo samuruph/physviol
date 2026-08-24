@@ -53,16 +53,20 @@ GUTTER = 104
 
 ORDER = {"valid": 0, "weak": 1, "medium": 2, "strong": 3}
 
-#: (row label, `overlay._panel` kind, which array must exist). The labels match
-#: the single-clip overlay's panel titles on purpose, so the two videos can be
-#: read against each other without translating.
+#: (row label, `overlay._panel` kind, which array must exist). The order and
+#: the labels match the single-clip overlay's panels exactly, so a grid cell, a
+#: sheet cell and an overlay panel can be read against each other without
+#: translating.
 VIEWS = [
     ("RGB", "rgb", None),
+    ("ENERGY", "energy", "energy"),
     ("MASK", "mask", "mask"),
     ("SEVERITY", "sev", "sev"),
     ("CAUSAL", "causal", "causal"),
     ("DIVERGENCE", "div", "div"),
-    ("ENERGY", "energy", "energy"),
+    ("SEGMENT", "seg", "seg"),
+    ("DEPTH", "depth", "depth"),
+    ("FLOW", "flow", "flow"),
 ]
 VIEW_NOTE = {
     "mask": "red = violation   green = should-be",
@@ -70,6 +74,9 @@ VIEW_NOTE = {
     "causal": "1 = culprit   2 = affected",
     "div": "|valid - invalid|  NOT ground truth",
     "energy": "per-body E, fraction of E0",
+    "seg": "instance ids = tracks",
+    "depth": "metres, near -> far",
+    "flow": "hue=direction val=speed",
 }
 
 
@@ -236,7 +243,8 @@ def _rows_for(cols, views: Optional[List[str]]):
     """
     have = set()
     for c in cols:
-        for key in ("mask", "sev", "causal", "div", "energy"):
+        for key in ("mask", "sev", "causal", "div", "energy", "seg",
+                    "depth", "flow"):
             if c.get(key) is not None:
                 have.add(key)
     rows = [v for v in VIEWS if v[2] is None or v[2] in have]
@@ -256,6 +264,8 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
     # the column honest -- an empty panel with no caption reads as a failed
     # render. Energy is the exception: the valid twin's trace is the baseline
     # every anomaly is measured against, so it belongs there.
+    # seg, depth and flow are properties of the render rather than of the
+    # violation, so the valid twin carries them just as the invalid one does.
     if c["is_valid"] and kind in ("sev", "causal", "div"):
         cv2.rectangle(f, (x, y), (x + cell - 1, y + cell - 1), (44, 44, 52), 1)
         ov._text(f, "n/a", (x + 6, y + cell // 2), ov.C_DIM, 0.36, 1)
@@ -264,7 +274,8 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
     img = ov._panel(kind, t, c["rgb"],
                     None if c["is_valid"] else c["mask"],
                     c["sev"], c["causal"], c["div"], cell, c["ref"],
-                    c.get("energy"))
+                    c.get("energy"), c.get("seg"), c.get("depth"),
+                    c.get("flow"), c.get("normals"))
     f[y:y + cell, x:x + cell] = img
     cv2.rectangle(f, (x, y), (x + cell - 1, y + cell - 1), (60, 60, 70), 1)
 
@@ -344,6 +355,10 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "energy": (lambda a: None if a is None else a.astype(np.float32))(
                 ov._npz(cdir, "energy_map.npz", "energy")),
             "etrace": ov._energy_trace(cdir),
+            "seg": ov._npz(cdir, "seg.npz", "seg"),
+            "depth": ov._npz(cdir, "depth.npz", "depth"),
+            "flow": ov._npz(cdir, "flow_fwd.npz", "flow_fwd"),
+            "normals": ov._npz(cdir, "normals.npz", "normals"),
             "div": (lambda a: None if a is None else a.astype(np.float32))(
                 ov._npz(cdir, "divergence_map.npz", "divergence")),
             "tl": np.load(tlp) if os.path.exists(tlp) else None,

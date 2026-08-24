@@ -141,6 +141,33 @@ judged against. `energy.npz`: `total[T]`, `kinetic_translational[T]`,
 each body's energy painted onto its own pixels through the segmentation pass — constant
 inside a rigid body's silhouette, which is the honest spatial resolution.
 
+### `instances` and `segmentation` — the label space
+
+A segmentation map is unusable without the id → name table beside it. `meta.json` carries
+both, so a consumer never has to reconstruct the mapping:
+
+```json
+"segmentation": {
+  "encoding": "instance", "dtype": "uint16", "background_id": 0,
+  "ids_are_declared": true,
+  "id_to_name": {"0": "background", "1": "floor", "2": "ball_a", "4": "ball_b"}
+},
+"instances": [
+  {"id": 2, "track_id": 2, "name": "ball_a", "category": "sphere", "role": "actor",
+   "static": false, "dormant": false, "is_culprit": true,
+   "mass_kg": 1.0, "friction": 0.05, "restitution": 0.75,
+   "first_frame": 0, "last_frame": 24, "frames_visible": 25, "pixels_peak": 209}
+]
+```
+
+`id` is the pixel value in `seg.npz`, and it is stable for the whole clip — so **`id` is also
+the `track_id`** and there is no association step. `is_culprit` marks the bodies the violation
+acts on, which is `violation.causal_body_ids` denormalised onto the instance for convenience.
+
+Visibility is **measured from the rendered map**, not assumed: a dormant understudy reports
+`frames_visible: 0` and `first_frame: null` rather than looking present because the scene
+declared it.
+
 ### Render passes — segmentation tracks, depth, flow
 
 All shipped for **both** twins, straight from the renderer with no re-encoding. They cost
