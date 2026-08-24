@@ -290,14 +290,20 @@ def energy_map(trace: EnergyTrace, seg: np.ndarray) -> np.ndarray:
 
 
 def body_state(traj, spec) -> Dict[str, np.ndarray]:
-    """Per-body physical quantities, so a release clip is self-contained.
+    """Per-body physical quantities, as the energy computation saw them.
 
-    `traj.npz` stays in the worker directory and is not published, so without
-    this a consumer gets `energy.npz` without the mass and velocity that
-    produced it -- the number but not the physics. Everything here is what the
-    energy terms were actually computed from, sharing `inertia_diag` and the
-    mass-follows-volume rule rather than re-deriving them, so the two can never
-    disagree.
+    Derived from the trajectory, not additional to it: `traj.npz` ships in every
+    clip directory and already carries pos, quat, both velocities, radius,
+    gravity and the contacts. Two things make this worth its own file.
+
+    `traj.mass` is the declared mass, one constant per body. `bodies["mass"]` is
+    `[T,B]` and **follows volume**, which is what the energy is computed
+    against and what makes `immutability` a mass violation while `deformation`
+    is not.
+
+    And every column comes off the same code path as the energy trace --
+    `inertia_diag`, the same datum, the same volume rule -- so the two cannot
+    disagree about what a body weighed or how it was spinning.
 
     A consumer can recompute E from these columns and get the shipped trace back
     to floating-point noise, which `tests/test_energy.py` pins.

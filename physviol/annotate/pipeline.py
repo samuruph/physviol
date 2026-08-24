@@ -269,9 +269,16 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         np.savez_compressed(
             os.path.join(cdir, "energy_map.npz"),
             energy=energy_mod.energy_map(etrace, seg_here))
-        # The physical quantities the energy was computed from. `traj.npz` stays
-        # in the worker directory and is never published, so without this a
-        # consumer gets the number without the mass and velocity behind it.
+        # The physical quantities the energy was computed from, DERIVED from
+        # the trajectory rather than additional to it -- `traj.npz` ships beside
+        # this and carries pos, quat, velocities, radius, gravity and contacts.
+        #
+        # Worth its own file for two reasons. `traj.mass` is the declared mass,
+        # a per-body constant; `bodies.mass` is [T,B] and follows volume, which
+        # is what the energy is actually computed against. And every derived
+        # column here comes off the same code path as the energy trace, so the
+        # two can never disagree about what a body weighed or how it was
+        # spinning.
         np.savez_compressed(os.path.join(cdir, "bodies.npz"),
                             **energy_mod.body_state(traj, spec))
         energy_summary = etrace.summary()

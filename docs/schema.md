@@ -141,14 +141,19 @@ judged against. `energy.npz`: `total[T]`, `kinetic_translational[T]`,
 each body's energy painted onto its own pixels through the segmentation pass — constant
 inside a rigid body's silhouette, which is the honest spatial resolution.
 
-### `bodies.npz` — the physical quantities behind the energy
+### `bodies.npz` — the physical quantities as the energy computation saw them
 
-`traj.npz` stays in the worker directory and is never published, so without this a consumer
-gets the energy number without the mass and velocity that produced it. Everything here is
-what the energy terms were actually computed from, sharing the same `inertia_diag` and
-mass-follows-volume rule, so the two can never disagree — a consumer can recompute `E` from
-these columns and get the shipped trace back to floating-point noise
-(`tests/test_energy.py` pins that).
+**Derived from `traj.npz`, not additional to it.** Every clip directory already ships
+`traj.npz` with positions, orientations, both velocities, radius, gravity and the contact
+list. Two things make this worth a separate file:
+
+- `traj.npz`'s `mass` is the **declared** mass, one constant per body. `bodies.npz`'s is
+  `[T,B]` and **follows volume**, which is what the energy is computed against and what makes
+  `immutability` a mass violation while `deformation` is not.
+- Every column comes off the same code path as the energy trace — the same `inertia_diag`,
+  the same floor datum, the same volume rule — so the two cannot disagree. A consumer can
+  recompute `E` from these columns and get the shipped trace back to floating-point noise
+  (`tests/test_energy.py` pins that).
 
 | key | shape | |
 |---|---|---|

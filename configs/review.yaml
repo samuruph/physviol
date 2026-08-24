@@ -65,6 +65,15 @@ generate:
   #   end. What you want for a sweep; turn it off to stop at the first error.
   keep_going: true
 
+  # workers: container jobs run at once. A job is one (variant, scenario), so
+  #   this only helps when a run spans several scenarios or several variants --
+  #   `--scenario drop` alone is a single job however high you set it.
+  #   Output is byte-identical at any worker count: each job writes its own
+  #   directory and the per-clip rng is keyed by (seed, family, severity), never
+  #   by position in a queue. Blender already uses every core per render, so
+  #   N workers oversubscribe rather than scale linearly.
+  workers: 4
+
   workdir: out/work        # raw passes + trajectories (large, gitignored)
   outdir: out/release      # the release: clips, masks, meta.json, overlays
 

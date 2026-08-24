@@ -31,5 +31,6 @@ defaults:
 
 generate:
   keep_going: true
+  workers: 4
   workdir: out/work_v0
   outdir: out/physviol_v0
