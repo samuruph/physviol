@@ -76,9 +76,20 @@ def build(clip_dir: str, out_path: Optional[str] = None,
     t_end = int(v.get("t_end_frame", -1))
     peak = (v.get("peak_residual") or {})
 
+    # Order: what the renderer saw, then what we derived from it. RGB, energy
+    # and the three geometry passes describe the scene; mask, severity, causal
+    # and divergence are the annotation built on top. Reading left to right
+    # therefore goes from evidence to label, and the same order is used in the
+    # grid and the sheet so a panel is a panel wherever you meet it.
     panels: List[Tuple[str, str]] = [("RGB", "rgb")]
     if energy is not None:
         panels.append(("ENERGY  per body, fraction of E0", "energy"))
+    if seg is not None:
+        panels.append(("SEGMENTATION  per-instance tracks", "seg"))
+    if depth is not None:
+        panels.append(("DEPTH  metres, near->far", "depth"))
+    if flow is not None:
+        panels.append(("OPTICAL FLOW  hue=direction val=speed", "flow"))
     panels.append(("MASK red=violation  green=should-be", "mask"))
     if sev is not None:
         panels.append(("SEVERITY MAP", "sev"))
@@ -86,12 +97,6 @@ def build(clip_dir: str, out_path: Optional[str] = None,
         panels.append(("CAUSAL MASK", "causal"))
     if diverg is not None:
         panels.append(("DIVERGENCE (not GT)", "div"))
-    if seg is not None:
-        panels.append(("SEGMENTATION  per-instance tracks", "seg"))
-    if depth is not None:
-        panels.append(("DEPTH  metres, near->far", "depth"))
-    if flow is not None:
-        panels.append(("FLOW  hue=direction val=speed", "flow"))
 
     n = len(panels)
     W = n * panel + (n + 1) * PAD

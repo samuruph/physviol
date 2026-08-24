@@ -252,8 +252,10 @@ All three are laid out **wide**, and all three put every annotation view in one 
 | `sheet` | annotation view | valid + every family of one scenario |
 | `coverage` | scenario | family — **black where a cell is not built** |
 
-Nine views, in the same order everywhere — `rgb`, `energy`, `mask`, `sev`, `causal`, `div`,
-`seg`, `depth`, `flow` — so a grid cell, a sheet cell and an overlay panel read the same.
+Nine views, in the same order everywhere — `rgb`, `energy`, `seg`, `depth`, `flow`, `mask`,
+`sev`, `causal`, `div` — so a grid cell, a sheet cell and an overlay panel read the same.
+The order runs **evidence first** (what the renderer saw) then the **annotation** derived
+from it.
 
 A `sheet` column is the single-clip overlay turned on its side, so reading across a row
 compares the same annotation over every violation at the same instant. `coverage` is a fixed

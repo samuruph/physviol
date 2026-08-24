@@ -102,9 +102,11 @@ Never install Kubric, Blender or PyBullet on the host. The trajectory seam is th
 ## Visualisation
 
 `overlay.mp4` only -- **no image files anywhere**. The container has no ffmpeg, so it writes
-arrays and every mp4 comes from `physviol/viz/video.py`. Five panels (RGB, +mask, severity,
-causal, divergence), a red dot while the violation is active, and a timeline with both
-window families and the three clocks.
+arrays and every mp4 comes from `physviol/viz/video.py`. Nine panels in one order everywhere -- RGB,
+energy, segmentation, depth, optical flow, mask, severity, causal, divergence: evidence
+first, then the annotation derived from it. A red dot while the violation is active, and a
+timeline with both window families and the three clocks. `grid`, `sheet` and `coverage` use
+the same nine and the same order.
 
 When drawing text on frames, use `viz.overlay._text`: it draws a dark backing box rather
 than a thick outline, because OpenCV's Hershey glyph advance grows with stroke thickness, so

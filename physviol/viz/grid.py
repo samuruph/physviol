@@ -53,20 +53,21 @@ GUTTER = 104
 
 ORDER = {"valid": 0, "weak": 1, "medium": 2, "strong": 3}
 
-#: (row label, `overlay._panel` kind, which array must exist). The order and
-#: the labels match the single-clip overlay's panels exactly, so a grid cell, a
+#: (row label, `overlay._panel` kind, which array must exist). The order and the
+#: labels match the single-clip overlay's panels exactly, so a grid cell, a
 #: sheet cell and an overlay panel can be read against each other without
-#: translating.
+#: translating. It runs evidence first -- what the renderer saw -- then the
+#: annotation derived from it.
 VIEWS = [
     ("RGB", "rgb", None),
     ("ENERGY", "energy", "energy"),
+    ("SEGMENT", "seg", "seg"),
+    ("DEPTH", "depth", "depth"),
+    ("OPTICAL FLOW", "flow", "flow"),
     ("MASK", "mask", "mask"),
     ("SEVERITY", "sev", "sev"),
     ("CAUSAL", "causal", "causal"),
     ("DIVERGENCE", "div", "div"),
-    ("SEGMENT", "seg", "seg"),
-    ("DEPTH", "depth", "depth"),
-    ("FLOW", "flow", "flow"),
 ]
 VIEW_NOTE = {
     "mask": "red = violation   green = should-be",
