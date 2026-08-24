@@ -53,36 +53,73 @@ duplicating it badly.
 ### Axis 1 — PRINCIPLE (the new Level 1)
 
 Which conservation law or invariance is broken. **Derived from the law, never hand-assigned**:
-a single `LAW_PRINCIPLE: Dict[str, str]` maps each of the 16 residuals to exactly one
-principle, and `principle_of(family) == LAW_PRINCIPLE[FAMILIES[family].law]`. Nothing to
-drift, because there is nothing to type twice.
+a single `LAW_PRINCIPLE: Dict[str, str]` maps each residual to exactly one principle, and
+`principle_of(family) == LAW_PRINCIPLE[FAMILIES[family].law]`. Nothing can drift, because
+there is nothing to type twice.
 
-| principle | families | build cells | LikePhys row |
+| principle | families | cells | LikePhys row |
 |---|---|---|---|
 | **Spatio-temporal continuity** | continuity, non_parabolic | 21 | Temporal + Spatial Continuity |
-| **Conservation of mass** | permanence, dissolve, fission, fusion | 38 | Conservation of Mass |
-| **Conservation of momentum** | phantom_impulse, newton1_inertia, newton2_mass, newton3_reaction, angular_momentum | 29 | *(they fold this into Energy)* |
-| **Conservation of energy** | superelastic, friction | 12 | Conservation of Energy |
-| **Gravitation and support** | antigravity, global_gravity, support | 23 | *(only as Block Slide "hovering")* |
-| **Solidity** | solidity | 9 | Spatial Continuity "invisible wall" |
-| **Geometric invariance** | immutability, deformation | 28 | Geometric Invariance |
+| **Conservation of mass** | permanence, dissolve, fission, fusion, immutability | 52 | Conservation of Mass |
+| **Conservation of momentum and energy** | phantom_impulse, newton1_inertia, newton2_mass, newton3_reaction, angular_momentum, superelastic | 35 | Conservation of Energy |
+| **Gravitation** | antigravity, global_gravity | 13 | *(none — they file hovering under Material Response)* |
+| **Solidity and support** | solidity, support | 19 | Spatial Continuity "invisible wall" |
+| **Material response** | deformation, friction | 20 | Material Response |
 | **Optical consistency** | shadow, shadow_inverted, shadow_shape, colour_shift | 17 | Optical Consistency |
 | | **23 families** | **177** | |
 
-Every family lands in exactly one principle and the cells sum to the current 177 — this is a
+Seven principles, matching LikePhys's seven. Every family lands in exactly one, every law
+lands in exactly one principle, and the cells sum to the current 177 — this is a
 *re-labelling*, not a change to what gets generated.
 
-Two deliberate departures from LikePhys:
+#### Why `immutability` is a mass violation, not a geometric one
 
-- **Momentum is split out from energy.** They put "momentum amplification" and "phantom
-  force" under Conservation of Energy. Those are momentum violations; an elastic collision
-  conserves both, and the two come apart precisely in the cases we stage (`newton2_mass`
-  conserves momentum with a lying mass ratio, `superelastic` conserves momentum and creates
-  energy). Merging them would make the single most useful distinction in the dataset
-  invisible.
-- **Gravitation is its own principle.** LikePhys has nowhere to put "the ball falls at 0.3 g",
-  so hovering ends up under Material Response. Free fall is the single most-tested intuition
-  in the infant-cognition literature and it deserves a row.
+Because the two families that change a body's shape change **different quantities**, and the
+code already enforces the difference:
+
+- `immutability` scales a body **uniformly**. Its `magnitude_unit` is literally
+  `volume_ratio`, and volume at constant density *is* mass — the same quantity `permanence`
+  reports as `mass_ratio`. A body that doubles in size has twice the matter in it.
+- `deformation` scales it **non-uniformly and volume-preservingly**: one axis by `k`, the
+  other two by `1/sqrt(k)` (`injectors/appearance.py`). No matter is created or destroyed.
+  What is violated is that a *rigid* body held its proportions — a material property.
+
+So the split is not a naming preference, it is a measurable one: does the volume change, or
+only the proportions? `EXCLUSIVE_LAWS` already asserts exactly this — `shape_continuity`
+(volume) belongs to `immutability` alone and `deformation` must leave it at zero, which
+`tests/test_orthogonality.py` checks on every cell. The principle assignment is just reading
+back what the residuals already say.
+
+#### Why momentum and energy merge, and what is kept underneath
+
+They are genuinely different conserved quantities — momentum is conserved in *every*
+collision, kinetic energy only in elastic ones, and our families do dissociate them
+(`superelastic` conserves momentum and creates energy; `newton1_inertia` destroys momentum).
+But that distinction survives one level down, where reporting already happens: the laws
+`linear_momentum`, `angular_momentum` and `energy_at_contact` stay separate, and per-family
+tables still separate them. Merging costs nothing and it removes a headline split that reads
+as two names for the same idea.
+
+`friction` moves **out** of energy and into Material response, where LikePhys puts Block Slide
+too. Its residual is `effective_mu_ratio` — a surface property mismatch, not an energy budget.
+Half its severity range ("slides forever", µ = 0) creates no energy at all.
+
+#### Why `solidity` pairs with `support`
+
+The two are exact duals, which is why neither needs a principle to itself:
+
+- `solidity` — the contact constraint is **absent where it should be present**: two bodies
+  share space.
+- `support` — the contact constraint is **present where it should be absent**: a body is held
+  up by nothing.
+
+Both are the statement "surfaces interact when and only when they meet". Filing `solidity`
+under continuity instead (LikePhys's choice for "invisible wall") would be wrong for us: a
+ball passing through a wall traces a perfectly continuous path, so `position_continuity`
+reads zero and the principle would not describe the residual.
+
+That also leaves **Gravitation** as exactly what it says — unsupported matter accelerates at
+g — with `antigravity` and `global_gravity` as the same law at two extents (see Axis 2).
 
 ### Axis 2 — EXTENT
 
@@ -137,20 +174,17 @@ puts `shadow_shape` cleanly under Optical consistency.
 an already-generated release is re-labelled by re-running annotation, not by re-simulating.
 The renders are the expensive part and they do not change at all.
 
-## Open questions — these are the decisions
+## Open questions — what is left to decide
 
-1. **Eight principles, or fewer?** Folding `Solidity` (1 family, 9 cells) into
-   Spatio-temporal continuity would match LikePhys, which files "invisible wall" under
-   Spatial Continuity. Against: solidity is one of IntPhys 2's four core principles and one
-   of the four things infants are tested on. Keeping it separate costs nothing except a row
-   with one family in it.
-2. **Does `friction` belong under energy?** Both `superelastic` and `friction` are staged so
-   that energy *appears* — a bounce that returns more than it took, a body that accelerates
-   against its own friction. That reading is consistent. The alternative is a `Material
-   response` principle matching LikePhys, which would hold those two and would be where cloth
-   and soft bodies land in Phase 3.
+1. **Is `Gravitation` too small at 2 families / 13 cells?** It could fold into Solidity and
+   support ("what holds matter up, and what lets it through"). Against: free fall is the most
+   tested intuition in the infant-cognition literature and the only principle with a
+   *continuous* dial that is a physical constant.
+2. **Does `colour_shift` belong under Optical consistency?** It is not about light at all —
+   the object simply stops being the colour it was. The alternative is an eighth principle,
+   *Appearance / identity of surface*, which would also be where texture and material-swap
+   families land later. Optical consistency is the pragmatic home for now.
 3. **Is `extent` worth promoting to a top-level axis**, or should it stay a field on the
-   violation record? It only has two populated values today (`local`, `global`) and `group`
-   only becomes real for the granular families.
-4. **Keep `domain` as a deprecated alias for one release**, or delete it outright? Nothing
-   has been published, so outright is defensible and much cleaner.
+   violation record? Only two of its three values are populated today.
+4. **Keep `domain` as a deprecated alias for one release**, or delete it? Nothing has been
+   published, so deleting outright is defensible and much cleaner.
