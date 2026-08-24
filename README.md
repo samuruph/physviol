@@ -99,21 +99,25 @@ they are cross-command by construction (`seed` means something to `generate` and
 ### c. The full dataset
 
 ```bash
-# tier v0 (256px, 49 frames), photographic backgrounds, 6 randomisations per cell.
-# 182 cells x 6 = 1092 invalid clips, sharing 90 valid twins (one per
-# scenario+seed, since every family of a scenario renders in the same run).
-python -m physviol.cli generate --tier v0 --complexity L1 \
-    --variants 6 --seed 100000 --severity strong --keep-going \
-    --outdir out/physviol_v0
-
-# ...or the full severity ladder as well (weak/medium/strong -> 3x the invalid clips,
-# but the valid twin and the scene build are shared, so it is far cheaper than 3x)
-python -m physviol.cli generate --tier v0 --complexity L1 \
-    --variants 6 --severity all --seed 100000 --keep-going \
-    --outdir out/physviol_v0
-
+# Price it FIRST -- taxonomy reads the same config, so it sizes exactly the run
+# generate would perform.
+python -m physviol.cli taxonomy --config v0_release
+python -m physviol.cli generate --config v0_release
 python -m physviol.cli validate out/physviol_v0
 ```
+
+`configs/v0_release.yaml` is tier `v0` / complexity `L0` / the full severity ladder / 3
+randomisations per cell — 180 cells × 3 bins × 3 variants = 1620 invalid clips plus 42 valid
+twins, about 15 h at the measured 1.92× on four workers. Override any of it from the command
+line:
+
+```bash
+python -m physviol.cli generate --config v0_release --complexity L1 --variants 6
+```
+
+**Complexity is the expensive dial, not the severity ladder.** L1's photographic environment
+costs roughly 5.5× an L0 render, which turns an overnight job into a week; the ladder is
+nearly free because the valid twin and the scene build are shared across bins.
 
 One valid clip serves every family of the same scenario and seed: the twins are
 bit-identical by construction, so rendering it once is both correct and cheaper.
@@ -187,9 +191,12 @@ python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
 
 # Generate (see section 2 for the flags that matter)
 python -m physviol.cli generate --debug --complexity L0 --scenario drop
-#   --tier debug|v0|v1        --complexity L0|L1     --severity weak|medium|strong|all
-#   --variants N      --window N             --scenario X   --family Y
-#   -n / --limit N    --keep-going           --no-overlay   --outdir / --workdir
+#   --config NAME     --tier debug|v0|v1     --complexity L0|L1
+#   --severity weak|medium|strong|all           --variants N   --window N
+#   --scenario X      --family Y             -n / --limit N --keep-going
+#   --no-overlay      --outdir / --workdir
+#   tier dials (override one field, see section 8):
+#   --frames N (4k+1)  --fps N   --resolution N   --spp N
 
 # Re-annotate an existing worker output without re-rendering
 python -m physviol.cli annotate out/work/drop/0777 --outdir out/release
@@ -203,12 +210,14 @@ python -m physviol.cli sheet out/release/clips/physviol_v0/drop/0777 --view sev
 # Rebuild one overlay / one grid / the coverage tiling
 python -m physviol.cli overlay out/release/clips/.../invalid_solidity_strong
 python -m physviol.cli grid    out/release/clips/physviol_v0/drop/0777 --family solidity
+#   grid  --views rgb,mask,sev,causal,div   (default: every view the clips have)
+#   sheet --view  rgb|mask|sev|causal|div   (one view fills every cell)
 python -m physviol.cli coverage out/release
 
 # Schema + cross-checks over a whole release (13 structural checks)
 python -m physviol.cli validate out/release
 
-# Tests -- including one that plans and applies all 182 cells without docker
+# Tests -- including one that plans and applies all 180 cells without docker
 python -m pytest tests/ -q
 python -m pytest tests/test_all_cells.py -q
 ```
@@ -359,7 +368,7 @@ which, and what that means for a confusion matrix.
 
 ## 8. Tiers
 
-| | the debug tier (debug) | tier v0 (`physviol_v0`) | tier v1 (`physviol_v1`) |
+| | `debug` | `v0` (`physviol_v0`) | `v1` (`physviol_v1`) |
 |---|---|---|---|
 | resolution | 128² | 256² | 512² |
 | frames @ fps | 25 @ 12 | 49 @ 12 | 97 @ 24 |
@@ -368,7 +377,25 @@ which, and what that means for a confusion matrix.
 | published | never | yes | yes |
 
 Frame counts are all `4k+1` so the token-grid reduction aligns exactly with a video-DiT VAE's
-4× temporal binning. **the debug tier is the default** — debug there.
+4× temporal binning. **`debug` is the default** — iterate there.
+
+The letters this project used to use (A/B/D) are retired: there was no C, and the ordering
+the alphabet implies ran backwards from the one that matters. `scenarios.base.tier()` and
+`generate` both recognise the old letters and say what each was renamed to.
+
+**Any single dial can be overridden without inventing a tier.** The name records what
+changed, so `v0+res128f25` never gets confused with `v0` in `meta.json`:
+
+```bash
+python -m physviol.cli generate --tier v0 --frames 25 --resolution 128
+```
+
+| flag | overrides | note |
+|---|---|---|
+| `--frames N` | clip length | **must be `4k+1`** — 13, 17, 21, 25, 29… A bad value is refused with the nearest two legal ones |
+| `--fps N` | frame rate | violation windows are a *fraction* of the clip, so they scale with it |
+| `--resolution N` | square render size | render time is roughly linear in pixel count |
+| `--spp N` | Cycles samples/pixel | frame time ≈ `1.29 + 0.0074·spp` at 256², so only ~26% is sampling |
 
 **Rendering is CPU and stays that way.** Frame time fits `T = 1.29 + 0.0074·spp` at 256², so
 only ~26% is sampling — the only part OptiX would accelerate, capping a GPU build at ~1.37×
@@ -400,7 +427,7 @@ physviol/
   schema/validate.py  cross-checks
   cli.py
 tests/                prefix identity, mask union, windows, grids, taxonomy,
-                      mockroll.py + test_all_cells.py (all 182 cells, no docker)
+                      mockroll.py + test_all_cells.py (all 180 cells, no docker)
 out/                  all generated output (gitignored)
 ```
 

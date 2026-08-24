@@ -132,7 +132,14 @@ archaeology project.
 ### `provenance`
 
 `generator_commit`, `kubric_image_digest`, `blender_version`, `render_seed`,
-`prefix_identical_verified` (bool), `prefix_identical_upto_frame` (int).
+`prefix_identical_verified` (bool), `prefix_differing_pixels` (int),
+`prefix_identical_upto_frame` (int).
+
+`prefix_identical_verified` is **measured** at annotation time by comparing the two renders
+pixel by pixel over `[0, t_event)`, and `prefix_differing_pixels` reports the count. It used
+to be a hardcoded `true`, which is how 29 of 176 clips in one sweep shipped with renders that
+differed before `t_event` while the validator cheerfully checked the constant. A provenance
+field that cannot be false is not provenance.
 
 `prefix_identical_verified` is the dataset's central integrity claim: valid and invalid
 renders are **bit-identical** before `t_event`. Consumers relying on pixel-aligned twins
