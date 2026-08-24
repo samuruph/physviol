@@ -331,6 +331,30 @@ def longest_airborne_run(traj, bi: int, top: float) -> Optional[Tuple[int, int]]
     return best
 
 
+def last_dynamic_contact(spec, traj, body_id: int) -> int:
+    """Last frame this body touches another *dynamic* body, or -1 if it never does.
+
+    Static contacts do not count, and the difference matters. A scenario's wall
+    or ramp is there on every frame, so a body that meets it later than it
+    should still meets it in a lawful way. Another moving body is not: shifting
+    one participant of a collision in time and leaving the other alone makes the
+    struck body react before it is struck, which is a causality inversion
+    nobody labelled.
+    """
+    dyn = {int(b.segmentation_id) for b in spec.bodies
+           if not b.static and int(b.segmentation_id) != int(body_id)}
+    c = traj.contacts
+    last = -1
+    for k in range(len(c.frame)):
+        a, b_ = int(c.body_a[k]), int(c.body_b[k])
+        if body_id not in (a, b_):
+            continue
+        other = b_ if a == body_id else a
+        if other in dyn:
+            last = max(last, int(c.frame[k]))
+    return last
+
+
 def contact_free_run(traj, body_id: int, min_len: int = 2) -> Optional[Tuple[int, int]]:
     """The longest stretch of frames on which nothing touches this body.
 

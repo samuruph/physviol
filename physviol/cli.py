@@ -230,11 +230,29 @@ def cmd_validate(a) -> int:
 
 
 # ---------------------------------------------------------------------- #
-def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(prog="physviol")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+def _build(suppress: bool = False):
+    """The parser, and its subparsers by name.
 
-    p = sub.add_parser("taxonomy",
+    Built twice: once normally, and once with `argument_default=SUPPRESS` so
+    the second pass reports *only* the options actually typed. That is what
+    lets a config fill in the rest without ever overriding a flag -- comparing
+    against the defaults instead would make "the user typed the default value"
+    indistinguishable from "the user typed nothing".
+    """
+    kw = {"argument_default": argparse.SUPPRESS} if suppress else {}
+    ap = argparse.ArgumentParser(prog="physviol", **kw)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    subs = {}
+
+    def add_parser(name, **extra):
+        q = sub.add_parser(name, **dict(extra, **kw))
+        q.add_argument("--config", metavar="NAME|PATH",
+                       help="settings file; a bare name resolves to "
+                            "configs/<name>.yaml. Flags override it.")
+        subs[name] = q
+        return q
+
+    p = add_parser("taxonomy",
                        help="print the taxonomy, and size a release")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="list every (scenario, family) cell")
@@ -244,7 +262,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--variants", type=int, default=5)
     p.set_defaults(fn=cmd_taxonomy)
 
-    p = sub.add_parser("generate", help="simulate+render+annotate end to end")
+    p = add_parser("generate", help="simulate+render+annotate end to end")
     p.add_argument("--debug", action="store_true", help="Tier D (fast, unpublished)")
     p.add_argument("--tier", default="D")
     p.add_argument("--variants", type=int, default=1,
@@ -272,35 +290,63 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--no-overlay", action="store_true")
     p.set_defaults(fn=cmd_generate)
 
-    p = sub.add_parser("annotate", help="host-side annotation of a worker dir")
+    p = add_parser("annotate", help="host-side annotation of a worker dir")
     p.add_argument("workdir")
     p.add_argument("--outdir", default="out/release")
     p.add_argument("--no-overlay", action="store_true")
     p.set_defaults(fn=cmd_annotate)
 
-    p = sub.add_parser("overlay", help="annotated mp4 for one invalid clip")
+    p = add_parser("overlay", help="annotated mp4 for one invalid clip")
     p.add_argument("clip_dir")
     p.add_argument("--out")
     p.add_argument("--upscale", type=int, default=4)
     p.set_defaults(fn=cmd_overlay)
 
-    p = sub.add_parser("grid", help="valid vs every severity, side by side")
+    p = add_parser("grid", help="valid vs every severity, side by side")
     p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
     p.add_argument("--family")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_grid)
 
-    p = sub.add_parser("coverage",
+    p = add_parser("coverage",
                        help="one video tiling every invalid clip in a release")
     p.add_argument("root", nargs="?", default="out/release")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_coverage)
 
-    p = sub.add_parser("validate", help="schema + cross-checks over a release")
+    p = add_parser("validate", help="schema + cross-checks over a release")
     p.add_argument("root", default="out/release", nargs="?")
     p.set_defaults(fn=cmd_validate)
 
+    if suppress:
+        # `argument_default=SUPPRESS` is overridden by any explicit `default=`
+        # on an individual argument, which is most of them -- so the first
+        # version of this reported `--complexity` as typed on every run and a
+        # config could never set it. Force it onto every action instead.
+        for parser in [ap] + list(subs.values()):
+            parser._defaults = {}
+            for action in parser._actions:
+                action.default = argparse.SUPPRESS
+    return ap, subs
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    from . import config
+
+    argv = sys.argv[1:] if argv is None else list(argv)
+    ap, subs = _build()
     a = ap.parse_args(argv)
+    typed = set(vars(_build(suppress=True)[0].parse_args(argv)))
+
+    valid = {ac.dest for ac in subs[a.cmd]._actions} - {"help", "config"}
+    try:
+        settings = config.load(getattr(a, "config", None), a.cmd, valid)
+    except config.ConfigError as exc:
+        print("config error: %s" % exc, file=sys.stderr)
+        return 2
+    for key, value in settings.items():
+        if key not in typed:
+            setattr(a, key, value)
     return a.fn(a)
 
 

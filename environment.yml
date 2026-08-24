@@ -21,6 +21,7 @@ dependencies:
   - opencv              # mask overlays, resizing, contact sheets
   - matplotlib          # severity heatmaps, report figures
   - jsonschema          # physviol validate
+  - pyyaml              # configs/*.yaml -- run settings as files, not flags
   - tqdm
   - pytest
   - pypdf               # reading the papers in context/

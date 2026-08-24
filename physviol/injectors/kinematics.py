@@ -514,3 +514,191 @@ register(GlobalGravity())
 register(Continuity())
 register(NonParabolic())
 register(Newton1Inertia())
+
+
+class TimeSlip(Injector):
+    """A body stalls in place, then resumes exactly where it left off.
+
+    The dataset's one *temporal* violation, and it is deliberately not the one
+    LikePhys ships. Their Temporal Continuity row is frame shuffling, which is
+    an encoding artifact: it has no per-body residual, it cannot carry a mask
+    because every pixel changes at once, and a detector wins on it from
+    low-level statistics without doing any physics -- exactly the shortcut the
+    artifact-probe control exists to catch. So the principle is staged as
+    physics instead.
+
+    Distinct from both its neighbours, and not by a hair:
+
+    - Not `newton1_inertia`, which destroys momentum permanently -- the body
+      stops and *stays* stopped. This one hands the momentum back, same
+      direction and same magnitude, which no contact can do. There are two
+      uncaused events, at the start of the stall and at its end.
+    - Not `continuity`, because nothing jumps in space. Same path, same route,
+      traversed with a pause in it, so `position_continuity` reads zero
+      throughout.
+
+    Two constraints came out of building it, both of which would otherwise ship
+    a second unlabelled violation in the clip:
+
+    1. **The body must be supported, never airborne.** A body that freezes in
+       mid-air is also hovering, so `free_fall` fires and the clip is a
+       gravitation violation too. Hence `requires=('sliding',)`.
+    2. **The stall must come after the body's last contact with another dynamic
+       body.** The shift persists to the end of the clip, so a collision that
+       happens after it would have one participant arriving late while the
+       other reacts on time -- the struck ball moving before it is struck.
+       Static contacts are fine: a wall is there on every frame, so meeting it
+       late is still meeting it lawfully.
+    """
+
+    family = "time_slip"
+    #: The slip length is the magnitude, so `--window` must not override it.
+    persistent = True
+    #: Stall duration as a fraction of the clip. Scales with tier, like every
+    #: other duration in the project. Capped well short of the clip because the
+    #: body has to visibly *resume* -- see RESUME_RADII.
+    SLIP_BY_BIN = {"weak": 0.10, "medium": 0.17, "strong": 0.24}
+    SLIP_MIN = 2
+    MOVING = 0.3                                                # m/s
+    #: How far the body must still travel after the stall, in radii. Without
+    #: this the first rendered clip stalled the ball behind `occluder_pass`'s
+    #: screen and the clip ended before it came out the other side -- which is
+    #: an object that went behind a screen and never reappeared, i.e. a
+    #: `permanence` clip wearing a `time_slip` label. The whole violation here
+    #: is that the motion comes *back*; if the resumption is off the end of the
+    #: clip, there is no violation to see, only a different family's.
+    RESUME_RADII = 3.0
+
+    def strong_residual_reference(self, spec) -> float:
+        return max(float(self.SLIP_MIN),
+                   self.SLIP_BY_BIN["strong"] * spec.tier.num_frames)
+
+    def _slip_frames(self, spec, severity_bin: str, T: int) -> int:
+        return int(max(self.SLIP_MIN,
+                       round(self.SLIP_BY_BIN[severity_bin] * T)))
+
+    def _candidate(self, spec, traj, n: int):
+        """(body, t0, v_ref) for a body that can carry the stall, or None.
+
+        Not simply `_primary`. In `collision` the striker has spent its momentum
+        by the time its last dynamic contact is behind it, so the only body
+        still moving afterwards is the one it struck -- and a family that
+        returned no plan there would lose the scenario that makes the
+        comparison with `newton1_inertia` interesting.
+        """
+        T = traj.num_frames
+        want = _geom.default_event_frame(spec, T)
+        order = _geom.actors(spec)
+        primary = self._primary(spec)
+        if primary is not None:
+            order = [primary] + [b for b in order if b is not primary]
+        best = None
+        for body in order:
+            if body.dormant or body.static:
+                continue
+            bid = int(body.segmentation_id)
+            bi = traj.index_of(bid)
+            pos = np.asarray(traj.pos[:, bi, :], np.float64)
+            # Path LENGTH, not displacement. `barrier_pass` rolls into a wall
+            # and comes back, so its net displacement over the tail is near
+            # zero while it has visibly travelled several body-widths -- the
+            # displacement version rejected that scenario outright.
+            arc = np.concatenate([[0.0], np.cumsum(
+                np.linalg.norm(np.diff(pos, axis=0), axis=1))])
+            speed = np.linalg.norm(
+                traj.lin_vel[:, bi, :].astype(np.float64), axis=1)
+            radius = max(float(traj.radius[bi]), 1e-9)
+            lo = max(1, _geom.last_dynamic_contact(spec, traj, bid) + 1)
+            hi = T - n - 1
+            if hi < lo:
+                continue
+            for t0 in range(int(lo), int(hi) + 1):
+                if speed[t0] <= self.MOVING:
+                    continue
+                # Distance the body still covers along its lawful path after
+                # the stall, which is what the viewer sees it resume through.
+                tail = T - min(t0 + n, T)
+                if tail < 1:
+                    continue
+                resumed = float(arc[t0 + tail - 1] - arc[t0])
+                if resumed < self.RESUME_RADII * radius:
+                    continue
+                # As close to the scenario's usual event frame as the window
+                # allows, so the stall lands mid-clip rather than in the first
+                # second -- and, where there is an occluder, behind it.
+                score = abs(t0 - (want if want is not None else t0))
+                if best is None or score < best[0]:
+                    best = (score, body, t0, float(speed[t0]))
+        return None if best is None else best[1:]
+
+    #: Frames the body must be visible for after it re-emerges. The occlusion test
+    #: is for FULL occlusion, so partial visibility starts a frame or two after
+    #: the last occluded frame -- hence the margin rather than 1.
+    SEEN_AFTER = 5
+
+    def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
+        T = traj.num_frames
+        n = self._slip_frames(spec, severity_bin, T)
+        # Where the scenario hides the actor, the whole clip's occlusion shifts
+        # by `n` too, so the stall has to be short enough that the body still
+        # comes back out with frames to spare. Path length alone is not enough:
+        # the first version travelled its three radii entirely behind the
+        # screen and appeared only in the final frame, which reads as
+        # `permanence` rather than as a stall. Capped rather than refused --
+        # a slightly shorter strong bin at Tier D is honest, because the
+        # magnitude is reported.
+        occ = spec.notes.get("occluded_frames")
+        if occ:
+            n = min(n, max(self.SLIP_MIN,
+                           T - self.SEEN_AFTER - int(max(occ))))
+        found = self._candidate(spec, traj, n)
+        if found is None:
+            return None
+        actor, t0, v_ref = found
+        bid = int(actor.segmentation_id)
+
+        return InterventionPlan(
+            family=self.family, kind="sustained", t_event=t0,
+            windows=[(t0, min(t0 + n, T - 1))],
+            causal_body_ids=[bid],
+            params={"type": "time_slip", "slip_frames": int(n)},
+            magnitude=float(n), magnitude_unit="slip_frames",
+            severity_bin=severity_bin,
+            notes={"radius": float(actor.bounding_radius),
+                   "surface_top": _geom.surface_top(spec, actor),
+                   "slip_frames": int(n), "v_ref": v_ref,
+                   "r_strong": self.strong_residual_reference(spec)})
+
+    def apply(self, spec, traj, plan) -> Trajectory:
+        out = self._clone(traj)
+        bi = traj.index_of(int(plan.causal_body_ids[0]))
+        t0 = plan.t_event
+        n = int(plan.notes["slip_frames"])
+        T = traj.num_frames
+
+        # Held, not re-integrated: a body stalled on a slope must stay on the
+        # slope, and re-integrating it under gravity would slide it back off --
+        # which is `newton1_inertia`'s lesson, learned there first.
+        end = min(t0 + n, T)
+        out.pos[t0:end, bi, :] = traj.pos[t0, bi][None, :]
+        out.quat[t0:end, bi, :] = traj.quat[t0, bi][None, :]
+        out.lin_vel[t0:end, bi, :] = 0.0
+        out.ang_vel[t0:end, bi, :] = 0.0
+
+        # Then the body's own lawful path again, `n` frames late. The tail of
+        # the valid motion falls off the end of the clip, which is what "behind
+        # in time" means.
+        tail = T - end
+        if tail > 0:
+            out.pos[end:, bi, :] = traj.pos[t0:t0 + tail, bi, :]
+            out.quat[end:, bi, :] = traj.quat[t0:t0 + tail, bi, :]
+            out.lin_vel[end:, bi, :] = traj.lin_vel[t0:t0 + tail, bi, :]
+            out.ang_vel[end:, bi, :] = traj.ang_vel[t0:t0 + tail, bi, :]
+
+        out.meta = dict(traj.meta)
+        out.meta["intervention"] = plan.to_dict()
+        out.meta["label"] = "invalid"
+        return out
+
+
+register(TimeSlip())

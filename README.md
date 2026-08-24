@@ -4,7 +4,7 @@
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
 — all derived from the simulator, not from human annotation.
 
-> **Status: every build cell generates, annotates and validates.** 15 scenarios × 23
+> **Status: every build cell generates, annotates and validates.** 15 scenarios × 24
 > violation families compose through the trajectory seam, and `physviol generate` walks the
 > whole matrix in one command. Each clip depicts *one* violation — that is asserted, not
 > hoped for; see [§7](#7-orthogonality-what-the-labels-guarantee).
@@ -68,11 +68,39 @@ bash scripts/generate_sample.sh L0 D 777 strong
 `--keep-going` carries on past a cell that fails and lists the failures at the end, which is
 what you want for a sweep.
 
+### b2. Config files — settings as a file, not a wall of flags
+
+Every subcommand takes `--config`, which reads `configs/<name>.yaml`. **A flag you type
+always beats the file**, so a config is a starting point you can lean on rather than
+something that quietly overrides you:
+
+```bash
+python -m physviol.cli generate --config review              # the whole review sweep
+python -m physviol.cli generate --config review --tier A     # same, at release size
+python -m physviol.cli taxonomy --config v0_release          # size it before running it
+```
+
+Two ship with the repo:
+
+| config | what it is |
+|---|---|
+| `configs/review.yaml` | every cell once, `strong`, Tier D / L0 — the sweep to look at before generating anything real |
+| `configs/v0_release.yaml` | Tier A / L0, the full severity ladder, 3 randomisations per cell |
+
+A file is a `defaults:` block plus one block per subcommand. Keys are the long flag names
+with dashes as underscores (`--keep-going` is `keep_going`). An unknown key **under a
+command's own block is an error**, not a warning — a silently ignored typo is a run that
+does not do what the file says it does. Keys under `defaults:` are filtered instead, since
+they are cross-command by construction (`seed` means something to `generate` and nothing to
+`taxonomy`).
+
+`PHYSVIOL_CONFIG=review` in the environment does the same as passing `--config review`.
+
 ### c. The full dataset
 
 ```bash
 # Tier A (256px, 49 frames), photographic backgrounds, 6 randomisations per cell.
-# 177 cells x 6 = 1062 invalid clips, sharing 90 valid twins (one per
+# 182 cells x 6 = 1092 invalid clips, sharing 90 valid twins (one per
 # scenario+seed, since every family of a scenario renders in the same run).
 python -m physviol.cli generate --tier A --complexity L1 \
     --variants 6 --seed 100000 --severity strong --keep-going \
@@ -153,7 +181,7 @@ occlusion lag, and `occluder_pass` is the scenario built to produce it.
 ## 4. Every command
 
 ```bash
-# Taxonomy: 5 media, 23 families, 15 scenarios, and every build cell
+# Taxonomy: 5 media, 24 families, 15 scenarios, and every build cell
 python -m physviol.cli taxonomy
 python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
 
@@ -174,7 +202,7 @@ python -m physviol.cli coverage out/release
 # Schema + cross-checks over a whole release (13 structural checks)
 python -m physviol.cli validate out/release
 
-# Tests -- including one that plans and applies all 177 cells without docker
+# Tests -- including one that plans and applies all 182 cells without docker
 python -m pytest tests/ -q
 python -m pytest tests/test_all_cells.py -q
 ```
@@ -366,7 +394,7 @@ physviol/
   schema/validate.py  cross-checks
   cli.py
 tests/                prefix identity, mask union, windows, grids, taxonomy,
-                      mockroll.py + test_all_cells.py (all 177 cells, no docker)
+                      mockroll.py + test_all_cells.py (all 182 cells, no docker)
 out/                  all generated output (gitignored)
 ```
 

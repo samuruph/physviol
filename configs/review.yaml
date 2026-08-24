@@ -1,0 +1,25 @@
+# The review sweep: every cell once, at debug size.
+#
+#   python -m physviol.cli generate --config review
+#   python -m physviol.cli validate out/release
+#   python -m physviol.cli coverage out/release
+#
+# One `strong` variant of all 182 cells at Tier D / L0 -- roughly 25 minutes.
+# Breadth of coverage is what this is for: seeing every scenario x family pair
+# once beats seeing three strengths of a few. Any flag you pass on the command
+# line overrides what is written here.
+defaults:
+  seed: 777
+  complexity: L0
+
+generate:
+  tier: D
+  severity: strong
+  variants: 1
+  keep_going: true
+  workdir: out/work
+  outdir: out/release
+  # window: deliberately unset. Leaving it out lets each family size its own
+  # violation as a fraction of the clip; pinning it to a number makes every
+  # sustained family the same length and truncates permanence's strong bin,
+  # which is supposed to mean gone for good.

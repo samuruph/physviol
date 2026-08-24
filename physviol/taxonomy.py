@@ -107,6 +107,10 @@ FAMILIES: Dict[str, Family] = {
         "kinematics", "per-body gravity scale g -> alpha*g",
         "gravity_scale_deviation", "sustained", "free_fall", None, "rigid_body",
         requires=('flight',)),
+    "time_slip": Family(
+        "kinematics", "a body stalls in place, then resumes where it left off",
+        "slip_frames", "sustained", "phase_consistency", None, "rigid_body",
+        requires=('sliding',)),
     "newton1_inertia": Family(
         "kinematics", "a moving body stops dead and stays stopped",
         "dv_over_g_dt", "sustained", "linear_momentum", None, None,
@@ -293,6 +297,18 @@ BUILD, DEFER = "build", "defer"
 # the reason recorded. Every entry here is a measurement or an argument, not an
 # omission -- an empty exception list would mean the derivation is trusted
 # completely, and it nearly is.
+#: Deferred *for now*, not on principle -- see docs/decisions_pending.md §3. The
+#: tier lengthening left several scenarios with their actors at rest for most of
+#: the clip, and `time_slip` refuses to stage a stall when the body has no
+#: motion left to resume into, which is the right behaviour and makes it the
+#: first family to notice the problem. These become BUILD when the timing is
+#: fixed; nothing about the pairing itself is wrong.
+TIME_SLIP_NEEDS_MOTION = (
+    "%s's actor comes to rest well before the clip ends, so there is no window "
+    "where it is moving AND has motion left to resume into. A stall staged "
+    "there would be indistinguishable from the body simply having stopped. "
+    "Temporary: see docs/decisions_pending.md section 3")
+
 NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
     ("newton2_mass", "pyramid_impact"):
         "the spheres are identical to each other but never strike one another "
@@ -304,6 +320,12 @@ NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
         "the only surface is the floor, so the violation sank the ball into the "
         "ground while it was hidden and read as a vanish -- which is what "
         "permanence does on the same scenario. `barrier_pass` stages it instead",
+    ("time_slip", "collision"): TIME_SLIP_NEEDS_MOTION % "collision",
+    ("time_slip", "ramp_slide"): TIME_SLIP_NEEDS_MOTION % "ramp_slide",
+    ("time_slip", "pour"):
+        "forty grains in constant mutual contact: stalling one desynchronises "
+        "it from its neighbours, which then pass through where it is standing "
+        "-- a penetration violation inside a clip labelled as a temporal one",
     ("fission", "pour"):
         "forty grains already; splitting one more is not a legible change in "
         "object count",

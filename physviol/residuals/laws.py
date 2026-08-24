@@ -413,6 +413,48 @@ def friction(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     return np.abs(along) / max(float(np.linalg.norm(g)), 1e-9) * moving.astype(np.float64)
 
 
+@register("phase_consistency")
+def phase_consistency(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
+    """Temporal: frames of its own motion the body has lost, cumulative.
+
+    A frame counts as lost in proportion to how far short of `ctx["v_ref"]` the
+    body's step falls -- 1.0 when it is frozen, 0.0 when it is travelling at
+    reference speed. Cumulated, so the residual reads directly as "how many
+    frames behind its own phase is it", which is the unit `time_slip`'s
+    magnitude is in.
+
+    **Not zero on a lawful clip**, deliberately: a body coming to rest under
+    friction loses frames by this measure too. It is scored against the valid
+    twin frame by frame (`severity.bounded_score(baseline=...)`), and against
+    that baseline a stall of `n` frames reads as exactly `n` from the end of the
+    stall onward, while a lawful deceleration reads as zero.
+
+    A *literally* temporal residual -- "these frames are in the wrong order" --
+    is not computable here: a law sees one trajectory and one body, with no
+    access to the twin and no notion of frame identity. This measures the
+    consequence instead, which is that the body ends up behind its own phase.
+    That consequence is localisable to one body over one interval, where frame
+    shuffling is localisable to neither.
+    """
+    T = traj.num_frames
+    out = np.zeros((T,), np.float64)
+    if T < 2:
+        return out
+    p = np.asarray(traj.pos[:, b, :], np.float64)
+    step = np.linalg.norm(np.diff(p, axis=0), axis=1)
+
+    v_ref = float(ctx.get("v_ref", 0.0))
+    if v_ref <= 1e-6:
+        moving = step[step > 1e-9]
+        v_ref = float(np.median(moving)) / traj.dt if moving.size else 0.0
+    expected = v_ref * traj.dt
+    if expected <= 1e-9:
+        return out
+    lost = np.clip(1.0 - step / expected, 0.0, 1.0)
+    out[1:] = np.cumsum(lost)
+    return out
+
+
 @register("shadow_consistency")
 def shadow_consistency(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     """Optical: how far the cast shadow sits from where its caster puts it.

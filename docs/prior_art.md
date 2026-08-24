@@ -90,6 +90,7 @@ Optical Consistency, Material Response.
 | **Support / static equilibrium** | — | none | **new** — severity = clearance above the surface actually beneath the body |
 | **Friction inversion** | — | Block Slide is the setting, not the violation | **new** — severity = effective µ vs declared µ |
 | **Shadow / optical** (position) | — | Moving Shadow, Orbit Shadow / Optical Consistency | covered as a category, but **ours is the only one with a mask that is not on the object** |
+| **Time slip** | — | Temporal Continuity ("temporal disorder", on 12 scenarios) | **the principle is covered; the staging is new.** Theirs is frame shuffling — an encoding artifact with no per-body residual, no mask (every pixel changes at once), and a low-level statistical giveaway. Ours is one body stalling and resuming, which is localisable, maskable and scored in frames of lost phase |
 | **Shadow inverted** | — | Moving Shadow "shadow inverts onto the ceiling" | covered, and the **only family in v0 that is wrong from frame 0** — nothing changes mid-clip, so there is no moment to catch and a model has to compare the shadow's bearing against the key light |
 | **Shadow shape** | — | Moving Shadow "shape mismatches the object" | covered, and **split from shadow position on purpose** — a benchmark asking whether a model tracks where a shadow goes should not be scored on clips where it is also the wrong shape |
 | **Deformation** | — | nearest is Cloth "impossible folds", which is continuum | **new** for rigid bodies — the path stays lawful and only the proportions change |
@@ -103,13 +104,13 @@ Optical Consistency, Material Response.
 |---|---|
 | **Continuum** (Cloth Drape, Cloth Waving) | PyBullet exposes only `loadSoftBody`/`createSoftBodyAnchor` and Kubric wraps neither; no trustworthy per-element residual at v0. Deferred to **Phase 3** with the MuJoCo/MJX backend. |
 | **Fluid** (Droplet Fall, Faucet Flow, River Flow) | **Tested, not assumed.** Blender 2.93.4 in our image *does* ship Mantaflow, but headless scripted baking fails (`NameError: liquid_save_data_N` → `Manta::Error`), Kubric exposes no fluid objects, and a liquid's per-frame mesh state does not fit the pose-based seam. Partially substituted at v0 by the **`pour`** scenario — a few dozen rigid grains, honestly labelled `physics_medium: "granular"`. True fluid is **Phase 3**. See PLAN Part 2. |
-| **Temporal disorder** (frame shuffling / jump cuts) | Used by nearly every LikePhys scenario, and we intentionally omit it: it is an *encoding* artifact, not a physics violation. It has no law residual, and including it would reward exactly the shortcut detection our artifact-probe control exists to catch. |
+| **Temporal disorder** (frame shuffling / jump cuts) | Used by nearly every LikePhys scenario, and we intentionally omit **that mechanism**: it is an *encoding* artifact, not a physics violation. It has no law residual, it cannot carry a mask because every pixel changes at once, and a detector wins on it from low-level statistics without doing any physics — exactly the shortcut our artifact-probe control exists to catch. The **principle** is covered, staged as physics: see `time_slip`. |
 
 ### What this table is claiming
 
-Of the 23 violation families in v0, **11 map cleanly onto prior art** (Permanence, Dissolve,
-Immutability, Fission, Fusion, Continuity, Solidity, Colour shift, Shadow, Shadow shape,
-Shadow inverted), **3 exist there only as discrete flags** where we make them continuous
+Of the 24 violation families in v0, **12 map cleanly onto prior art** (Permanence, Dissolve,
+Immutability, Fission, Fusion, Continuity, Time slip, Solidity, Colour shift, Shadow, Shadow
+shape, Shadow inverted), **3 exist there only as discrete flags** where we make them continuous
 (anti-gravity, phantom impulse, super-elastic), and **9 are new**. The novelty is not
 primarily in the taxonomy anyway — it is that every one of these ships with a mask, three
 clocks and a residual. `tests/test_taxonomy.py` asserts these three counts, so the table
