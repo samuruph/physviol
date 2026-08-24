@@ -33,95 +33,98 @@ bash scripts/fetch_refs.sh
 
 ---
 
-## 2. The three things you will actually run
+## 2. The runs
 
-Everything below is `python -m physviol.cli <command>`, with `conda activate physviol` first.
+Three configs, one command each. `conda activate physviol` first.
 
-### a. Debug loop — one cell, fastest possible
+| | config | what it is | cost |
+|---|---|---|---|
+| **review** | `configs/review.yaml` | every cell once, `strong`, 128², 25 f | **~25 min** |
+| **v0** | `configs/v0_release.yaml` | 256², 49 f, all three bins, 3 variants | ~15 h |
+| **v1** | `configs/v1_release.yaml` | 512², 97 f, photographic (L1) | days |
+
+### The review sweep — run this before anything else
+
+Every scenario × family cell once, at debug size, `strong` only. This is the run to look at
+when you want to know whether the dataset is right.
 
 ```bash
-python -m physviol.cli generate --debug --complexity L0 \
-    --scenario occluder_pass --family permanence --seed 777
+bash scripts/run.sh
 ```
 
-`--debug` is the debug tier: 128², 25 frames, 16 spp. `--complexity L0` is a solid background with a
-sun lamp, which needs no network and renders ~4.6× faster than the photographic L1. Roughly
-**~14 s per pair**, including annotation and the overlay video. This is the loop to iterate
-in — a bug found at the debug tier is fixed for all three tiers.
+That generates, validates, and builds every video: `coverage.mp4`, a `sheet` per scenario and
+a `grid` per family. Then open `out/release/coverage.mp4` first.
 
-### b. Small subset — every family, one scenario, or a slice of the matrix
+The same thing by hand, if you want the steps separately:
 
 ```bash
-# every family that drop supports (9 cells) -- one container run, one valid render
-python -m physviol.cli generate --debug --complexity L0 --scenario drop --seed 777
-
-# one family everywhere it is meaningful
-python -m physviol.cli generate --debug --complexity L0 --family solidity --seed 777
-
-# the whole matrix, but stop after 6 cells
-python -m physviol.cli generate --debug --complexity L0 -n 6 --seed 777
-
-# the whole matrix, one randomisation each -- every scenario x family cell
-bash scripts/generate_sample.sh L0 debug 777 strong
+python -m physviol.cli generate --config review
+python -m physviol.cli validate out/release
+python -m physviol.cli coverage out/release
 ```
 
-`--keep-going` carries on past a cell that fails and lists the failures at the end, which is
-what you want for a sweep.
+### The v0 release
 
-### b2. Config files — settings as a file, not a wall of flags
-
-Every subcommand takes `--config`, which reads `configs/<name>.yaml`. **A flag you type
-always beats the file**, so a config is a starting point you can lean on rather than
-something that quietly overrides you:
+**Price it before you start it** — `taxonomy` reads the same config, so it sizes exactly the
+run `generate` would perform.
 
 ```bash
-python -m physviol.cli generate --config review              # the whole review sweep
-python -m physviol.cli generate --config review --tier v0     # same, at release size
-python -m physviol.cli taxonomy --config v0_release          # size it before running it
-```
-
-Two ship with the repo:
-
-| config | what it is |
-|---|---|
-| `configs/review.yaml` | every cell once, `strong`, the debug tier / L0 — the sweep to look at before generating anything real |
-| `configs/v0_release.yaml` | tier v0 / L0, the full severity ladder, 3 randomisations per cell |
-
-A file is a `defaults:` block plus one block per subcommand. Keys are the long flag names
-with dashes as underscores (`--keep-going` is `keep_going`). An unknown key **under a
-command's own block is an error**, not a warning — a silently ignored typo is a run that
-does not do what the file says it does. Keys under `defaults:` are filtered instead, since
-they are cross-command by construction (`seed` means something to `generate` and nothing to
-`taxonomy`).
-
-`PHYSVIOL_CONFIG=review` in the environment does the same as passing `--config review`.
-
-### c. The full dataset
-
-```bash
-# Price it FIRST -- taxonomy reads the same config, so it sizes exactly the run
-# generate would perform.
 python -m physviol.cli taxonomy --config v0_release
-python -m physviol.cli generate --config v0_release
-python -m physviol.cli validate out/physviol_v0
+bash scripts/run.sh v0_release
 ```
 
-`configs/v0_release.yaml` is tier `v0` / complexity `L0` / the full severity ladder / 3
-randomisations per cell — 180 cells × 3 bins × 3 variants = 1620 invalid clips plus 42 valid
-twins, about 15 h at the measured 1.92× on four workers. Override any of it from the command
-line:
+### The v1 release
 
 ```bash
-python -m physviol.cli generate --config v0_release --complexity L1 --variants 6
+python -m physviol.cli taxonomy --config v1_release
+bash scripts/run.sh v1_release
 ```
 
 **Complexity is the expensive dial, not the severity ladder.** L1's photographic environment
-costs roughly 5.5× an L0 render, which turns an overnight job into a week; the ladder is
-nearly free because the valid twin and the scene build are shared across bins.
+costs roughly 5.5× an L0 render, which is the whole difference between v0 and v1's wall
+clock. The ladder is nearly free, because the valid twin and the scene build are shared
+across bins.
 
-One valid clip serves every family of the same scenario and seed: the twins are
-bit-identical by construction, so rendering it once is both correct and cheaper.
-`validate` expects exactly that shape — one `valid` and one or more `invalid` per `pair_uid`.
+---
+
+## 2b. Narrowing a run
+
+Everything below overrides whatever config you pass, so `--config review --scenario drop`
+is the review settings on one scenario.
+
+```bash
+# ONE cell -- the fastest loop there is, ~14 s
+python -m physviol.cli generate --config review --scenario occluder_pass --family permanence
+
+# every family one scenario supports, in a single container run
+python -m physviol.cli generate --config review --scenario drop
+
+# one family everywhere it is meaningful
+python -m physviol.cli generate --config review --family solidity
+
+# stop after N cells, for a smoke test
+python -m physviol.cli generate --config review -n 6
+
+# the review matrix at release resolution
+python -m physviol.cli generate --config review --tier v0
+```
+
+`--keep-going` carries on past a cell that fails and lists the failures at the end; the
+shipped configs set it.
+
+### Config files
+
+Every subcommand takes `--config NAME`, reading `configs/<NAME>.yaml`. **A flag you type
+always beats the file.** A config is a `defaults:` block plus one block per subcommand;
+keys are the long flag names with dashes as underscores (`--keep-going` is `keep_going`).
+Anything both `generate` and `taxonomy` understand lives in `defaults:` once — which is why
+`taxonomy --config X` prices exactly what `generate --config X` would build.
+
+`configs/review.yaml` documents every available key and its alternatives inline. An unknown
+key under a command's own block is an error, not a warning. `PHYSVIOL_CONFIG=review` in the
+environment does the same as passing `--config review`.
+
+### Randomisation
 
 **`--variants N` is the randomisation knob.** Each variant is a fresh seed, and a seed drives
 every free parameter a scenario has: sizes, speeds, drop heights, restitution, colours, the
@@ -130,17 +133,9 @@ physically neutral — whether the actor is a sphere or a cube. So six variants 
 solidity` are six visibly different clips of the same violation, not one clip with a
 different random number in the filename.
 
-Use `--variants 1` while debugging and `--variants 5`–`8` for a release.
-
-**Running it in parallel.** Clip-level parallelism measured **1.92×** at width 4 on this box.
-Split by scenario, since one worker run covers all families of one scenario anyway:
-
-```bash
-for s in drop toss occluder_pass collision; do
-  python -m physviol.cli generate --tier v0 --complexity L1 --variants 6 \
-      --scenario "$s" --seed 100000 --outdir out/physviol_v0 &
-done; wait
-```
+One valid clip serves every family of the same scenario and seed: the twins are bit-identical
+by construction, so rendering it once is both correct and cheaper. `validate` expects exactly
+that shape — one `valid` and one or more `invalid` per `pair_uid`.
 
 ---
 
@@ -182,45 +177,64 @@ occlusion lag, and `occluder_pass` is the scenario built to produce it.
 
 ---
 
-## 4. Every command
+## 4. Command reference
+
+Every subcommand takes `--config NAME`.
+
+| command | what it does |
+|---|---|
+| `taxonomy` | print the taxonomy and **price a release** |
+| `generate` | simulate + render + annotate, end to end |
+| `annotate` | re-annotate a worker directory **without re-rendering** |
+| `overlay` | the six-panel annotated video for one clip |
+| `grid` | one family: valid vs every severity, every annotation view |
+| `sheet` | one scenario: every family × every severity at once |
+| `coverage` | every invalid clip in the release, tiled into one video |
+| `validate` | schema + cross-checks over a whole release |
+| `config-path` | print the outdir a config resolves to |
 
 ```bash
-# Taxonomy: 5 media, 24 families, 15 scenarios, and every build cell
+# Taxonomy: 5 media, 24 families, 15 scenarios, 180 build cells
 python -m physviol.cli taxonomy
-python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
+python -m physviol.cli taxonomy -v                    # + every cell
+python -m physviol.cli taxonomy --config v0_release   # + hours and clip counts
 
-# Generate (see section 2 for the flags that matter)
-python -m physviol.cli generate --debug --complexity L0 --scenario drop
-#   --config NAME     --tier debug|v0|v1     --complexity L0|L1
-#   --severity weak|medium|strong|all           --variants N   --window N
-#   --scenario X      --family Y             -n / --limit N --keep-going
-#   --no-overlay      --outdir / --workdir
-#   tier dials (override one field, see section 8):
-#   --frames N (4k+1)  --fps N   --resolution N   --spp N
-
-# Re-annotate an existing worker output without re-rendering
+# Re-annotate without re-rendering -- picks up any annotation change for free
 python -m physviol.cli annotate out/work/drop/0777 --outdir out/release
 
-# Every family of one scenario at once -- rows families, columns severities.
-# The view a per-family video cannot give you: whether `solidity` and
-# `permanence` really look like different violations at the same moment.
-python -m physviol.cli sheet out/release/clips/physviol_v0/drop/0777
-python -m physviol.cli sheet out/release/clips/physviol_v0/drop/0777 --view sev
-
-# Rebuild one overlay / one grid / the coverage tiling
-python -m physviol.cli overlay out/release/clips/.../invalid_solidity_strong
-python -m physviol.cli grid    out/release/clips/physviol_v0/drop/0777 --family solidity
-#   grid  --views rgb,mask,sev,causal,div,energy  (default: all the clips have)
-#   sheet --view  rgb|mask|sev|causal|div|energy  (one view fills every cell)
+# Videos
+python -m physviol.cli overlay  out/release/clips/.../invalid_solidity_strong
+python -m physviol.cli grid     out/release/clips/physviol_v0/drop/0777 --family solidity
+python -m physviol.cli sheet    out/release/clips/physviol_v0/drop/0777 --view energy
 python -m physviol.cli coverage out/release
 
-# Schema + cross-checks over a whole release (13 structural checks)
 python -m physviol.cli validate out/release
 
-# Tests -- including one that plans and applies all 180 cells without docker
-python -m pytest tests/ -q
-python -m pytest tests/test_all_cells.py -q
+python -m pytest tests/ -q                    # 1012 tests, no docker needed
+python -m pytest tests/test_all_cells.py -q   # plans and applies all 180 cells
 ```
+
+### `generate` flags
+
+| flag | |
+|---|---|
+| `--tier debug\|v0\|v1` | the resolution/length ladder — section 8 |
+| `--complexity L0\|L1` | L0 solid background, L1 photographic HDRI (~5.5× the cost) |
+| `--severity weak\|medium\|strong\|all` | which magnitude bins |
+| `--variants N` | randomisations per cell |
+| `--scenario X` / `--family Y` | restrict the matrix |
+| `-n N` | stop after N cells |
+| `--keep-going` | carry on past failures, list them at the end |
+| `--window N` | force one violation duration; **leave unset** so each family scales with the clip |
+| `--no-overlay` | skip the per-clip videos |
+| `--outdir` / `--workdir` | where the release and the raw passes go |
+| `--frames N` `--fps N` `--resolution N` `--spp N` | override one field of a tier — section 8 |
+
+### `grid` and `sheet` views
+
+Both take the same annotation views: `rgb`, `mask`, `sev`, `causal`, `div`, `energy`.
+`grid --views a,b,c` shows several as rows (default: every view the clips have);
+`sheet --view a` fills every cell with one.
 
 ### Running a worker in the container directly
 
@@ -412,7 +426,9 @@ docs/schema.md        meta.json field reference
 docs/prior_art.md     IntPhys 2 x LikePhys x PhysViol coverage matrix
 environment.yml       host conda env
 docker/               kubric.sh wrapper + pinned image digest
+scripts/run.sh        generate + validate + every video, from a config
 scripts/fetch_refs.sh pinned read-only Kubric checkout -> refs/
+configs/*.yaml        run settings: review, v0_release, v1_release
 physviol/
   taxonomy.py         Part 2 as data: domains, families, scenarios, compatibility
   scenarios/          seeded scene samplers (declarative SceneSpec, no Kubric import)

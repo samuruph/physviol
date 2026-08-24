@@ -256,6 +256,28 @@ def cmd_coverage(a) -> int:
     return 0
 
 
+def cmd_config_path(a) -> int:
+    """Where a config would write. Lets a script chain generate -> validate ->
+    videos without hardcoding a path the config already knows.
+
+    Reads the config's **generate** block, not its own: `outdir` is a setting of
+    the run, and this command exists only to report it.
+    """
+    from . import config
+
+    outdir = getattr(a, "outdir", None)
+    if outdir is None and getattr(a, "config", None):
+        _, subs = _build()
+        valid = {ac.dest for ac in subs["generate"]._actions} - {"help", "config"}
+        try:
+            outdir = config.load(a.config, "generate", valid).get("outdir")
+        except config.ConfigError as exc:
+            print("config error: %s" % exc, file=sys.stderr)
+            return 2
+    print(outdir or "out/release")
+    return 0
+
+
 def cmd_validate(a) -> int:
     from .schema.validate import validate_release
     rep = validate_release(a.root)
@@ -370,6 +392,11 @@ def _build(suppress: bool = False):
     p.add_argument("root", nargs="?", default="out/release")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_coverage)
+
+    p = add_parser("config-path",
+                   help="print the outdir a config resolves to")
+    p.add_argument("--outdir")
+    p.set_defaults(fn=cmd_config_path)
 
     p = add_parser("validate", help="schema + cross-checks over a release")
     p.add_argument("root", default="out/release", nargs="?")

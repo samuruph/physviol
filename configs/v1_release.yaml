@@ -1,0 +1,20 @@
+# ============================================================================
+# v1_release -- the high-resolution release.
+#
+#   python -m physviol.cli taxonomy --config v1_release   # price it FIRST
+#   python -m physviol.cli generate --config v1_release
+#
+# See configs/review.yaml for what every key means.
+# ============================================================================
+
+defaults:
+  seed: 20260824
+  tier: v1             # 512x512, 24 fps, 97 frames
+  complexity: L1       # photographic HDRI environments -- ~5.5x an L0 render
+  severity: all
+  variants: 3
+
+generate:
+  keep_going: true
+  workdir: out/work_v1
+  outdir: out/physviol_v1
