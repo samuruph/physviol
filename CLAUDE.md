@@ -14,11 +14,11 @@ beyond `physviol/render/worker_smoke.py`.
 
 - **Kubric** (Blender + PyBullet in docker) for v0. MuJoCo replaces PyBullet later, behind
   the trajectory seam.
-- **Three tiers.** **Tier D (debug, default)**: 128×128, 13 frames, 16 spp — **~11 s per
-  valid/invalid pair**, never published; this is what you iterate on. Tier A
+- **Three tiers.** **the debug tier (debug, default)**: 128×128, 13 frames, 16 spp — **~11 s per
+  valid/invalid pair**, never published; this is what you iterate on. tier v0
   (`physviol_v0`, build now): 256×256, 12 fps, 25 frames — MOVi defaults, ~44 s/clip.
-  Tier B (`physviol_v1`, later): 512×512, 24 fps, 97 frames. Same generators, one config
-  block apart. **Debug at Tier D; a bug found there is fixed for all three.**
+  tier v1 (`physviol_v1`, later): 512×512, 24 fps, 97 frames. Same generators, one config
+  block apart. **Debug at the debug tier; a bug found there is fixed for all three.**
 - **Scenarios and injectors compose; never write per-combination code.** An injector edits
   `traj.npz`, which is scenario-agnostic, so 14 scenarios x 17 families needs 13 + 6 files,
   not 238. `taxonomy.COMPATIBILITY` selects the 48 meaningful cells.

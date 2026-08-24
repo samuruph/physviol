@@ -4,7 +4,7 @@ Runs INSIDE the pinned Kubric image (python 3.9). Everything it writes is on the
 host side of the seam: traj.npz, the raw render passes, and a plan.json.
 
     bash docker/kubric.sh physviol/render/worker.py \
-        --scenario drop --seed 91731 --tier D \
+        --scenario drop --seed 91731 --tier debug \
         --family solidity --severity medium --outdir out/phase0
 
 Renders the valid and invalid twins through a *bit-identical* path: same scene
@@ -358,7 +358,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="drop")
     ap.add_argument("--seed", type=int, default=91731)
-    ap.add_argument("--tier", default="D", choices=sorted(scenarios.TIERS))
+    ap.add_argument("--tier", default="debug", choices=sorted(scenarios.TIERS))
     ap.add_argument("--family", default="solidity",
                     help="one family, or a comma list -- every family named "
                          "shares this run's single valid render")

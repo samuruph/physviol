@@ -47,7 +47,7 @@ The original target spec was 512²/24 fps/~96 frames from day one. That is the *
 not the starting point: it is ~16× the render cost of MOVi's defaults, and paying it before
 the annotation pipeline is proven means every bug costs 16× to re-render.
 
-| | **Tier D — debug** | **Tier A — `physviol_v0`** | **Tier B — `physviol_v1`** |
+| | **the debug tier — debug** | **tier v0 — `physviol_v0`** | **tier v1 — `physviol_v1`** |
 |---|---|---|---|
 | resolution | **128 × 128** | **256 × 256** (MOVi default) | **512 × 512** |
 | frame rate | 12 fps | **12 fps** (MOVi default) | **24 fps** |
@@ -55,31 +55,31 @@ the annotation pipeline is proven means every bug costs 16× to re-render.
 | samples/pixel | 16 | 64 | 64 |
 | latent grid | 4 × 8 × 8 | 7 × 16 × 16 | 25 × 16 × 16 |
 | measured cost | **~5.7 s/clip**, ~11 s/pair | **~44 s/clip**, ~7 h for 600 clips | ~11.5 min/clip, ~114 h for 600 clips |
-| status | never released; the iteration loop | build now; **a real, shippable release** | supersedes Tier A once proven |
+| status | never released; the iteration loop | build now; **a real, shippable release** | supersedes tier v0 once proven |
 
-**Tier D exists so that "generate a few examples and look at them" is an 11-second
+**the debug tier exists so that "generate a few examples and look at them" is an 11-second
 operation, not an 11-minute one.** It is the default for every `physviol generate` call
 without an explicit `--tier`, and it is what Phase 0 and all injector/annotation debugging
 run on. It is never published: 128² is too small for a real benchmark and 4×8×8 is a
 degenerate token grid. Its job is to make bugs cheap.
 
 ```bash
-physviol generate --debug -n 4          # 4 pairs, Tier D, ~45 s total
+physviol generate --debug -n 4          # 4 pairs, the debug tier, ~45 s total
 physviol viz overlay <clip> --open      # look at them before believing anything
 ```
 
 The three tiers differ only in a config block — same scenarios, same injectors, same
-annotation code — so a bug found at Tier D is a bug fixed for all three.
+annotation code — so a bug found at the debug tier is a bug fixed for all three.
 
-Tier A is not a throwaway. It gets the full schema, splits, validation and release
+tier v0 is not a throwaway. It gets the full schema, splits, validation and release
 packaging, because that work is needed regardless and doing it at 1/16th the render cost is
-strictly better. Tier B re-runs the *same generators* at the larger spec — the only changes
+strictly better. tier v1 re-runs the *same generators* at the larger spec — the only changes
 are three numbers in a config.
 
 **Why 25 frames and not MOVi's 24.** The token-grid reduction (Part 3) needs a frame count of
 the form `4k + 1` to align exactly with a video-DiT VAE's 4× temporal binning. 25 → 7 latent
 frames exactly; 24 → 6.75, which forces a ragged edge. One extra frame buys an exact grid.
-The rule generalises: **every tier's grid timeline is `4k + 1` frames.** Tier B is 97 frames rather than
+The rule generalises: **every tier's grid timeline is `4k + 1` frames.** tier v1 is 97 frames rather than
 96 for the same reason — 97 → 25 latent frames exactly, so no resampling is needed and the
 grid is computed on the master itself.
 
@@ -190,7 +190,7 @@ By Amdahl, with sampling at 26% of frame time, **even an infinitely fast GPU yie
 ~1.37×.** Against that: the upstream image is Blender 2.93 on CPU by design, and a GPU image
 means upgrading Blender under a Kubric release from 2022 that is pinned to 2.93's `bpy` API —
 a real risk of breaking the renderer integration, for ~1.4×. **We stay on the upstream CPU
-image.** Revisit only if Tier B measurements change the arithmetic, and then as a timeboxed
+image.** Revisit only if tier v1 measurements change the arithmetic, and then as a timeboxed
 spike with a measured exit criterion, not as scheduled work.
 
 **The real lever is clip-level parallelism, and it beats the GPU ceiling for free.** All
@@ -201,8 +201,8 @@ already more than the ~1.37× ceiling an infinitely fast GPU could offer, at zer
 risk. Phase 1 tunes the optimal N (likely 4-8) and the generator ships as a resumable,
 per-clip-checkpointed queue.
 
-**What this means for the schedule.** Tier A is ~44 s/clip → ~7 h for 600 clips serial,
-**under 4 h at the measured 1.92×**. That is comfortable. Tier B is ~11.5 min/clip → ~114 h
+**What this means for the schedule.** tier v0 is ~44 s/clip → ~7 h for 600 clips serial,
+**under 4 h at the measured 1.92×**. That is comfortable. tier v1 is ~11.5 min/clip → ~114 h
 serial, ~60 h parallel — which is when the queue stops being an optimisation and starts being
 the plan.
 
@@ -253,8 +253,8 @@ pinned checkout, not recalled.
 
 **Two facts from MOVi that shaped our numbers:**
 
-- MOVi-def defaults to 256², 24 frames, 12 fps. **Tier A adopts these defaults** (with 25
-  frames for exact latent alignment), which is why Tier A costs what MOVi costs.
+- MOVi-def defaults to 256², 24 frames, 12 fps. **tier v0 adopts these defaults** (with 25
+  frames for exact latent alignment), which is why tier v0 costs what MOVi costs.
 - MOVi's asset mix is not uniformly CC0. The schema promises a license string per asset;
   record it as each source is enabled, not at release.
 
@@ -523,7 +523,7 @@ plus a granular stand-in for the fluid domain.
 | `rolling_ramp` | cube tumbles down a raised ramp and off its lip | rolling contact, then a short free flight | no | new |
 | `shadow_track` | object translates under a fixed light | a clean, trackable cast shadow | no | LikePhys *Moving Shadow* |
 | `clutter_toss` | MOVi-style multi-object toss | dense collisions, heavy occlusion | implicit | MOVi baseline |
-| `pour` | a loose column of grains falls into an open box (40 at Tier D, 96 above) | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
+| `pour` | a loose column of grains falls into an open box (40 at the debug tier, 96 above) | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
 
 ### Which families can be injected into which scenarios
 
@@ -862,7 +862,7 @@ that is not about violations at all.
 ### 3.6 Token grids
 
 `grids.npz` pre-reduces masks and severity to the latent token grid so a consumer never
-re-derives a VAE's binning. Tier A: `7×16×16`. Tier B: `21×16×16` on the 81-frame derivative.
+re-derives a VAE's binning. tier v0: `7×16×16`. tier v1: `21×16×16` on the 81-frame derivative.
 
 - `mask_<F>x16x16` — bool, reduced by **max** (a violation in any contributing source frame
   marks the latent frame)
@@ -954,8 +954,8 @@ physviol_v0/
   splits/{train,val,test}.txt             grouped by scenario, not by clip
   clips/<clip_uid>/
     meta.json              §3.1 + §3.2 scalars + provenance — the source of truth
-    rgb.mp4                master (Tier A: 256²/25f; Tier B: 512²/96f), H.264 CRF 14
-    rgb_derivative.mp4      Tier B only: 256²/81f for video-DiT consumers
+    rgb.mp4                master (tier v0: 256²/25f; tier v1: 512²/96f), H.264 CRF 14
+    rgb_derivative.mp4      tier v1 only: 256²/81f for video-DiT consumers
     timelines.npz          §3.2  active, observable, occluded, severity_t   [T]
     seg.npz                §3.3  uint16 [T,H,W]
     violation_mask.npz     §3.3  bool   [T,H,W]   ← the primary annotation
@@ -1008,24 +1008,24 @@ physviol/
 
 **Phase 0 — two clips (days 1-3). — BUILT.** `drop` × `solidity`, all three severity
 bins, end to end: sample → simulate → inject → render both twins → annotate → overlay →
-validate. ~16.7 s per pair at Tier D including annotation and video encoding. Prefix identity
+validate. ~16.7 s per pair at the debug tier including annotation and video encoding. Prefix identity
 holds exactly; `physviol validate` is clean; 21 tests pass. Remaining Phase 0 item: produce
-the deliverable pair at **Tier A** and eyeball it. Kubric smoke render → full annotation export → an overlay video
+the deliverable pair at **tier v0** and eyeball it. Kubric smoke render → full annotation export → an overlay video
 with the mask, the severity heatmap and all three clocks burned into the frame. **Look at it
 before anything scales.** Assert prefix identity is exactly zero. Nothing else starts until
 these two clips are visually correct.
 
-**Phase 1 — ~50 clips (weeks 1-2).** Tier A. Three scenarios, four families spanning at least
+**Phase 1 — ~50 clips (weeks 1-2).** tier v0. Three scenarios, four families spanning at least
 three domains, schema frozen and schema-validated. Measure the optimal parallel-render width
 and ship the queue. Then **immediately** run 2-3 off-the-shelf models — a V-JEPA-2 surprise
 baseline, a VLM prompt, a video-DiT probe. If they sit at 95% or at chance, difficulty
 calibration is wrong and must be fixed *now*, not after 600 clips.
 
-**Phase 2 — ~300 pairs / 600 clips (weeks 3-8).** Tier A, the full 41-cell compatibility
+**Phase 2 — ~300 pairs / 600 clips (weeks 3-8).** tier v0, the full 41-cell compatibility
 matrix, both control arms, severity-binned weak/medium/strong splits, scenario-grouped
 train/val/test. **Release `physviol_v0`.** ~7 h of render serial, less parallel.
 
-**Phase 3 — Tier B + fluid/cloth + realism + MJX.** Re-run the same generators at
+**Phase 3 — tier v1 + fluid/cloth + realism + MJX.** Re-run the same generators at
 512²/24 fps/97 frames. Swap the dynamics backend behind the seam for exact residuals and
 deformables — this is where GPU physics earns its place. **This is also where true fluid and
 cloth land**: a mesh-cache seam, field-level conservation residuals, and either a working
@@ -1098,7 +1098,7 @@ benchmarks:
    ~1.75 s/frame at 256², ~7.16 s at 512², linear in frames, 74% of it *not* sample-bound.
    The GPU/OptiX path caps at ~1.37× by Amdahl and risks breaking Kubric's 2.93-pinned `bpy`
    integration, so it is **not** scheduled work — clip-level parallelism already measures
-   1.92× at width 4, for free. Tier A at ~4 h parallel is comfortable; Tier B at ~60 h is why
+   1.92× at width 4, for free. tier v0 at ~4 h parallel is comfortable; tier v1 at ~60 h is why
    the resumable queue is a Phase 1 deliverable.
 2. **The L40S is shared** with other jobs on this box. The render queue is CPU-only, so it
    does not contend — but the Phase 1 baseline evaluations do. Keep them checkpointed.

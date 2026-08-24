@@ -36,7 +36,7 @@ class RollingRamp(Scenario):
         sin_t, cos_t = math.sin(tilt), math.cos(tilt)
         # The LIP height is the number that matters, so set it and derive the
         # slab centre -- not the other way round. It fixes the drop off the end
-        # at ~5 frames at Tier D (at 1.5 m the block was airborne for three, and
+        # at ~5 frames at the debug tier (at 1.5 m the block was airborne for three, and
         # the angular-momentum law excludes a frame either side of every
         # contact, so the whole flight was gated away and the cell produced no
         # plan at all) while keeping the ramp's top inside the shot.
@@ -46,7 +46,7 @@ class RollingRamp(Scenario):
         v0 = float(rng.uniform(1.9, 2.4))
         d, _ = C.ramp_axes(tilt)
         # Start close to the lip so the body leaves the slab a third of the way
-        # in; starting at the top spends the whole of Tier D sliding and never
+        # in; starting at the top spends the whole of the debug tier sliding and never
         # reaches the airborne stretch angular_momentum needs.
         start_along = half_len - float(rng.uniform(0.55, 0.78))
 

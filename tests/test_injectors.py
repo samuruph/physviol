@@ -42,7 +42,7 @@ def _valid_traj(spec, T=13, fps=12.0):
 
 @pytest.fixture
 def spec():
-    return scenarios.get("drop").sample(555, TIERS["D"], "L0")
+    return scenarios.get("drop").sample(555, TIERS["debug"], "L0")
 
 
 @pytest.mark.parametrize("family", ["antigravity", "continuity", "solidity",
@@ -187,7 +187,7 @@ def _collision_traj():
     import mockroll
     from physviol import scenarios
     sc = scenarios.get("collision")
-    spec = sc.sample(4242, TIERS["D"], "L0")
+    spec = sc.sample(4242, TIERS["debug"], "L0")
     return spec, mockroll.roll(spec, sc)
 
 
@@ -251,7 +251,7 @@ def test_newton2_needs_visually_identical_bodies():
     """The scenario has to hold up its end: same radius, same colour."""
     from physviol import scenarios
     for seed in (1, 777, 4242):
-        spec = scenarios.get("collision").sample(seed, TIERS["D"], "L0")
+        spec = scenarios.get("collision").sample(seed, TIERS["debug"], "L0")
         # Dormant understudies carry role "actor" too -- they are the body
         # `fission` switches on -- so they have to be excluded here.
         a, b = [x for x in spec.bodies if x.role == "actor" and not x.dormant]

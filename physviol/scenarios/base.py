@@ -36,12 +36,33 @@ class Tier:
         assert (self.num_frames - 1) // 4 + 1 == self.latent_frames, self.name
 
 
+# Named for what they are, not lettered. The letters were inherited and made no
+# sense: A was the first release, B the second, D the debug size, and there was
+# no C at all -- so the ordering implied by the alphabet was backwards from the
+# ordering that matters, and every reader had to memorise a lookup. These are
+# the release names already used for the output directories.
 TIERS: Dict[str, Tier] = {
-    #                      res  fps  frames  spp  F_lat  HW_lat  publishable
-    "D": Tier("D", 128, 12, 25, 16, 7, 8, False),
-    "A": Tier("A", 256, 12, 49, 64, 13, 16, True),
-    "B": Tier("B", 512, 24, 97, 64, 25, 16, True),
+    #                             res  fps  frames  spp  F_lat  HW_lat  publish
+    "debug": Tier("debug", 128, 12, 25, 16, 7, 8, False),
+    "v0":    Tier("v0",    256, 12, 49, 64, 13, 16, True),
+    "v1":    Tier("v1",    512, 24, 97, 64, 25, 16, True),
 }
+
+#: The letters this project used until 2026-08-24. Accepted with a pointer to
+#: the new name rather than silently, so an old script or a stale note fails
+#: loudly and readably instead of building the wrong size.
+LEGACY_TIER_NAMES = {"D": "debug", "A": "v0", "B": "v1"}
+
+
+def tier(name: str) -> Tier:
+    """A tier by name, with a readable error for the retired letters."""
+    if name in TIERS:
+        return TIERS[name]
+    if name in LEGACY_TIER_NAMES:
+        raise KeyError("tier %r was renamed to %r (the letters had no C and "
+                       "ran backwards); valid tiers: %s"
+                       % (name, LEGACY_TIER_NAMES[name], ", ".join(TIERS)))
+    raise KeyError("unknown tier %r; valid tiers: %s" % (name, ", ".join(TIERS)))
 # Frame counts went up across the board (13/25/97 -> 25/49/97). At thirteen
 # frames a violation that fires a third of the way in has eight frames to play
 # out, which is not enough to see a body rise and fall, or a pour drain through
@@ -49,7 +70,7 @@ TIERS: Dict[str, Tier] = {
 # into the space left over. Timing is expressed as a fraction of the clip
 # (see `EVENT_FRACTION`), so lengthening the tier lengthens the violations too
 # rather than leaving them as brief events in a longer static shot.
-DEFAULT_TIER = "D"
+DEFAULT_TIER = "debug"
 
 for _t in TIERS.values():
     _t.validate()

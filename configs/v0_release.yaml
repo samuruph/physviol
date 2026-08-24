@@ -2,7 +2,7 @@
 #
 #   python -m physviol.cli generate --config v0_release
 #
-# Tier A at complexity L0, the full severity ladder, several randomisations per
+# Tier `v0` at complexity L0, the full severity ladder, several randomisations per
 # cell. Sizing (`physviol taxonomy --config v0_release`) before committing to a
 # run is worth the ten seconds -- complexity, not the severity ladder, is the
 # expensive dial: L1's photographic environment costs about 5.5x an L0 render,
@@ -12,7 +12,7 @@ defaults:
   complexity: L0
 
 generate:
-  tier: A
+  tier: v0
   severity: all
   variants: 3
   keep_going: true
@@ -20,7 +20,7 @@ generate:
   outdir: out/physviol_v0
 
 taxonomy:
-  tier: A
+  tier: v0
   complexity: L0
   severity: all
   variants: 3

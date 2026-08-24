@@ -22,7 +22,7 @@ SEED = 4242
 
 def _prepare(scenario_name, family, severity="strong"):
     sc = scenarios.get(scenario_name)
-    spec = sc.sample(SEED, TIERS["D"], "L0")
+    spec = sc.sample(SEED, TIERS["debug"], "L0")
     traj = mockroll.roll(spec, sc)
     inj = injectors.get(family)
     inj.window_frames = None

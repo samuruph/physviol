@@ -50,7 +50,7 @@ array. Review it against real clips from the review sweep rather than in the abs
 
 **Found 2026-08-24 while building `time_slip`, which could not find a window to stall in.**
 
-The tier lengthening (13 -> 25 frames at Tier D, 25 -> 49 at Tier A) broke time-scaling the
+The tier lengthening (13 -> 25 frames at the debug tier, 25 -> 49 at tier v0) broke time-scaling the
 same way it broke framing, and only the framing half has been fixed. Fraction of the clip
 with any actor in motion, worst of five seeds (host-side mock, so indicative not exact):
 
@@ -73,7 +73,7 @@ Two different causes, needing two different fixes:
 - **Traversal scenarios** (`collision`, `barrier_pass`, `occluder_pass`). Deriving the launch
   speed from the clip length made the bodies slower, and with friction unchanged a slower
   body stops sooner in *both* time and distance. Friction has to scale with the scene too:
-  `mu_eff = (1 - remaining) * v0 / (g * T)`. In `collision` at Tier A the striker now stops
+  `mu_eff = (1 - remaining) * v0 / (g * T)`. In `collision` at tier v0 the striker now stops
   before it reaches the target, so the staged collision does not happen at all.
 - **Fixed-duration events** (`ramp_slide`, `rolling_ramp`, `stack_topple`, `pyramid_impact`,
   `drop`). The slab length and the drop height are fixed, so the event takes the same ~1 s
@@ -88,22 +88,22 @@ no motion left to resume into, which is correct behaviour and a symptom, not a b
 
 Not fixed yet, deliberately: `tests/mockroll.py`'s friction is a recent local approximation,
 and tuning seven scenarios against it before checking against the real simulator would be
-tuning against the wrong numbers. The review sweep at Tier D -- where most scenarios are
+tuning against the wrong numbers. The review sweep at the debug tier -- where most scenarios are
 above 50% -- is the run that produces those numbers.
 
-### Known-tight cell: `occluder_pass x time_slip` at Tier D, strong
+### Known-tight cell: `occluder_pass x time_slip` at the debug tier, strong
 
 The stall is capped so the body re-emerges before the clip ends, using the scenario's
 declared `occluded_frames`. That test is for *full* occlusion, so partial visibility starts a
-frame or two later than it predicts, and at Tier D the strong bin re-emerges only in the last
-frame or two -- close to reading as `permanence`. Comfortable at Tier A (4 visible frames
-after emerging) and Tier B (11), which are the tiers that ship. Fixing it properly means
+frame or two later than it predicts, and at the debug tier the strong bin re-emerges only in the last
+frame or two -- close to reading as `permanence`. Comfortable at tier v0 (4 visible frames
+after emerging) and tier v1 (11), which are the tiers that ship. Fixing it properly means
 either estimating emergence from the screen geometry rather than from `occluded_frames`, or
 giving `occluder_pass` more runway to the right of its screen.
 
 ## 4. Release configuration
 
-Severity bins and variant count per cell. `configs/v0_release.yaml` currently proposes Tier A
+Severity bins and variant count per cell. `configs/v0_release.yaml` currently proposes tier v0
 / L0 / all three bins / 3 variants; `physviol taxonomy --config v0_release` prices it. The
 user asked to settle this together before the run.
 

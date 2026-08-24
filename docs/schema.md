@@ -15,7 +15,7 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
   "pair_uid": "physviol_v0/collision/0173",
   "twin_uid": "physviol_v0/collision/0173/valid",
   "label": "invalid",
-  "tier": "A", "release": "physviol_v0",
+  "tier": "v0", "release": "physviol_v0",
   "domain": "contact", "family": "solidity", "scenario": "collision", "seed": 91731,
   "intphys2_category": "solidity", "likephys_domain": "rigid_body",
   "fps": 12, "num_frames": 25, "resolution": [256, 256],
@@ -55,8 +55,8 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
 | `pair_uid` | str | shared by a valid/invalid twin pair |
 | `twin_uid` | str | the counterpart clip. **Never split a pair across train/val/test.** Several invalid variants may share one valid twin (same scenario+seed → bit-identical valid render), so `pair_uid` groups one valid with N invalids. |
 | `label` | `"valid"` \| `"invalid"` | clip-level ground truth |
-| `tier` | `"A"` \| `"B"` | A = 256²/12 fps/25 f; B = 512²/24 fps/97 f. (Tier D, 128²/13 f, is the debug loop and is **never published**.) |
-| `release` | str | `physviol_v0` (tier A) or `physviol_v1` (tier B) |
+| `tier` | `"v0"` \| `"v1"` | `v0` = 256²/12 fps/49 f; `v1` = 512²/24 fps/97 f. `debug` (128²/25 f) is the iteration loop and is **never published**. Renamed from the old A/B/D letters, which had no C and ran backwards. |
+| `release` | str | `physviol_v0` (tier v0) or `physviol_v1` (tier v1) |
 | `seed` | int | the seed for the whole sampling + render path |
 
 ### Taxonomy (PLAN Part 2)

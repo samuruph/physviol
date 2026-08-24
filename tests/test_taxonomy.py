@@ -60,7 +60,7 @@ def test_declared_kind_matches_what_injectors_emit():
         if scenario not in have:
             continue
         sc = scenarios.get(scenario)
-        spec = sc.sample(4242, TIERS["D"], "L0")
+        spec = sc.sample(4242, TIERS["debug"], "L0")
         traj = mockroll.roll(spec, sc)
         inj = injectors.get(family)
         inj.window_frames = None

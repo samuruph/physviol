@@ -645,7 +645,7 @@ class TimeSlip(Injector):
         # the first version travelled its three radii entirely behind the
         # screen and appeared only in the final frame, which reads as
         # `permanence` rather than as a stall. Capped rather than refused --
-        # a slightly shorter strong bin at Tier D is honest, because the
+        # a slightly shorter strong bin at the debug tier is honest, because the
         # magnitude is reported.
         occ = spec.notes.get("occluded_frames")
         if occ:

@@ -3,7 +3,7 @@
 #
 #   bash scripts/generate_sample.sh [complexity] [tier] [seed] [severity] [window] [variants]
 #
-# Defaults to ONE `strong` variant per cell at L0/Tier D -- the fastest way to
+# Defaults to ONE `strong` variant per cell at L0 / tier `debug` -- the fastest way to
 # see all 177 cells. While checking that scenarios and families work at all,
 # breadth of coverage is what you want to look at, not three strengths of the
 # same thing; pass `all` as the severity for the full ladder.
@@ -22,7 +22,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-CX="${1:-L0}"; TIER="${2:-D}"; SEED="${3:-777}"
+CX="${1:-L0}"; TIER="${2:-debug}"; SEED="${3:-777}"
 SEV="${4:-strong}"; WIN="${5:-}"; VARIANTS="${6:-1}"
 REL=out/release
 

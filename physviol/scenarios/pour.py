@@ -36,9 +36,9 @@ class Pour(Scenario):
         if not cx.implemented:
             raise NotImplementedError("complexity %s not built" % complexity)
 
-        # Grain count follows the tier, not taste: at Tier D the clip is ~1 s
+        # Grain count follows the tier, not taste: at the debug tier the clip is ~1 s
         # and a hundred beads is render cost spent on pixels nobody inspects.
-        n_grains = 40 if tier.name == "D" else 96
+        n_grains = 40 if tier.name == "debug" else 96
         r = float(rng.uniform(0.070, 0.085))
         hue = float(rng.uniform(0, 1))
 

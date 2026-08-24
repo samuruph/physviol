@@ -44,10 +44,10 @@ python -m physviol.cli generate --debug --complexity L0 \
     --scenario occluder_pass --family permanence --seed 777
 ```
 
-`--debug` is Tier D: 128², 25 frames, 16 spp. `--complexity L0` is a solid background with a
+`--debug` is the debug tier: 128², 25 frames, 16 spp. `--complexity L0` is a solid background with a
 sun lamp, which needs no network and renders ~4.6× faster than the photographic L1. Roughly
 **~14 s per pair**, including annotation and the overlay video. This is the loop to iterate
-in — a bug found at Tier D is fixed for all three tiers.
+in — a bug found at the debug tier is fixed for all three tiers.
 
 ### b. Small subset — every family, one scenario, or a slice of the matrix
 
@@ -62,7 +62,7 @@ python -m physviol.cli generate --debug --complexity L0 --family solidity --seed
 python -m physviol.cli generate --debug --complexity L0 -n 6 --seed 777
 
 # the whole matrix, one randomisation each -- every scenario x family cell
-bash scripts/generate_sample.sh L0 D 777 strong
+bash scripts/generate_sample.sh L0 debug 777 strong
 ```
 
 `--keep-going` carries on past a cell that fails and lists the failures at the end, which is
@@ -76,7 +76,7 @@ something that quietly overrides you:
 
 ```bash
 python -m physviol.cli generate --config review              # the whole review sweep
-python -m physviol.cli generate --config review --tier A     # same, at release size
+python -m physviol.cli generate --config review --tier v0     # same, at release size
 python -m physviol.cli taxonomy --config v0_release          # size it before running it
 ```
 
@@ -84,8 +84,8 @@ Two ship with the repo:
 
 | config | what it is |
 |---|---|
-| `configs/review.yaml` | every cell once, `strong`, Tier D / L0 — the sweep to look at before generating anything real |
-| `configs/v0_release.yaml` | Tier A / L0, the full severity ladder, 3 randomisations per cell |
+| `configs/review.yaml` | every cell once, `strong`, the debug tier / L0 — the sweep to look at before generating anything real |
+| `configs/v0_release.yaml` | tier v0 / L0, the full severity ladder, 3 randomisations per cell |
 
 A file is a `defaults:` block plus one block per subcommand. Keys are the long flag names
 with dashes as underscores (`--keep-going` is `keep_going`). An unknown key **under a
@@ -99,16 +99,16 @@ they are cross-command by construction (`seed` means something to `generate` and
 ### c. The full dataset
 
 ```bash
-# Tier A (256px, 49 frames), photographic backgrounds, 6 randomisations per cell.
+# tier v0 (256px, 49 frames), photographic backgrounds, 6 randomisations per cell.
 # 182 cells x 6 = 1092 invalid clips, sharing 90 valid twins (one per
 # scenario+seed, since every family of a scenario renders in the same run).
-python -m physviol.cli generate --tier A --complexity L1 \
+python -m physviol.cli generate --tier v0 --complexity L1 \
     --variants 6 --seed 100000 --severity strong --keep-going \
     --outdir out/physviol_v0
 
 # ...or the full severity ladder as well (weak/medium/strong -> 3x the invalid clips,
 # but the valid twin and the scene build are shared, so it is far cheaper than 3x)
-python -m physviol.cli generate --tier A --complexity L1 \
+python -m physviol.cli generate --tier v0 --complexity L1 \
     --variants 6 --severity all --seed 100000 --keep-going \
     --outdir out/physviol_v0
 
@@ -133,7 +133,7 @@ Split by scenario, since one worker run covers all families of one scenario anyw
 
 ```bash
 for s in drop toss occluder_pass collision; do
-  python -m physviol.cli generate --tier A --complexity L1 --variants 6 \
+  python -m physviol.cli generate --tier v0 --complexity L1 --variants 6 \
       --scenario "$s" --seed 100000 --outdir out/physviol_v0 &
 done; wait
 ```
@@ -187,7 +187,7 @@ python -m physviol.cli taxonomy -v          # + every (scenario, family) cell
 
 # Generate (see section 2 for the flags that matter)
 python -m physviol.cli generate --debug --complexity L0 --scenario drop
-#   --tier D|A|B      --complexity L0|L1     --severity weak|medium|strong|all
+#   --tier debug|v0|v1        --complexity L0|L1     --severity weak|medium|strong|all
 #   --variants N      --window N             --scenario X   --family Y
 #   -n / --limit N    --keep-going           --no-overlay   --outdir / --workdir
 
@@ -216,7 +216,7 @@ bash docker/kubric.sh physviol/render/worker_smoke.py --resolution 256 --frames 
 # the real worker: simulate + inject + render both twins.
 # --family takes a comma list; they share one scene build and one valid render.
 bash docker/kubric.sh physviol/render/worker.py \
-    --scenario drop --seed 777 --tier D --complexity L0 \
+    --scenario drop --seed 777 --tier debug --complexity L0 \
     --family solidity,antigravity --severity strong --outdir out/work
 ```
 
@@ -353,7 +353,7 @@ which, and what that means for a confusion matrix.
 
 ## 8. Tiers
 
-| | Tier D (debug) | Tier A (`physviol_v0`) | Tier B (`physviol_v1`) |
+| | the debug tier (debug) | tier v0 (`physviol_v0`) | tier v1 (`physviol_v1`) |
 |---|---|---|---|
 | resolution | 128² | 256² | 512² |
 | frames @ fps | 25 @ 12 | 49 @ 12 | 97 @ 24 |
@@ -362,7 +362,7 @@ which, and what that means for a confusion matrix.
 | published | never | yes | yes |
 
 Frame counts are all `4k+1` so the token-grid reduction aligns exactly with a video-DiT VAE's
-4× temporal binning. **Tier D is the default** — debug there.
+4× temporal binning. **the debug tier is the default** — debug there.
 
 **Rendering is CPU and stays that way.** Frame time fits `T = 1.29 + 0.0074·spp` at 256², so
 only ~26% is sampling — the only part OptiX would accelerate, capping a GPU build at ~1.37×

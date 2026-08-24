@@ -53,11 +53,11 @@ def cmd_taxonomy(a) -> int:
 
 
 #: Measured wall-clock per rendered clip, including annotation and the overlay
-#: video. Tier A is 4x the pixels and ~2x the frames of Tier D; L1's HDRI
+#: video. tier v0 is 4x the pixels and ~2x the frames of the debug tier; L1's HDRI
 #: environment costs about 5.5x an L0 render.
-SECONDS_PER_CLIP = {("D", "L0"): 8.0, ("D", "L1"): 44.0,
-                    ("A", "L0"): 62.0, ("A", "L1"): 340.0,
-                    ("B", "L0"): 250.0, ("B", "L1"): 1370.0}
+SECONDS_PER_CLIP = {("debug", "L0"): 8.0, ("debug", "L1"): 44.0,
+                    ("v0", "L0"): 62.0, ("v0", "L1"): 340.0,
+                    ("v1", "L0"): 250.0, ("v1", "L1"): 1370.0}
 
 
 def _print_release_size(cells, a) -> None:
@@ -100,9 +100,13 @@ def cmd_generate(a) -> int:
     from . import scenarios as scen_mod
     from .taxonomy import build_cells
 
-    tier = "D" if a.debug else a.tier
+    tier = "debug" if a.debug else a.tier
     if tier not in TIERS:
-        print("unknown tier %r" % tier, file=sys.stderr)
+        from .scenarios.base import LEGACY_TIER_NAMES
+        hint = LEGACY_TIER_NAMES.get(tier)
+        print("unknown tier %r%s; valid tiers: %s"
+              % (tier, (" -- renamed to %r" % hint) if hint else "",
+                 ", ".join(TIERS)), file=sys.stderr)
         return 2
 
     from . import injectors
@@ -256,15 +260,16 @@ def _build(suppress: bool = False):
                        help="print the taxonomy, and size a release")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="list every (scenario, family) cell")
-    p.add_argument("--tier", default="A")
+    p.add_argument("--tier", default="v0", help="debug | v0 | v1")
     p.add_argument("--complexity", default="L0")
     p.add_argument("--severity", default="all")
     p.add_argument("--variants", type=int, default=5)
     p.set_defaults(fn=cmd_taxonomy)
 
     p = add_parser("generate", help="simulate+render+annotate end to end")
-    p.add_argument("--debug", action="store_true", help="Tier D (fast, unpublished)")
-    p.add_argument("--tier", default="D")
+    p.add_argument("--debug", action="store_true", help="the debug tier (fast, unpublished)")
+    p.add_argument("--tier", default="debug",
+                   help="debug | v0 | v1 -- see `physviol taxonomy`")
     p.add_argument("--variants", type=int, default=1,
                    help="randomisations per cell: each is a fresh seed, so "
                         "sizes, speeds, colours, camera, HDRI and (where "

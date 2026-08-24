@@ -44,7 +44,7 @@ def _residual_ctx(spec, plan, body_id):
                          ids=["%s.%s" % (s, f) for s, f in CELLS])
 def test_cell_moves_only_its_own_law(scenario, family):
     sc = scenarios.get(scenario)
-    spec = sc.sample(SEED, TIERS["D"], "L0")
+    spec = sc.sample(SEED, TIERS["debug"], "L0")
     traj = mockroll.roll(spec, sc)
     inj = injectors.get(family)
     inj.window_frames = None
@@ -89,7 +89,7 @@ def test_owners_actually_move_the_law_they_own():
             moved = False
             for scenario, _ in cells:
                 sc = scenarios.get(scenario)
-                spec = sc.sample(SEED, TIERS["D"], "L0")
+                spec = sc.sample(SEED, TIERS["debug"], "L0")
                 traj = mockroll.roll(spec, sc)
                 inj = injectors.get(family)
                 inj.window_frames = None
