@@ -183,10 +183,18 @@ def cmd_generate(a) -> int:
                 "results": results, "bad": bad}
 
     workers = max(1, int(getattr(a, "workers", 1) or 1))
-    if workers > 1:
+    if workers > 1 and len(jobs) > 1:
+        # The FIRST job runs alone. Kubric fetches its assets from
+        # gs://kubric-public on demand and caches them, and two containers
+        # racing on a cold cache both fail reading a half-written PNG -- two of
+        # eight jobs died that way, taking 28 cells with them, and the run
+        # carried on under --keep-going without anyone noticing. One serial job
+        # populates the cache; everything after it reads.
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            outcomes = list(pool.map(run_one, jobs))
+        outcomes = [run_one(jobs[0])]
+        if len(jobs) > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                outcomes += list(pool.map(run_one, jobs[1:]))
     else:
         outcomes = [run_one(j) for j in jobs]
 
@@ -217,6 +225,12 @@ def cmd_generate(a) -> int:
     dt = time.perf_counter() - t0
     print("\n%d pairs in %.1fs (%.1fs/pair)  ->  %s"
           % (len(done), dt, dt / max(len(done), 1), rel))
+    expected = len(cells) * a.variants * len(
+        ["weak", "medium", "strong"] if a.severity == "all"
+        else [x for x in a.severity.split(",") if x.strip()])
+    if len(done) < expected:
+        print("\n!! %d of %d expected clips are MISSING -- see the failures below"
+              % (expected - len(done), expected), file=sys.stderr)
     if failed:
         print("%d cell(s) produced nothing:" % len(failed), file=sys.stderr)
         for row in failed:
@@ -241,7 +255,10 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
         if line.startswith("PHASE0 "):
             info = json.loads(line[len("PHASE0 "):])
             return (0, info) if info.get("ok") else (3, info)
-    return (p.returncode or 4, {"stderr": p.stderr[-600:]})
+    # Keep enough of the tail to contain the actual exception. 600 characters
+    # cut the traceback off above the error line, which turned a diagnosable
+    # container failure into "something went wrong in a png reader".
+    return (p.returncode or 4, {"stderr": p.stderr[-4000:]})
 
 
 def _annotate(workdir, outroot, overlay=True, only=None):
