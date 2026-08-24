@@ -194,6 +194,12 @@ python -m physviol.cli generate --debug --complexity L0 --scenario drop
 # Re-annotate an existing worker output without re-rendering
 python -m physviol.cli annotate out/work/drop/0777 --outdir out/release
 
+# Every family of one scenario at once -- rows families, columns severities.
+# The view a per-family video cannot give you: whether `solidity` and
+# `permanence` really look like different violations at the same moment.
+python -m physviol.cli sheet out/release/clips/physviol_v0/drop/0777
+python -m physviol.cli sheet out/release/clips/physviol_v0/drop/0777 --view sev
+
 # Rebuild one overlay / one grid / the coverage tiling
 python -m physviol.cli overlay out/release/clips/.../invalid_solidity_strong
 python -m physviol.cli grid    out/release/clips/physviol_v0/drop/0777 --family solidity

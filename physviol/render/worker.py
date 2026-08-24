@@ -147,6 +147,39 @@ def _fade_control(renderer, obj):
     return mix.inputs[0]
 
 
+def _clear_animation(renderer, obj) -> None:
+    """Drop every existing keyframe on a body before re-keying it.
+
+    **`replay()` is not idempotent without this**, and that was a prefix-identity
+    bug in 29 of 176 clips in the review sweep. The valid clip is the first
+    replay a scene ever sees, so its curves are built from empty; every invalid
+    clip is a replay laid on top of a fully populated curve. Blender re-solves
+    each key's Bezier handles against whatever keys exist at insert time, so the
+    two orders do not converge on the same F-curve even when every keyed value
+    is identical -- and the render then differs by a few levels on scattered
+    frames *before* `t_event`, on families that touch no material channel at
+    all. `probe_replay.py` renders the same trajectory twice and measures it:
+    53 levels on `pendulum_swing` before this, 0 after.
+
+    Cheap: clearing and re-keying costs a fraction of one frame's render.
+    """
+    bo = obj.linked_objects.get(renderer)
+    if bo is not None and getattr(bo, "animation_data", None) is not None:
+        bo.animation_data_clear()
+    mat = getattr(obj, "material", None)
+    bmat = None if mat is None else mat.linked_objects.get(renderer)
+    if bmat is not None:
+        if getattr(bmat, "animation_data", None) is not None:
+            bmat.animation_data_clear()
+        nt = getattr(bmat, "node_tree", None)
+        if nt is not None and getattr(nt, "animation_data", None) is not None:
+            nt.animation_data_clear()
+    # Kubric's own record of what it has keyed, so its bookkeeping agrees with
+    # Blender's rather than silently describing curves that no longer exist.
+    for member in list(getattr(obj, "keyframes", {})):
+        obj.keyframes[member].clear()
+
+
 def _set_visibility(renderer, obj, body) -> None:
     """Cycles ray visibility for one body.
 
@@ -266,6 +299,7 @@ def replay(spec, objs, traj: Trajectory, renderer=None) -> None:
     opacity = traj.opacity
     for j, b in enumerate(spec.bodies):
         obj = objs[b.name]
+        _clear_animation(renderer, obj)
         # Scale is keyframed on EVERY body, every frame, whether or not this
         # trajectory changes it. One worker run renders several families through
         # the same scene object, and a keyframe nobody overwrites simply stays:
@@ -368,10 +402,16 @@ def main() -> int:
     ap.add_argument("--window", type=int, default=None,
                     help="uniform violation duration in frames; sustained "
                          "families honour it, instant ones ignore it")
+    ap.add_argument("--resolution", type=int)
+    ap.add_argument("--fps", type=int)
+    ap.add_argument("--frames", type=int)
+    ap.add_argument("--spp", type=int)
     ap.add_argument("--outdir", default="out/phase0")
     a = ap.parse_args()
 
-    tier = scenarios.TIERS[a.tier]
+    tier = scenarios.TIERS[a.tier].override(
+        resolution=a.resolution, fps=a.fps, num_frames=a.frames,
+        samples_per_pixel=a.spp)
     spec = scenarios.get(a.scenario).sample(a.seed, tier, a.complexity)
 
     pair_uid = "%s/%04d" % (a.scenario, a.seed)

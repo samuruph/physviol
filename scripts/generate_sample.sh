@@ -32,6 +32,14 @@ conda run --no-capture-output -n physviol python -m physviol.cli generate \
     ${WIN:+--window "$WIN"} --variants "$VARIANTS" --keep-going \
     --workdir out/work --outdir "$REL"
 
+echo "== sheets: every family of a scenario at once, per view =="
+for PAIR in $(find "$REL/clips" -mindepth 3 -maxdepth 3 -type d | sort); do
+  for VIEW in mask sev; do
+    conda run --no-capture-output -n physviol python -m physviol.cli sheet \
+        "$PAIR" --view "$VIEW" || true
+  done
+done
+
 echo "== grids: the valid clip beside every severity of each family =="
 for PAIR in $(find "$REL/clips" -mindepth 3 -maxdepth 3 -type d | sort); do
   FAMS=$(ls "$PAIR" | sed -n 's/^invalid_\(.*\)_\(weak\|medium\|strong\)$/\1/p' | sort -u)

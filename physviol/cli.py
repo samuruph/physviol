@@ -109,6 +109,21 @@ def cmd_generate(a) -> int:
                  ", ".join(TIERS)), file=sys.stderr)
         return 2
 
+    # Individual dials, for sweeping one knob without inventing a tier.
+    try:
+        tier_obj = TIERS[tier].override(
+            resolution=a.resolution, fps=a.fps, num_frames=a.frames,
+            samples_per_pixel=a.spp)
+    except ValueError as exc:
+        print("bad tier override: %s" % exc, file=sys.stderr)
+        return 2
+    overrides = [("--resolution", a.resolution), ("--fps", a.fps),
+                 ("--frames", a.frames), ("--spp", a.spp)]
+    overrides = [(k, v) for k, v in overrides if v is not None]
+    if overrides:
+        print("tier %s with %s -> %s" % (
+            tier, " ".join("%s %s" % kv for kv in overrides), tier_obj.name))
+
     from . import injectors
     have, inj = set(scen_mod.available()), set(injectors.available())
     cells = [c for c in build_cells() if c[0] in have and c[1] in inj]
@@ -141,7 +156,10 @@ def cmd_generate(a) -> int:
             seed = a.seed + v
             rc, info = _run_worker(scenario, seed, tier, ",".join(families),
                                    a.severity, work, complexity=a.complexity,
-                                   window=a.window)
+                                   window=a.window,
+                                   dials={"resolution": a.resolution,
+                                          "fps": a.fps, "frames": a.frames,
+                                          "spp": a.spp})
             if rc != 0:
                 print("worker failed for %s/%d: %s"
                       % (scenario, seed, str(info)[:400]), file=sys.stderr)
@@ -175,7 +193,7 @@ def cmd_generate(a) -> int:
 
 
 def _run_worker(scenario, seed, tier, family, severity, workdir,
-                complexity="L0", window=None):
+                complexity="L0", window=None, dials=None):
     cmd = ["bash", os.path.join(REPO, "docker", "kubric.sh"),
            "physviol/render/worker.py", "--scenario", scenario,
            "--seed", str(seed), "--tier", tier, "--family", family,
@@ -183,6 +201,9 @@ def _run_worker(scenario, seed, tier, family, severity, workdir,
            "--outdir", workdir]
     if window:
         cmd += ["--window", str(window)]
+    for flag, value in (dials or {}).items():
+        if value is not None:
+            cmd += ["--%s" % flag, str(value)]
     p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     for line in p.stdout.splitlines():
         if line.startswith("PHASE0 "):
@@ -216,7 +237,16 @@ def cmd_overlay(a) -> int:
 # ---------------------------------------------------------------- validate
 def cmd_grid(a) -> int:
     from .viz.grid import build
-    print(json.dumps(build(a.pair_dir, a.family, a.out), default=str))
+    views = [v.strip() for v in a.views.split(",")] if a.views else None
+    print(json.dumps(build(a.pair_dir, a.family, a.out, cell=a.cell,
+                           views=views), default=str))
+    return 0
+
+
+def cmd_sheet(a) -> int:
+    from .viz.grid import sheet
+    print(json.dumps(sheet(a.pair_dir, a.out, view=a.view, cell=a.cell),
+                     default=str))
     return 0
 
 
@@ -288,6 +318,15 @@ def _build(suppress: bool = False):
     p.add_argument("--window", type=int, default=None,
                    help="uniform violation duration in frames (sustained "
                         "families only; instant ones stay 1 frame)")
+    p.add_argument("--resolution", type=int,
+                   help="override the tier's square render size, e.g. 128")
+    p.add_argument("--fps", type=int, help="override the tier's frame rate")
+    p.add_argument("--frames", type=int,
+                   help="override the tier's clip length; must be 4k+1 "
+                        "(13, 17, 21, 25, 29, ...) for VAE latent alignment")
+    p.add_argument("--spp", type=int,
+                   help="override the tier's samples per pixel (render noise "
+                        "vs time; frame time is ~1.29 + 0.0074*spp at 256sq)")
     p.add_argument("--complexity", default="L1",
                    help="L0 solid bg .. L4 MOVi-F (see `taxonomy`)")
     p.add_argument("--workdir")
@@ -307,11 +346,24 @@ def _build(suppress: bool = False):
     p.add_argument("--upscale", type=int, default=4)
     p.set_defaults(fn=cmd_overlay)
 
-    p = add_parser("grid", help="valid vs every severity, side by side")
+    p = add_parser("grid", help="one family: valid vs every severity, all views")
     p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
     p.add_argument("--family")
     p.add_argument("--out")
+    p.add_argument("--views", help="comma list of rgb,mask,sev,causal,div "
+                                   "(default: every view the clips have)")
+    p.add_argument("--cell", type=int, default=224)
     p.set_defaults(fn=cmd_grid)
+
+    p = add_parser("sheet",
+                   help="one scenario+seed: every family x every severity")
+    p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
+    p.add_argument("--view", default="mask",
+                   choices=["rgb", "mask", "sev", "causal", "div"],
+                   help="which annotation view fills every cell")
+    p.add_argument("--out")
+    p.add_argument("--cell", type=int)
+    p.set_defaults(fn=cmd_sheet)
 
     p = add_parser("coverage",
                        help="one video tiling every invalid clip in a release")

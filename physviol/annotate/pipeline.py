@@ -18,6 +18,7 @@ import numpy as np
 from .. import injectors
 from ..residuals import laws
 from ..scenarios import TIERS
+from ..scenarios.base import Tier
 from ..sim.trajectory import Trajectory
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of
 from . import grids as grids_mod
@@ -72,7 +73,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     scenario = spec_d["scenario"]
     seed = int(spec_d["seed"])
-    tier = TIERS[spec_d["tier"]]
+    tier = (Tier.from_dict(spec_d["tier_spec"]) if "tier_spec" in spec_d
+            else TIERS[spec_d["tier"]])
     family = plan_d["family"]
     law_name = FAMILIES[family].law
 
@@ -82,6 +84,16 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     pi = np.load(os.path.join(vdir, "passes_invalid.npz"))
     seg_v, seg_i = _seg(pv), _seg(pi)
     T = tier.num_frames
+
+    # Pixel-level prefix identity, measured here because this is the only place
+    # both renders are in memory at once. The trajectory-level check runs in the
+    # worker and is exact; it passed on all 176 cells of the review sweep while
+    # 29 of them rendered differently before `t_event` anyway, because the
+    # divergence was in the replay, downstream of the trajectory.
+    _te = int((plan_d or {}).get("t_event_frame", 0))
+    prefix_diff = 0
+    if _te > 0:
+        prefix_diff = int((pv["rgba"][:_te] != pi["rgba"][:_te]).sum())
 
     # ---- rebuild the scene spec so the residual context is available -----
     from .. import scenarios as scen_mod
@@ -283,7 +295,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
         meta = _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier,
                            tinfo, floor, law_name, r_invalid, s_invalid, family,
-                           scenario, seed, primary_id, sev_bin)
+                           scenario, seed, primary_id, sev_bin, prefix_diff)
         with open(os.path.join(cdir, "meta.json"), "w") as fh:
             json.dump(meta, fh, indent=2, sort_keys=True)
         written[label] = cdir
@@ -308,7 +320,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
 def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 floor, law_name, r_inv, s_inv, family, scenario, seed,
-                primary_id, sev_bin) -> Dict[str, object]:
+                primary_id, sev_bin, prefix_diff: int = 0) -> Dict[str, object]:
     fam = FAMILIES[family]
     twin = "%s/%s" % (pair_uid, "invalid_%s_%s" % (family, sev_bin)
                       if label == "valid" else "valid")
@@ -334,7 +346,14 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         "provenance": {
             "generator_commit": os.environ.get("PHYSVIOL_COMMIT", "uncommitted"),
             "kubric_image_digest": _digest(), "blender_version": "2.93.4",
-            "render_seed": seed, "prefix_identical_verified": True,
+            "render_seed": seed,
+            # MEASURED, not asserted. This was a hardcoded `True` and the
+            # validator has been checking it ever since, which is how 29 of 176
+            # clips shipped with renders that differed *before* t_event
+            # (`replay()` was not idempotent -- see worker._clear_animation).
+            # A provenance field that cannot be false is not provenance.
+            "prefix_identical_verified": bool(prefix_diff == 0),
+            "prefix_differing_pixels": int(prefix_diff),
             "prefix_identical_upto_frame": tinfo["t_event_frame"],
         },
         "noise_floor": {law_name: floor.to_dict()},

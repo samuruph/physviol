@@ -35,6 +35,70 @@ class Tier:
             % (self.name, self.num_frames))
         assert (self.num_frames - 1) // 4 + 1 == self.latent_frames, self.name
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {"name": self.name, "resolution": self.resolution,
+                "fps": self.fps, "num_frames": self.num_frames,
+                "samples_per_pixel": self.samples_per_pixel,
+                "latent_frames": self.latent_frames,
+                "latent_hw": self.latent_hw, "publishable": self.publishable}
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "Tier":
+        """Rebuild a tier from a spec, overrides and all.
+
+        Annotation used to recover the tier with `TIERS[spec["tier"]]`, which
+        works only while every tier is one of the three named ones. The moment
+        `--frames`/`--resolution` produce a `v0+f25`, that lookup raises -- so
+        the spec carries the whole record and the name is just a label.
+        """
+        return Tier(**{k: d[k] for k in
+                       ("name", "resolution", "fps", "num_frames",
+                        "samples_per_pixel", "latent_frames", "latent_hw",
+                        "publishable")})
+
+    def override(self, resolution: Optional[int] = None,
+                 fps: Optional[int] = None, num_frames: Optional[int] = None,
+                 samples_per_pixel: Optional[int] = None) -> "Tier":
+        """A tier with individual dials changed, keeping the rest.
+
+        For sweeping one knob without inventing a whole new tier -- "the v0
+        settings but 25 frames", "debug but at 64 spp". `latent_frames` is
+        recomputed rather than carried over, so a frame count that does not
+        align to the VAE stride fails here with an explanation instead of
+        silently shipping clips no latent model can consume evenly.
+
+        The name records what was changed, so it lands in `meta.json` as e.g.
+        `v0+f25` and two clips from different overrides are never confused.
+        """
+        changes = []
+        for key, value in (("res", resolution), ("fps", fps),
+                           ("f", num_frames), ("spp", samples_per_pixel)):
+            if value is not None:
+                changes.append("%s%d" % (key, value))
+        if not changes:
+            return self
+        frames = self.num_frames if num_frames is None else int(num_frames)
+        if (frames - 1) % 4 != 0:
+            raise ValueError(
+                "num_frames must be 4k+1 for exact VAE latent alignment "
+                "(…, 13, 17, 21, 25, 29, …); got %d. Nearest are %d and %d."
+                % (frames, frames - (frames - 1) % 4,
+                   frames + 4 - (frames - 1) % 4))
+        out = Tier(
+            name="%s+%s" % (self.name, "".join(changes)),
+            resolution=self.resolution if resolution is None else int(resolution),
+            fps=self.fps if fps is None else int(fps),
+            num_frames=frames,
+            samples_per_pixel=(self.samples_per_pixel
+                               if samples_per_pixel is None
+                               else int(samples_per_pixel)),
+            latent_frames=(frames - 1) // 4 + 1,
+            latent_hw=self.latent_hw if resolution is None else max(
+                1, int(resolution) // 16),
+            publishable=self.publishable)
+        out.validate()
+        return out
+
 
 # Named for what they are, not lettered. The letters were inherited and made no
 # sense: A was the first release, B the second, D the debug size, and there was
@@ -246,6 +310,7 @@ class SceneSpec:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "scenario": self.scenario, "seed": self.seed, "tier": self.tier.name,
+            "tier_spec": self.tier.to_dict(),
             "resolution": [self.tier.resolution] * 2, "fps": self.tier.fps,
             "num_frames": self.tier.num_frames, "gravity": list(self.gravity),
             "physics_medium": self.physics_medium,

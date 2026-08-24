@@ -1,26 +1,24 @@
-# The published v0 release.
+# ============================================================================
+# v0_release -- the published dataset.
 #
+#   python -m physviol.cli taxonomy --config v0_release   # price it FIRST
 #   python -m physviol.cli generate --config v0_release
 #
-# Tier `v0` at complexity L0, the full severity ladder, several randomisations per
-# cell. Sizing (`physviol taxonomy --config v0_release`) before committing to a
-# run is worth the ten seconds -- complexity, not the severity ladder, is the
-# expensive dial: L1's photographic environment costs about 5.5x an L0 render,
-# which turns a long overnight job into a week.
+# See configs/review.yaml for what every key means; only the values that
+# differ from a review sweep are commented here.
+# ============================================================================
+
+# Shared by `generate` and `taxonomy`, so the sizing estimate is of exactly the
+# run that would happen. This is why the two commands are not repeated blocks:
+# anything both understand belongs here once.
 defaults:
   seed: 20260824
-  complexity: L0
+  tier: v0             # 256x256, 12 fps, 49 frames
+  complexity: L0       # L1 is ~5.5x the render cost; a later pass, not this one
+  severity: all        # the full weak/medium/strong ladder
+  variants: 3          # randomisations per cell
 
 generate:
-  tier: v0
-  severity: all
-  variants: 3
   keep_going: true
   workdir: out/work_v0
   outdir: out/physviol_v0
-
-taxonomy:
-  tier: v0
-  complexity: L0
-  severity: all
-  variants: 3
