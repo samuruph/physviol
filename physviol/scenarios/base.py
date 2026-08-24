@@ -108,9 +108,20 @@ class Tier:
 TIERS: Dict[str, Tier] = {
     #                             res  fps  frames  spp  F_lat  HW_lat  publish
     "debug": Tier("debug", 128, 12, 25, 16, 7, 8, False),
-    "v0":    Tier("v0",    256, 12, 49, 64, 13, 16, True),
+    "v0":    Tier("v0",    512, 30, 89, 64, 23, 16, True),
     "v1":    Tier("v1",    512, 24, 97, 64, 25, 16, True),
 }
+# v0 is 512x512 / 30 fps / 89 frames = 2.97 s.
+#
+# 30 fps so the release downsamples cleanly to 15 and 10 without resampling,
+# which a 12 fps master cannot do. 89 frames rather than 90 because every tier's
+# frame count must be 4k+1 for exact VAE latent alignment -- 90 is not, and 89
+# is the closest that is.
+#
+# `latent_hw` stays 16 at 512, matching v1 rather than following the /16 rule
+# the smaller tiers use. That is deliberate and predates this change: the token
+# grid is a fixed 16x16 for both published tiers so a model trained on one
+# transfers to the other without reshaping.
 
 #: The letters this project used until 2026-08-24. Accepted with a pointer to
 #: the new name rather than silently, so an old script or a stale note fails

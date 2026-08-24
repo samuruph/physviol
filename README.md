@@ -40,8 +40,8 @@ Three configs, one command each. `conda activate physviol` first.
 | | config | what it is | cost |
 |---|---|---|---|
 | **review** | `configs/review.yaml` | every cell once, `strong`, 128², 25 f | **~25 min** |
-| **v0** | `configs/v0_release.yaml` | 256², 49 f, all three bins, 3 variants | ~15 h |
-| **v1** | `configs/v1_release.yaml` | 512², 97 f, photographic (L1) | days |
+| **v0** | `configs/v0_release.yaml` | 512², 30 fps, 89 f (2.97 s), all three bins, 3 variants | ~6.4 days |
+| **v1** | `configs/v1_release.yaml` | 512², 97 f, photographic (L1) | weeks |
 
 ### The review sweep — run this before anything else
 
@@ -384,11 +384,16 @@ which, and what that means for a confusion matrix.
 
 | | `debug` | `v0` (`physviol_v0`) | `v1` (`physviol_v1`) |
 |---|---|---|---|
-| resolution | 128² | 256² | 512² |
-| frames @ fps | 25 @ 12 | 49 @ 12 | 97 @ 24 |
-| latent grid | 7×8×8 | 13×16×16 | 25×16×16 |
-| render cost | ~0.44 s/frame | ~1.75 s/frame | ~7.16 s/frame |
+| resolution | 128² | 512² | 512² |
+| frames @ fps | 25 @ 12 | 89 @ 30 | 97 @ 24 |
+| duration | 2.08 s | 2.97 s | 4.04 s |
+| latent grid | 7×8×8 | 23×16×16 | 25×16×16 |
+| render cost | ~0.44 s/frame | ~7.16 s/frame | ~7.16 s/frame |
 | published | never | yes | yes |
+
+**v0 is 30 fps** so the release downsamples cleanly to 15 and 10 without resampling, which a
+12 fps master cannot do. 89 frames rather than 90 because every frame count must be `4k+1`
+for exact VAE latent alignment, and 89 is the nearest that is.
 
 Frame counts are all `4k+1` so the token-grid reduction aligns exactly with a video-DiT VAE's
 4× temporal binning. **`debug` is the default** — iterate there.

@@ -55,9 +55,13 @@ def cmd_taxonomy(a) -> int:
 #: Measured wall-clock per rendered clip, including annotation and the overlay
 #: video. tier v0 is 4x the pixels and ~2x the frames of the debug tier; L1's HDRI
 #: environment costs about 5.5x an L0 render.
+#: Wall clock per clip, from the per-frame renders measured in CLAUDE.md --
+#: 1.75 s at 256sq and 7.16 s at 512sq, all seven passes -- times the tier's
+#: frame count, and times ~4.6 for L1's HDRI environment. Both published tiers
+#: are 512sq now, so both are priced off the same 7.16 s.
 SECONDS_PER_CLIP = {("debug", "L0"): 8.0, ("debug", "L1"): 44.0,
-                    ("v0", "L0"): 62.0, ("v0", "L1"): 340.0,
-                    ("v1", "L0"): 250.0, ("v1", "L1"): 1370.0}
+                    ("v0", "L0"): 637.0, ("v0", "L1"): 2930.0,
+                    ("v1", "L0"): 695.0, ("v1", "L1"): 3195.0}
 
 
 def _print_release_size(cells, a) -> None:

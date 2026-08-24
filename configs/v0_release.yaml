@@ -11,9 +11,20 @@
 # Shared by `generate` and `taxonomy`, so the sizing estimate is of exactly the
 # run that would happen. This is why the two commands are not repeated blocks:
 # anything both understand belongs here once.
+# Sizing at 512x512 (`physviol taxonomy --config v0_release`). Complexity and
+# variants are the dials; the severity ladder costs 3x the clips but the valid
+# twin and the scene build are shared, so it is the cheapest breadth you can
+# buy:
+#
+#     bins   variants   renders   parallel (4 workers)
+#      1        1          194        6.0 h
+#      3        1          554       51.1 h
+#      3        2         1108      102.2 h
+#      3        3         1662      153.2 h   <- as written below, 6.4 days
+#
 defaults:
   seed: 20260824
-  tier: v0             # 256x256, 12 fps, 49 frames
+  tier: v0             # 512x512, 30 fps, 89 frames = 2.97 s
   complexity: L0       # L1 is ~5.5x the render cost; a later pass, not this one
   severity: all        # the full weak/medium/strong ladder
   variants: 3          # randomisations per cell
