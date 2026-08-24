@@ -294,9 +294,26 @@ causal_mask.npz      uint8 [T,H,W] 0=none, 1=culprit, 2+=participants
 severity_map.npz     f16  [T,H,W]  how badly, localised in space and time
 residuals.npz        r (physical units), z (vs noise floor), s (bounded [0,1])
 divergence_map.npz   f16  [T,H,W]  NOT the violation region -- see below
-seg.npz  depth.npz  flow_fwd.npz  flow_bwd.npz  normals.npz  object_coords.npz
+seg.npz              uint16 [T,H,W] instance ids, stable across frames = per-object tracks
+depth.npz            f32  [T,H,W,1] metres (background is a ~1e10 sentinel, mask it)
+flow_fwd/bwd.npz     f32  [T,H,W,2] pixels, (row, col)
+normals.npz  object_coords.npz     uint16, 0..65535
+energy.npz           mechanical energy + its three anomaly channels
+energy_map.npz       f32  [T,H,W]  per-body energy, painted through the segmentation
+bodies.npz           mass, velocity, momentum, inertia, height, kinetic, potential
 grids.npz            masks + severity reduced to the latent token grid
 traj.npz             the seam file: poses, velocities, contacts
+```
+
+**Every object's mask for the whole clip** comes out of `seg.npz` in one comparison —
+segmentation ids are the declared ones and are stable across frames, so they *are* the
+tracks:
+
+```python
+seg  = np.load("seg.npz")["seg"]                 # [T,H,W]
+bods = np.load("bodies.npz")                     # ids and names together
+for bid, name in zip(bods["body_ids"], bods["body_names"]):
+    track = (seg == bid)                         # [T,H,W] bool, this body, every frame
 ```
 
 Field reference: [docs/schema.md](docs/schema.md).

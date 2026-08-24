@@ -141,6 +141,45 @@ judged against. `energy.npz`: `total[T]`, `kinetic_translational[T]`,
 each body's energy painted onto its own pixels through the segmentation pass — constant
 inside a rigid body's silhouette, which is the honest spatial resolution.
 
+### Render passes — segmentation tracks, depth, flow
+
+All shipped for **both** twins, straight from the renderer with no re-encoding. They cost
+nothing extra: the seven passes are what the measured per-frame render time already includes.
+
+| file | array | shape | |
+|---|---|---|---|
+| `seg.npz` | `seg` | `[T,H,W]` uint16 | instance ids, **0 = background** |
+| `depth.npz` | `depth` | `[T,H,W,1]` float32 | metres from the camera |
+| `flow_fwd.npz` | `flow_fwd` | `[T,H,W,2]` float32 | pixels, `(row, col)`, frame `t → t+1` |
+| `flow_bwd.npz` | `flow_bwd` | `[T,H,W,2]` float32 | pixels, `(row, col)`, frame `t → t-1` |
+| `normals.npz` | `normals` | `[T,H,W,3]` uint16 | surface normals, `0..65535` maps to `-1..1` |
+| `object_coords.npz` | `object_coords` | `[T,H,W,3]` uint16 | normalised object-space coordinates |
+
+**Per-object masks for the whole clip.** Segmentation ids are the *declared*
+`segmentation_id`s and they are stable across every frame, so one comparison gives a body's
+track:
+
+```python
+seg  = np.load("seg.npz")["seg"]                 # [T,H,W]
+bods = np.load("bodies.npz")                     # ids and names, self-describing
+for bid, name in zip(bods["body_ids"], bods["body_names"]):
+    track = (seg == bid)                         # [T,H,W] bool -- this body, every frame
+```
+
+That the ids are the declared ones and not the renderer's asset order is not free — it
+depends on `kb.adjust_segmentation_idxs()` running after every render, and the worker asserts
+the rendered ids are a subset of the declared ones. See CLAUDE.md.
+
+**Two encodings that will bite a naive reader:**
+
+- **Depth's background is a sentinel, not a distance.** Foreground runs a few metres;
+  background comes back as ~`1.1e10`. Mask it with `seg > 0` before doing statistics, or a
+  mean depth is meaningless.
+- **Flow is in pixels and in `(row, col)` order**, not `(x, y)`. Verified against measured
+  centroid displacement: a body whose centroid moved 2.96 columns between frames reports a
+  mean flow of 3.33 columns over its mask — the residual is rotation, which flow sees per
+  pixel and a centroid cannot.
+
 ### `bodies.npz` — the physical quantities as the energy computation saw them
 
 **Derived from `traj.npz`, not additional to it.** Every clip directory already ships

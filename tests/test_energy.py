@@ -228,3 +228,18 @@ def test_mass_follows_volume_in_the_shipped_columns():
         m = E.body_state(inj.apply(spec, traj, plan), spec)["mass"]
         changed = bool(np.abs(m - base).max() > 1e-3 * base.max())
         assert changed is grows, "%s: mass changed=%s" % (family, changed)
+
+
+def test_bodies_npz_is_self_describing():
+    """`seg == body_ids[j]` must be the mask for `body_names[j]`.
+
+    Shipping ids without names forces every consumer to cross-reference
+    meta.json to find out which track is which.
+    """
+    sc, spec, traj = _scene("collision")
+    st = E.body_state(traj, spec)
+    assert len(st["body_names"]) == len(st["body_ids"])
+    assert list(st["body_names"]) == list(traj.body_names)
+    declared = {int(b.segmentation_id): b.name for b in spec.bodies}
+    for bid, name in zip(st["body_ids"], st["body_names"]):
+        assert declared[int(bid)] == str(name)
