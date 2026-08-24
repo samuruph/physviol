@@ -60,6 +60,19 @@ def test_valid_clips_never_gain_energy(name):
         % (name, 100 * trace.free_anomaly.max()))
 
 
+def _peak(trace):
+    """Largest anomaly over all three channels.
+
+    Which channel a family lands in depends on whether the body happens to be
+    touching something when the intervention fires -- `immutability` on a ball
+    in flight is a free-energy event, and on a ball resting on the floor it is a
+    gain at contact. That is correct behaviour and not something a test of "does
+    this family move the energy budget" should pin.
+    """
+    return max(trace.free_anomaly.max(), trace.contact_anomaly.max(),
+               trace.excess_loss.max())
+
+
 def test_superelastic_creates_energy_and_valid_twin_does_not():
     sc, spec, traj = _scene("drop")
     inj = get_injector("superelastic")
@@ -68,32 +81,66 @@ def test_superelastic_creates_energy_and_valid_twin_does_not():
     invalid = inj.apply(spec, traj, plan)
     v = E.compute(traj, spec)
     i = E.compute(invalid, spec)
-    assert i.contact_anomaly.max() > 20 * max(v.contact_anomaly.max(), 1e-4)
+    assert _peak(i) > 20 * max(_peak(v), 1e-4)
     assert i.total[-1] > v.total[-1]
 
 
-def test_deformation_is_energy_neutral_but_immutability_is_not():
+def test_deformation_is_mass_neutral_but_immutability_is_not():
     """The taxonomy's mass-vs-shape split, measured rather than asserted.
 
     `deformation` is volume-preserving, so mass follows volume to exactly 1 and
-    the energy cannot move. `immutability` scales volume uniformly, so it does.
+    no matter is created. `immutability` scales volume uniformly, so it does.
     If this ever fails, one of the two injectors has stopped meaning what
     docs/taxonomy_v2.md says it means.
+
+    **Mass, not energy.** Deformation does move the energy budget, and for a
+    reason that belongs to the violation rather than to how it is staged: the
+    inertia tensor scales with the shape, so squashing a spinning body changes
+    its rotational kinetic energy. A rigid body cannot do that, which is
+    precisely the claim the family makes.
+
+    What *was* an artefact -- and is now prevented -- is a resting body being
+    stretched vertically. That lifts its centre of mass, which is real work
+    done from nowhere and has nothing to do with the aspect ratio; the clip
+    would depict a shape violation and an energy violation while claiming one.
+    `_Squash` restricts a resting body to horizontal axes for that reason.
     """
     sc, spec, traj = _scene("drop")
-    base = E.compute(traj, spec)
-    out = {}
-    for family in ("deformation", "immutability"):
+    base = E.body_state(traj, spec)["mass"]
+    for family, grows in (("immutability", True), ("deformation", False)):
         inj = get_injector(family)
         plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
         assert plan is not None, family
-        out[family] = E.compute(inj.apply(spec, traj, plan), spec)
+        m = E.body_state(inj.apply(spec, traj, plan), spec)["mass"]
+        changed = bool(np.abs(m - base).max() > 1e-3 * base.max())
+        assert changed is grows, "%s: mass changed=%s" % (family, changed)
+    # And the volume ratio itself, which is what "volume-preserving" means.
+    inj = get_injector("deformation")
+    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+    out = inj.apply(spec, traj, plan)
+    vol = np.prod(out.scale_mul, axis=2)
+    assert np.allclose(vol, 1.0, atol=1e-5), "squash changed the volume"
 
-    floor = max(base.contact_anomaly.max(), base.free_anomaly.max(), 1e-4)
-    assert out["deformation"].contact_anomaly.max() <= 2.0 * floor, (
-        "volume-preserving squash moved the energy budget")
-    assert out["immutability"].contact_anomaly.max() > 10 * floor, (
-        "uniform resize left the energy budget alone")
+
+@pytest.mark.parametrize("name", ["drop", "collision", "resting_table",
+                                  "barrier_pass", "stack_topple"])
+def test_deformation_never_lifts_a_resting_body(name):
+    """The staging rule, checked where it matters: on the scenarios whose actors
+    are in contact with a surface when the squash fires."""
+    sc, spec, traj = _scene(name)
+    inj = get_injector("deformation")
+    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+    if plan is None:
+        pytest.skip("%s does not stage deformation" % name)
+    if not plan.notes.get("resting"):
+        pytest.skip("%s deforms an airborne body" % name)
+    assert plan.notes["axis"] in (0, 1), (
+        "resting body stretched along z: that lifts its centre of mass, which "
+        "is an energy violation this family never claimed")
+    out = inj.apply(spec, traj, plan)
+    j = traj.index_of(int(plan.causal_body_ids[0]))
+    assert np.allclose(traj.pos[:, j, 2], out.pos[:, j, 2], atol=1e-6), (
+        "deformation moved the body vertically")
 
 
 def test_vanishing_body_shows_up_as_excess_loss():

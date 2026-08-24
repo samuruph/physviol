@@ -355,6 +355,73 @@ def last_dynamic_contact(spec, traj, body_id: int) -> int:
     return last
 
 
+def geometric_contacts(spec, traj, tol: float = 0.02):
+    """Recompute the contact set from the trajectory's own geometry.
+
+    **An edited trajectory inherits the valid rollout's contact list verbatim**
+    -- `_clone` copies the poses and the simulator is never re-run -- so every
+    contact-based check on an invalid clip has been reading the *valid* clip's
+    contacts. Measured on `collision x fission`: 980 rows, byte-identical,
+    including a ball-to-ball contact at the frame where the striker has already
+    been diverted a body-width away.
+
+    That is not a small bookkeeping issue. It is what let a struck body keep
+    reacting to a collision that no longer happens, and it silently defeats any
+    detector built to catch exactly that.
+
+    Spheres against spheres and bodies against their own support surface, which
+    is what the analysis needs; `impulse` and `penetration` are left at zero
+    because a geometric test cannot know them. `traj.meta["contacts"]` records
+    that these are geometric so nothing mistakes them for the simulator's.
+    """
+    from ..sim.trajectory import Contacts
+
+    dyn = [b for b in spec.bodies if not b.static]
+    idx = {int(b.segmentation_id): traj.index_of(int(b.segmentation_id))
+           for b in dyn}
+    T = traj.num_frames
+    frames, a_ids, b_ids = [], [], []
+
+    for f in range(T):
+        for i, ba in enumerate(dyn):
+            ia = idx[int(ba.segmentation_id)]
+            if not bool(traj.present[f, ia]):
+                continue
+            pa = np.asarray(traj.pos[f, ia], np.float64)
+            ra = float(traj.radius[ia]) * float(np.mean(traj.scale_mul[f, ia]))
+            # against the surface it rests on
+            ground = floor_fn(spec, ba)
+            if pa[2] - ra <= ground(pa[0], pa[1]) + tol:
+                frames.append(f)
+                a_ids.append(int(ba.segmentation_id))
+                b_ids.append(int(_support_id(spec, ba)))
+            # against every other dynamic body
+            for bb in dyn[i + 1:]:
+                ib = idx[int(bb.segmentation_id)]
+                if not bool(traj.present[f, ib]):
+                    continue
+                pb = np.asarray(traj.pos[f, ib], np.float64)
+                rb = float(traj.radius[ib]) * float(np.mean(traj.scale_mul[f, ib]))
+                if np.linalg.norm(pa - pb) <= ra + rb + tol:
+                    frames.append(f)
+                    a_ids.append(int(ba.segmentation_id))
+                    b_ids.append(int(bb.segmentation_id))
+
+    n = len(frames)
+    z3 = np.zeros((n, 3), np.float32)
+    return Contacts(np.asarray(frames, np.int32), np.asarray(a_ids, np.int32),
+                    np.asarray(b_ids, np.int32), z3, z3.copy(),
+                    np.zeros((n,), np.float32), np.zeros((n,), np.float32))
+
+
+def _support_id(spec, body) -> int:
+    surface, _ = support_under(spec, body)
+    if surface is not None:
+        return int(surface.segmentation_id)
+    ground = next((b for b in spec.bodies if b.static), None)
+    return int(ground.segmentation_id) if ground is not None else 0
+
+
 def contact_free_run(traj, body_id: int, min_len: int = 2) -> Optional[Tuple[int, int]]:
     """The longest stretch of frames on which nothing touches this body.
 

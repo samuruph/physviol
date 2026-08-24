@@ -69,7 +69,7 @@ class Permanence(Injector):
                    "surface_top": _geom.surface_top(spec, actor),
                    "occluded_at_event": bool(t0 in occ)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         t0, t1 = plan.windows[0]
         for bid in plan.causal_body_ids:
@@ -157,7 +157,7 @@ class Immutability(Injector):
                    "r_strong": abs(self._factor("strong", grow) ** 3 - 1.0),
                    "occluded_at_event": bool(t0 in occ)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
@@ -292,7 +292,7 @@ class Fission(Injector):
                            p0=traj.pos[t0 - 1, ai])
         return out
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
         twin = next(b for b in spec.bodies if b.dormant)
         out = self._split(spec, traj, actor, twin, plan.t_event,
@@ -404,7 +404,7 @@ class Fusion(Injector):
                                   int(round(self.DRAW_IN_FRACTION
                                             * traj.num_frames)))})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         draw = int(plan.notes["draw_in"])
         T = traj.num_frames
@@ -498,7 +498,7 @@ class Dissolve(Injector):
                    "sibling_ids": [int(b.segmentation_id) for b in targets],
                    "occluded_at_event": bool(t0 in occ)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         t0 = plan.t_event
         T = traj.num_frames

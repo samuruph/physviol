@@ -101,8 +101,140 @@ class Injector:
              severity_bin: str) -> Optional[InterventionPlan]:
         raise NotImplementedError
 
-    def apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
+    def _apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
+        """Family-specific edit. Implemented by every subclass."""
         raise NotImplementedError
+
+    def apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
+        """`_apply`, then the two things every family owes the clip.
+
+        A template method rather than a rule each injector has to remember,
+        because both of these were being got wrong silently and identically
+        everywhere.
+        """
+        out = self._apply(spec, traj, plan)
+        out = self._settle_bystanders(spec, traj, out, plan)
+        # The contact list belongs to the trajectory it describes. `_clone`
+        # copies the simulator's, and nothing re-runs the simulator, so without
+        # this an invalid clip claims contacts from a rollout that no longer
+        # happened -- including the very collision the intervention prevented.
+        out.contacts = _geom.geometric_contacts(spec, out)
+        out.meta = dict(out.meta)
+        out.meta["contacts"] = "geometric"
+        return out
+
+    #: Speed change, in m/s, big enough to count as "this body was pushed".
+    BYSTANDER_DV = 0.15
+    #: Frames either side of a contact that still count as causing it.
+    BYSTANDER_SLACK = 2
+
+    def _settle_bystanders(self, spec, traj: Trajectory, out: Trajectory,
+                           plan: InterventionPlan) -> Trajectory:
+        """Stop uninvolved bodies reacting to collisions that no longer happen.
+
+        An injector edits the culprit and leaves everyone else on their original
+        path. When the edit prevents a collision, the body that *was* going to
+        be struck still departs on schedule, hit by nothing -- which is a second,
+        unlabelled violation in a clip that claims one.
+
+        Found in `collision x fission`: the striker splits at frame 9 and both
+        halves go elsewhere, yet the target still starts moving at frame 12 at
+        exactly the speed the original impact would have given it.
+
+        The rule is the one physics already implies: a body accelerates only if
+        something touches it. So any non-culprit whose speed jumps while nothing
+        is in contact with it gets re-integrated from just before the jump,
+        carrying on with whatever it was lawfully doing -- which, for a ball
+        waiting to be hit, is nothing at all.
+        """
+        culprits = {int(b) for b in plan.causal_body_ids}
+        # Scripted bodies are driven by a constraint the seam does not model --
+        # a pendulum bob accelerates every frame with nothing touching it, which
+        # is exactly right for a body on a string and exactly what this guard
+        # must not "correct".
+        movers = [b for b in spec.bodies
+                  if not b.static and not b.scripted
+                  and int(b.segmentation_id) not in culprits]
+        if not movers:
+            return out
+
+        contacts = _geom.geometric_contacts(spec, out)
+        T = out.num_frames
+        for body in movers:
+            bid = int(body.segmentation_id)
+            bi = out.index_of(bid)
+            bad = np.flatnonzero(self._uncaused_frames(
+                out, spec, contacts, bid, from_frame=max(1, plan.t_event)))
+            if not bad.size:
+                continue
+            t0 = int(bad[0])
+            # Obstacles come from the EDITED trajectory, not the spec. In
+            # `pyramid_impact x solidity` the struck balls have already sunk
+            # through the floor by the time the cube arrives, so re-integrating
+            # against the scene as declared lands the cube on a pyramid that is
+            # no longer there -- swapping one uncaused motion for another.
+            self._rewrite_from(spec, traj, out, body, t0,
+                               v0=np.asarray(out.lin_vel[t0 - 1, bi], np.float64),
+                               p0=np.asarray(out.pos[t0 - 1, bi], np.float64),
+                               obstacles=_geom.Obstacles(spec, out,
+                                                         exclude_ids=[bid]))
+        return out
+
+    @staticmethod
+    def _uncaused_frames(traj: Trajectory, spec, contacts, body_id: int,
+                         from_frame: int = 1) -> np.ndarray:
+        """Frames where a body's velocity changes by more than gravity explains,
+        with no dynamic body touching it.
+
+        Two corrections, both of which the first version got wrong and both of
+        which matter:
+
+        **Gravity is a cause.** A body in free flight gains `g*dt` -- 0.82 m/s a
+        frame at 12 fps -- with nothing touching it, and that is the most lawful
+        motion there is. Comparing raw speed change flagged every falling grain
+        in `pour`. The test is on the residual acceleration, `dv - g*dt`.
+
+        **Static geometry is not a cause.** A floor can hold a body up or slow it
+        down; it cannot accelerate one. A resting ball that suddenly departs is
+        unexplained even though it has been in contact throughout, and a
+        detector that accepted any contact at all reported nothing.
+        """
+        T = traj.num_frames
+        bi = traj.index_of(int(body_id))
+        v = np.asarray(traj.lin_vel[:, bi, :], np.float64)
+        g_step = np.asarray(traj.gravity, np.float64) * traj.dt
+        dv = np.zeros_like(v)
+        dv[1:] = v[1:] - v[:-1] - g_step[None, :]
+        residual = np.linalg.norm(dv, axis=1)
+
+        dyn = {int(b.segmentation_id) for b in spec.bodies
+               if not b.static and not b.scripted}
+        touching = np.zeros(T, bool)
+        if len(contacts):
+            a = np.asarray(contacts.body_a, int)
+            b = np.asarray(contacts.body_b, int)
+            m = (((a == body_id) & np.isin(b, list(dyn)))
+                 | ((b == body_id) & np.isin(a, list(dyn))))
+            if m.any():
+                touching[np.clip(np.asarray(contacts.frame, int)[m], 0, T - 1)] = True
+        k = Injector.BYSTANDER_SLACK
+        pad = np.concatenate([np.zeros(k, bool), touching, np.zeros(k, bool)])
+        wide = pad.copy()
+        for s in range(1, k + 1):
+            wide[s:] |= pad[:-s]
+            wide[:-s] |= pad[s:]
+        touching = wide[k:k + T]
+
+        # A body resting on a surface is held there by a normal force gravity
+        # does not account for, so its residual is ~g*dt every frame it sits
+        # still. Only count frames where it is actually gaining speed.
+        speed = np.linalg.norm(v, axis=1)
+        gaining = np.zeros(T, bool)
+        gaining[1:] = speed[1:] > speed[:-1] + 1e-6
+
+        bad = (residual > Injector.BYSTANDER_DV) & ~touching & gaining
+        bad[:max(1, from_frame)] = False
+        return bad
 
     def strong_residual_reference(self, spec) -> float:
         """The residual this family produces at its `strong` bin, in the units of

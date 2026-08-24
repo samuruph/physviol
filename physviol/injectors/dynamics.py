@@ -78,7 +78,7 @@ class PhantomImpulse(Injector):
         self._rewrite_from(spec, traj, out, actor, t0, v0=v0)
         return out
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         push = np.asarray(plan.params["delta_v"], np.float64)
         by_id = {int(b.segmentation_id): b for b in spec.bodies}
         bodies = [by_id[int(i)] for i in plan.causal_body_ids if int(i) in by_id]
@@ -234,7 +234,7 @@ class AngularMomentum(Injector):
                 traj.quat[t0 - 1, bi], omega, traj.dt, n)
         return out
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         targets = [b for b in spec.bodies
                    if int(b.segmentation_id) in set(plan.causal_body_ids)]
         out = self._preview(spec, traj, plan.t_event,

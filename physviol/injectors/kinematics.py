@@ -139,7 +139,7 @@ class _GravityScale(Injector):
         out.meta["alpha_profile"] = [float(x) for x in alpha]
         return out
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         t0, t1 = plan.windows[0]
         # The bodies the PLAN named, never a fresh choice. `_choose` picks the
         # most airborne actor while `_targets` picks a random one, so
@@ -313,7 +313,7 @@ class Continuity(Injector):
         out.pos[t0:, bi, :] = traj.pos[t0:, bi, :] + np.asarray(delta, np.float32)
         return out
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
         out = self._teleport(traj, actor, plan.t_event,
                              np.asarray(plan.params["delta_m"], np.float32))
@@ -386,7 +386,7 @@ class NonParabolic(Injector):
             notes={"radius": radius, "surface_top": top,
                    "flight_frames": list(range(int(run[0]), int(run[1]) + 1))})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
@@ -477,7 +477,7 @@ class Newton1Inertia(Injector):
                    "removed_fraction": fraction,
                    "speed_at_event": float(speed[t0])})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
@@ -669,7 +669,7 @@ class TimeSlip(Injector):
                    "slip_frames": int(n), "v_ref": v_ref,
                    "r_strong": self.strong_residual_reference(spec)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         bi = traj.index_of(int(plan.causal_body_ids[0]))
         t0 = plan.t_event

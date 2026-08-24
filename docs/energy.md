@@ -11,9 +11,22 @@ computable **exactly** from the trajectory seam, for both twins, at negligible c
 can be both a descriptive channel a benchmark consumer reads and a second, independent
 scorer for that principle.
 
-It also cross-checks the taxonomy. `deformation` is volume-preserving and reads **0.00%**;
-`immutability` scales volume and reads **+34%**. That is the mass-vs-shape split of
-[taxonomy_v2.md](taxonomy_v2.md) showing up in an independent measurement.
+It also cross-checks the taxonomy. `deformation` is volume-preserving so its **mass** stays
+at exactly 1.0; `immutability` scales volume and its mass moves with it. That is the
+mass-vs-shape split of [taxonomy_v2.md](taxonomy_v2.md) showing up in an independent
+measurement.
+
+**Volume-preserving is not the same as energy-preserving.** `deformation` does move the
+energy budget, because the inertia tensor scales with the shape and squashing a spinning body
+changes its rotational kinetic energy — which a rigid body cannot do, and is precisely the
+claim the family makes. So the energy signature there is part of the violation, not noise.
+
+What *was* noise, and is now prevented: a body resting on a surface stretched along the
+vertical. That lifts its centre of mass, which is real work done from nowhere and has nothing
+to do with the aspect ratio, so the clip depicted a shape violation *and* an energy violation
+while claiming one. `_Squash` restricts a resting body to horizontal axes for that reason —
+the same one-violation-per-clip rule that makes the scaling volume-preserving in the first
+place.
 
 ## What energy
 

@@ -54,7 +54,20 @@ class _Squash(Injector):
         k = float(self.ASPECT_BY_BIN[severity_bin])
         # Which axis stretches is a property of the scene, not of the bin, or
         # the three strengths would be three different distortions.
-        axis = int(self._instance_rng(spec).randint(3))
+        #
+        # A body RESTING on a surface may only stretch horizontally. Stretching
+        # it vertically makes it taller, which either drives it into the floor
+        # or lifts its centre of mass -- and lifting a centre of mass is real
+        # work done from nowhere, so the clip would depict a shape violation
+        # *and* an energy violation while claiming one. That is the same trap
+        # the volume-preserving scaling avoids on the mass axis: this family's
+        # whole job is to move the aspect ratio and nothing else.
+        rng = self._instance_rng(spec)
+        top = _geom.surface_top(spec, targets[0])
+        radius = float(targets[0].bounding_radius)
+        resting = bool(traj.pos[t0, traj.index_of(
+            int(targets[0].segmentation_id)), 2] - radius <= top + 1e-2)
+        axis = int(rng.randint(2)) if resting else int(rng.randint(3))
         ramp = max(2, min(self.RAMP_FRAMES, T - t0))
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
@@ -64,12 +77,12 @@ class _Squash(Injector):
                     "ramp_frames": int(ramp)},
             magnitude=float(k), magnitude_unit=self.magnitude_unit,
             severity_bin=severity_bin,
-            notes={"radius": float(targets[0].bounding_radius),
-                   "surface_top": _geom.surface_top(spec, targets[0]),
+            notes={"radius": radius, "surface_top": top,
                    "aspect": k, "axis": axis, "ramp_frames": int(ramp),
+                   "resting": resting,
                    "r_strong": self.strong_residual_reference(spec)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         t0 = plan.t_event
         k = float(plan.notes["aspect"])
@@ -232,7 +245,7 @@ class ColourShift(Injector):
                    "ramp_frames": int(min(ramp, T - t0)),
                    "r_strong": self.strong_residual_reference(spec)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         t0 = plan.t_event
         ramp = int(plan.notes["ramp_frames"])

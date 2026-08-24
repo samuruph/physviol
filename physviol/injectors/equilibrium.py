@@ -68,7 +68,7 @@ class Support(Injector):
             notes={"radius": radius, "surface_top": float(top),
                    "clearance_radii": clearance_r, "mode": mode})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
@@ -179,7 +179,7 @@ class Friction(Injector):
                                    * rate[:, None].astype(np.float32))
         return out
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
         out = self._retimed(traj, bi, plan.t_event, float(plan.notes["end_rate"]))

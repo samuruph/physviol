@@ -93,30 +93,83 @@ def test_cell_magnitude_is_ordered(scenario, family):
 
 @pytest.mark.parametrize("scenario,family", CELLS,
                          ids=["%s.%s" % (s, f) for s, f in CELLS])
-def test_only_declared_culprits_are_edited(scenario, family):
-    """Whatever `apply` touches, `plan` must have declared.
+def test_only_declared_culprits_change_appearance(scenario, family):
+    """Whatever `apply` makes a body *look* like, `plan` must have declared.
 
     The invariant that catches plan/apply divergence, which is silent by
     construction: `antigravity` chose its target one way in `plan` and another
     way in `apply`, so it bent a body nobody was annotating and left the
     annotated one alone. The clip came out identical to its valid twin with a
     full set of labels attached, and every existing check passed.
+
+    Narrowed from "no non-culprit array differs" to the appearance channels
+    only. The old form asserted that a bystander is never touched at all, and
+    that turned out to be the wrong invariant: when an intervention prevents a
+    collision, the body that *was* going to be struck has to be re-settled, or
+    it departs on schedule hit by nothing. See
+    `test_no_body_moves_without_being_touched`, which is the physical claim the
+    old test was standing in for.
+
+    Pose and velocity may therefore be settled for a bystander. Size, colour,
+    opacity and existence may not: nothing about a collision that failed to
+    happen can change what an uninvolved body looks like.
     """
     spec, traj, inj, plan = _prepare(scenario, family)
     assert plan is not None
     invalid = inj.apply(spec, traj, plan)
     declared = {int(i) for i in plan.causal_body_ids}
 
-    moved = set()
+    restyled, moved = set(), set()
     for j, body in enumerate(spec.bodies):
-        for attr in ("pos", "quat", "scale_mul", "colour"):
-            a = getattr(traj, attr)[:, j]
-            b = getattr(invalid, attr)[:, j]
+        bid = int(body.segmentation_id)
+        for attr in ("scale_mul", "colour", "opacity"):
+            a, b = getattr(traj, attr)[:, j], getattr(invalid, attr)[:, j]
             if float(np.abs(a - b).max()) > 1e-6:
-                moved.add(int(body.segmentation_id))
+                restyled.add(bid)
         if not np.array_equal(traj.present[:, j], invalid.present[:, j]):
-            moved.add(int(body.segmentation_id))
+            restyled.add(bid)
+        for attr in ("pos", "quat"):
+            a, b = getattr(traj, attr)[:, j], getattr(invalid, attr)[:, j]
+            if float(np.abs(a - b).max()) > 1e-6:
+                moved.add(bid)
 
-    undeclared = sorted(moved - declared)
-    assert not undeclared, "edited bodies %s that are not causal" % undeclared
-    assert moved, "declared culprits but edited nothing"
+    undeclared = sorted(restyled - declared)
+    assert not undeclared, (
+        "bodies %s changed appearance but are not causal" % undeclared)
+    assert restyled or moved, "declared culprits but edited nothing"
+
+
+@pytest.mark.parametrize("scenario,family", CELLS,
+                         ids=["%s.%s" % c for c in CELLS])
+def test_no_body_moves_without_being_touched(scenario, family):
+    """A body accelerates only if something touches it.
+
+    The physical claim the appearance test above used to stand in for, and the
+    one that actually matters. Found in `collision x fission`: the striker
+    splits at frame 9 and both halves go elsewhere, yet the target still started
+    moving at frame 12 at exactly the speed the original impact would have given
+    it -- struck by nothing, in a clip labelled as a fission violation.
+
+    Static geometry does not count as a cause: a floor can hold a body up or
+    slow it down, it cannot accelerate one. A resting ball that suddenly departs
+    is unexplained even though it has been in contact with the ground the whole
+    time, and a detector that accepted any contact reported nothing at all.
+    """
+    from physviol.injectors import _geom
+    from physviol.injectors.base import Injector
+
+    spec, traj, inj, plan = _prepare(scenario, family)
+    assert plan is not None
+    invalid = inj.apply(spec, traj, plan)
+    culprits = {int(i) for i in plan.causal_body_ids}
+    contacts = _geom.geometric_contacts(spec, invalid)
+
+    for body in spec.bodies:
+        bid = int(body.segmentation_id)
+        if body.static or body.scripted or bid in culprits:
+            continue
+        bad = np.flatnonzero(Injector._uncaused_frames(
+            invalid, spec, contacts, bid, from_frame=max(1, plan.t_event)))
+        assert not bad.size, (
+            "%s accelerates at frame %d with nothing touching it"
+            % (body.name, int(bad[0])))

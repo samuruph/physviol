@@ -74,7 +74,7 @@ class Shadow(Injector):
                    "light_dir": [float(x) for x in light],
                    "shadow_id": int(shade.segmentation_id)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         shade = next(b for b in spec.bodies if b.role == "shadow")
         bi = traj.index_of(int(shade.segmentation_id))
@@ -178,7 +178,7 @@ class ShadowInverted(Injector):
                    "light_dir": [float(x) for x in spec.notes["light_dir"]],
                    "shadow_id": int(shade.segmentation_id)})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         ci, si, L, top = _projection(spec, traj)
         k = float(plan.params["offset_fraction"])

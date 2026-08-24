@@ -370,7 +370,7 @@ class Solidity(Injector):
         return out
 
     # ------------------------------------------------------------------ #
-    def apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
+    def _apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
         actor_id = int(plan.causal_body_ids[0])
         actor = next(b for b in spec.bodies
                      if int(b.segmentation_id) == actor_id)
@@ -648,7 +648,7 @@ class SuperElastic(Injector):
                 merged.append((s, e))
         return merged
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
         targets = self._targets(spec, actor, plan.notes["targets"][-1])
         out = self._boosted(spec, traj, targets,
@@ -728,7 +728,7 @@ class _CollisionEdit(Injector):
                    "normal": [float(x) for x in normal],
                    "r_strong": float(r_strong), "lawful_dv": dv})
 
-    def apply(self, spec, traj, plan) -> Trajectory:
+    def _apply(self, spec, traj, plan) -> Trajectory:
         n = plan.notes
         out = self._edited(spec, traj, int(n["actor_id"]), int(n["other_id"]),
                            int(plan.params["collision_frame"]),
