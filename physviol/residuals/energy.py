@@ -101,8 +101,22 @@ def contact_frames(traj, slack: int = CONTACT_SLACK) -> np.ndarray:
     if len(c):
         idx = np.clip(np.asarray(c.frame, int), 0, T - 1)
         out[idx] = True
-    for k in range(1, slack + 1):
-        out |= np.roll(out, k) | np.roll(out, -k)
+    # Padded, never `np.roll` -- rolling wraps the LAST frame's contact onto
+    # frame 0, which on a clip that ends at rest marks the opening frame as
+    # "in contact" and hides any free-energy anomaly there.
+    #
+    # The widening is not cosmetic: PyBullet labels a contact with the frame at
+    # the START of the interval it occurred in, so the energy a collision
+    # removes lands on the step *after* the reported frame. Measured on `drop`:
+    # contact reported at frame 8, ball still 0.13 m clear at frame 8, energy
+    # drops between 8 and 9.
+    if slack > 0:
+        pad = np.concatenate([np.zeros(slack, bool), out, np.zeros(slack, bool)])
+        wide = pad.copy()
+        for k in range(1, slack + 1):
+            wide[k:] |= pad[:-k]
+            wide[:-k] |= pad[k:]
+        out = wide[slack:slack + T]
     return out
 
 
@@ -118,6 +132,8 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
     T, B = traj.num_frames, traj.num_bodies
     ke_t = np.zeros(T); ke_r = np.zeros(T); pe = np.zeros(T)
     by_body = np.zeros((T, B))
+    ke_body = np.zeros((T, B)); pe_body = np.zeros((T, B))
+    present = np.zeros((T, B), bool)
 
     for j, name in enumerate(traj.body_names):
         body = bodies.get(name)
@@ -151,6 +167,9 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
         ke_r += e_kr * here
         pe += e_pe * here
         by_body[:, j] = (e_kt + e_kr + e_pe) * here
+        ke_body[:, j] = (e_kt + e_kr) * here
+        pe_body[:, j] = e_pe * here
+        present[:, j] = here > 0
 
     total = ke_t + ke_r + pe
     denom = max(abs(float(total[0])), 1e-9)
@@ -177,14 +196,37 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
     # with no carrier at all -- `permanence` and `dissolve` taking a body's
     # potential energy with it.
     #
-    # The budget is the kinetic energy available at the START of the step, not
-    # at its end. Using the end reads 77% excess loss on a perfectly lawful
-    # `drop`: at the impact frame the ball has already stopped, so its remaining
-    # kinetic energy is nearly zero and every joule the floor legitimately
-    # absorbed looks unexplained.
-    kinetic = ke_t + ke_r
-    kinetic_before = np.concatenate([kinetic[:1], kinetic[:-1]])
-    excess = np.maximum(-dE - kinetic_before, 0.0) / denom
+    # Two terms, and both were learned by frame-by-frame audit of a lawful clip:
+    #
+    # 1. The kinetic energy available at the START of the step, not at its end.
+    #    Using the end reads 77% excess loss on a perfectly lawful `drop`: at
+    #    the impact frame the ball has already stopped, so its remaining kinetic
+    #    energy is nearly zero and every joule the floor legitimately absorbed
+    #    looks unexplained.
+    #
+    # 2. Potential energy RELEASED during the step. A body in contact can settle
+    #    downward and have that energy absorbed immediately, within the frame.
+    #    On `drop` the ball sinks 4.7 cm into the solver's contact tolerance as
+    #    it comes to rest and loses 1.310 J while holding only 0.850 J of
+    #    kinetic energy -- the missing 0.461 J is exactly m*g*0.047. Without
+    #    this term that settling reads as a 1.7% violation on every clip that
+    #    ends at rest, which is most of them.
+    #
+    # The allowance is per body and requires the body to still EXIST at both
+    # ends of the step. That is what keeps `permanence` and `dissolve`
+    # detectable: a body that vanishes takes its potential energy with it, and
+    # nothing absorbed it.
+    excess = np.zeros(T)
+    for j in range(B):
+        e_j = by_body[:, j]
+        d_j = np.diff(e_j, prepend=e_j[0])
+        ke_before = np.concatenate([ke_body[:1, j], ke_body[:-1, j]])
+        pe_before = np.concatenate([pe_body[:1, j], pe_body[:-1, j]])
+        released = np.maximum(pe_before - pe_body[:, j], 0.0)
+        survived = np.concatenate([present[:1, j], present[:-1, j]]) & present[:, j]
+        budget = ke_before + np.where(survived, released, 0.0)
+        excess += np.maximum(-d_j - budget, 0.0)
+    excess = excess / denom
 
     return EnergyTrace(
         total=total, kinetic_translational=ke_t, kinetic_rotational=ke_r,

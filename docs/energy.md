@@ -172,3 +172,21 @@ it, and untangling that needs pairwise bookkeeping the seam does not carry.
 So the law claims less than `energy.npz` shows, on purpose. `permanence` and `dissolve` are a
 scene-level excess loss and the law does not claim them; `energy.npz` and the `meta.json`
 block do.
+
+
+## Visualisation
+
+The `ENERGY` panel appears in three places, all driven by the same arrays:
+
+- **`physviol overlay`** — the energy map beside the other passes, with `E(t)` drawn inside
+  it as a two-line curve: the clip in red, its valid twin in green, playhead on the current
+  frame, and the live anomaly percentage when it exceeds 1%. The map answers "where is the
+  energy"; the curve answers "what did it do", which is the question the annotation exists
+  for. A violation that creates energy is a *step in a line*, and no amount of colouring
+  pixels shows a step.
+- **`physviol grid --views energy`** — an ENERGY row beside the other annotation rows.
+- **`physviol sheet --view energy`** — every family of a scenario at once, each cell showing
+  its own `E(t)` in joules.
+
+The map uses VIRIDIS, deliberately not the severity map's INFERNO: the two sit side by side
+and answer different questions, so they must not be mistakable for one another at a glance.

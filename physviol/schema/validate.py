@@ -16,6 +16,14 @@ from ..annotate import windows as win
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of, is_compatible
 
 
+#: Largest anomaly a *valid* clip may show, as a fraction of E0. The measured
+#: worst case across all 14 scenarios is `pendulum_swing` at 0.31%, which is a
+#: scripted scenario driving a body kinematically; every unscripted one is under
+#: 0.1%. 1% leaves room for a harder impact without admitting a real violation,
+#: the smallest of which is 7%.
+VALID_ENERGY_TOL = 0.01
+
+
 def validate_clip(cdir: str) -> List[str]:
     errs: List[str] = []
 
@@ -55,6 +63,34 @@ def validate_clip(cdir: str) -> List[str]:
     # 11. prefix identity verified
     if not m.get("provenance", {}).get("prefix_identical_verified"):
         bad("prefix_identical_verified is not true")
+
+    # 11b. the energy annotation is finite, self-consistent, and -- on a valid
+    # clip -- lawful. A passive scene under gravity, contacts and friction can
+    # only lose mechanical energy, so a valid twin that gains any is either a
+    # simulator problem or an annotation bug, and either way every severity
+    # scored against that twin is suspect.
+    epath = os.path.join(cdir, "energy.npz")
+    if os.path.exists(epath):
+        try:
+            ez = np.load(epath)
+            total = np.asarray(ez["total"], np.float64)
+            if not np.all(np.isfinite(total)):
+                bad("energy.npz total is not finite")
+            by_body = np.asarray(ez["by_body"], np.float64)
+            drift = np.abs(by_body.sum(axis=1) - total).max()
+            scale = max(abs(float(total[0])), 1e-9)
+            if drift > 1e-3 * scale:
+                bad("energy by_body does not sum to total (off by %.3g J)" % drift)
+            if m.get("label") == "valid":
+                for key, limit in (("contact_anomaly", VALID_ENERGY_TOL),
+                                   ("free_anomaly", VALID_ENERGY_TOL),
+                                   ("excess_loss", VALID_ENERGY_TOL)):
+                    peak = float(np.asarray(ez[key], np.float64).max())
+                    if peak > limit:
+                        bad("valid clip %s peaks at %.2f%% of E0 (limit %.2f%%)"
+                            % (key, 100 * peak, 100 * limit))
+        except Exception as exc:                              # noqa: BLE001
+            bad("energy.npz unreadable: %s" % exc)
 
     v = m.get("violation")
     # 12. violation is null iff label == valid

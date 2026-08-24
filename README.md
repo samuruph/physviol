@@ -210,8 +210,8 @@ python -m physviol.cli sheet out/release/clips/physviol_v0/drop/0777 --view sev
 # Rebuild one overlay / one grid / the coverage tiling
 python -m physviol.cli overlay out/release/clips/.../invalid_solidity_strong
 python -m physviol.cli grid    out/release/clips/physviol_v0/drop/0777 --family solidity
-#   grid  --views rgb,mask,sev,causal,div   (default: every view the clips have)
-#   sheet --view  rgb|mask|sev|causal|div   (one view fills every cell)
+#   grid  --views rgb,mask,sev,causal,div,energy  (default: all the clips have)
+#   sheet --view  rgb|mask|sev|causal|div|energy  (one view fills every cell)
 python -m physviol.cli coverage out/release
 
 # Schema + cross-checks over a whole release (13 structural checks)

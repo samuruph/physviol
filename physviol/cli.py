@@ -350,7 +350,7 @@ def _build(suppress: bool = False):
     p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
     p.add_argument("--family")
     p.add_argument("--out")
-    p.add_argument("--views", help="comma list of rgb,mask,sev,causal,div "
+    p.add_argument("--views", help="comma list of rgb,mask,sev,causal,div,energy "
                                    "(default: every view the clips have)")
     p.add_argument("--cell", type=int, default=224)
     p.set_defaults(fn=cmd_grid)
@@ -359,7 +359,7 @@ def _build(suppress: bool = False):
                    help="one scenario+seed: every family x every severity")
     p.add_argument("pair_dir", help=".../clips/<release>/<scenario>/<seed>/")
     p.add_argument("--view", default="mask",
-                   choices=["rgb", "mask", "sev", "causal", "div"],
+                   choices=["rgb", "mask", "sev", "causal", "div", "energy"],
                    help="which annotation view fills every cell")
     p.add_argument("--out")
     p.add_argument("--cell", type=int)

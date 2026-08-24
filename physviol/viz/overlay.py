@@ -57,6 +57,9 @@ def build(clip_dir: str, out_path: Optional[str] = None,
     causal = _npz(clip_dir, "causal_mask.npz", "mask")
     ref = _npz(clip_dir, "reference_mask.npz", "mask")
     diverg = _npz(clip_dir, "divergence_map.npz", "divergence")
+    energy = _npz(clip_dir, "energy_map.npz", "energy")
+    etrace = _energy_trace(clip_dir)
+    etwin = _energy_trace(_twin_dir(clip_dir, meta))
     tl = np.load(os.path.join(clip_dir, "timelines.npz"))
 
     sev = None if sev is None else sev.astype(np.float32)
@@ -77,6 +80,8 @@ def build(clip_dir: str, out_path: Optional[str] = None,
         panels.append(("CAUSAL MASK", "causal"))
     if diverg is not None:
         panels.append(("DIVERGENCE (not GT)", "div"))
+    if energy is not None:
+        panels.append(("ENERGY  fraction of E0", "energy"))
 
     n = len(panels)
     W = n * panel + (n + 1) * PAD
@@ -90,7 +95,8 @@ def build(clip_dir: str, out_path: Optional[str] = None,
         occluded = bool(tl["occluded"][t]) if "occluded" in tl.files else False
 
         for i, (label, kind) in enumerate(panels):
-            img = _panel(kind, t, rgb, mask, sev, causal, diverg, panel, ref)
+            img = _panel(kind, t, rgb, mask, sev, causal, diverg, panel, ref,
+                         energy)
             x = PAD + i * (panel + PAD)
             y = HEADER + PAD
             f[y:y + panel, x:x + panel] = img
@@ -101,6 +107,8 @@ def build(clip_dir: str, out_path: Optional[str] = None,
             if kind == "mask":
                 px = int(mask[t].sum()) if mask is not None else 0
                 _text(f, "%d px" % px, (x + 5, y + panel - 8), C_DIM, 0.40, 1)
+            if kind == "energy" and etrace is not None:
+                _energy_curve(f, x, y, panel, t, etrace, etwin)
 
         _header(f, W, meta, t, T, active, observable, occluded)
         _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end,
@@ -118,7 +126,7 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 SEV_GAMMA = 0.55   # display-only; see the note in _panel
 
 
-def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None):
+def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None):
     import cv2
     base = rgb[t].astype(np.float32)
 
@@ -150,6 +158,15 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None):
                                  cv2.COLORMAP_INFERNO)[..., ::-1].astype(np.float32)
         a = (s > 0)[..., None].astype(np.float32) * 0.88
         img = base * 0.35 * (1 - a) + base * (1 - a) * 0.65 + heat * a
+    elif kind == "energy":
+        # VIRIDIS, deliberately not severity's INFERNO: the two panels sit side
+        # by side and answer different questions, so they must not be mistakable
+        # for one another at a glance.
+        e = np.abs(np.clip(energy[t], -4.0, 4.0)) / 4.0
+        heat = cv2.applyColorMap((np.sqrt(e) * 255).astype(np.uint8),
+                                 cv2.COLORMAP_VIRIDIS)[..., ::-1].astype(np.float32)
+        a = (e > 1e-6)[..., None].astype(np.float32) * 0.9
+        img = base * (1 - a) * 0.5 + heat * a
     elif kind == "causal":
         img = base * 0.45
         c = causal[t]
@@ -340,3 +357,73 @@ def _erode(m):
     for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
         e &= np.roll(np.roll(m, dy, axis=0), dx, axis=1)
     return e
+
+
+# ------------------------------------------------------------------ energy
+def _twin_dir(clip_dir, meta):
+    """Sibling clip directory named by `twin_uid`, or None."""
+    twin = (meta or {}).get("twin_uid")
+    if not twin:
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.abspath(clip_dir)))
+    cand = os.path.join(root, os.path.basename(os.path.dirname(twin)),
+                        os.path.basename(twin))
+    if os.path.isdir(cand):
+        return cand
+    cand = os.path.join(os.path.dirname(os.path.abspath(clip_dir)),
+                        os.path.basename(twin))
+    return cand if os.path.isdir(cand) else None
+
+
+def _energy_trace(clip_dir):
+    if not clip_dir:
+        return None
+    path = os.path.join(clip_dir, "energy.npz")
+    if not os.path.exists(path):
+        return None
+    z = np.load(path)
+    return {k: z[k] for k in z.files}
+
+
+def _energy_curve(f, x, y, size, t, trace, twin=None):
+    """E(t) for this clip and, where it exists, its twin -- with the playhead.
+
+    The map answers "where is the energy"; this answers "what did it do", which
+    is the question the annotation actually exists for. A violation that creates
+    energy is a step in a line, and no amount of colouring pixels shows a step.
+    """
+    import cv2
+    h = max(34, size // 5)
+    bx, by, bw = x + 6, y + size - h - 6, size - 12
+    cv2.rectangle(f, (bx, by), (bx + bw, by + h), (12, 12, 16), -1)
+    cv2.rectangle(f, (bx, by), (bx + bw, by + h), (60, 60, 70), 1)
+
+    series = [(trace["total"], (255, 120, 120))]
+    if twin is not None and "total" in twin:
+        series.insert(0, (twin["total"], C_REF))
+    lo = min(float(np.min(s)) for s, _ in series)
+    hi = max(float(np.max(s)) for s, _ in series)
+    span = max(hi - lo, 1e-9)
+    T = len(trace["total"])
+    for s, col in series:
+        pts = [(bx + int(i / max(T - 1, 1) * (bw - 1)),
+                by + h - 1 - int((float(s[i]) - lo) / span * (h - 3)))
+               for i in range(T)]
+        for i in range(1, len(pts)):
+            cv2.line(f, pts[i - 1], pts[i], col, 1, cv2.LINE_AA)
+    px = bx + int(t / max(T - 1, 1) * (bw - 1))
+    cv2.line(f, (px, by), (px, by + h), (255, 255, 255), 1)
+    lab = "E %.2fJ" % float(trace["total"][t])
+    _text(f, lab, (bx + 3, by + 11), (255, 255, 255), 0.36, 1)
+    # Which line is which. Without it the panel shows two curves crossing and
+    # leaves the reader to guess which one is the violation.
+    lx = bx + 6 + _w(lab, 0.36)
+    if len(series) > 1:
+        _text(f, "valid", (lx, by + 11), C_REF, 0.34, 1)
+        _text(f, "this", (lx + 6 + _w("valid", 0.34), by + 11),
+              (255, 120, 120), 0.34, 1)
+    peak = max(float(trace["free_anomaly"][t]), float(trace["contact_anomaly"][t]),
+               float(trace["excess_loss"][t]))
+    if peak > 0.01:
+        _text(f, "anomaly %+.0f%%" % (100 * peak), (bx + 3, by + h - 4),
+              (255, 120, 120), 0.36, 1)

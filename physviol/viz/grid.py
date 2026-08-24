@@ -62,12 +62,14 @@ VIEWS = [
     ("SEVERITY", "sev", "sev"),
     ("CAUSAL", "causal", "causal"),
     ("DIVERGENCE", "div", "div"),
+    ("ENERGY", "energy", "energy"),
 ]
 VIEW_NOTE = {
     "mask": "red = violation   green = should-be",
     "sev": "0..1, inferno, gamma for display",
     "causal": "1 = culprit   2 = affected",
     "div": "|valid - invalid|  NOT ground truth",
+    "energy": "per-body E, fraction of E0",
 }
 
 
@@ -181,7 +183,7 @@ def sheet(pair_dir: str, out_path: Optional[str] = None,
     out = np.zeros((T, H, W, 3), np.uint8)
     meta0 = valid[0]["meta"]
     need = {"rgb": None, "mask": "mask", "sev": "sev",
-            "causal": "causal", "div": "div"}[view]
+            "causal": "causal", "div": "div", "energy": "energy"}[view]
 
     for t in range(T):
         f = np.full((H, W, 3), ov.C_BG, np.uint8)
@@ -249,7 +251,7 @@ def _rows_for(cols, views: Optional[List[str]]):
     """
     have = set()
     for c in cols:
-        for key in ("mask", "sev", "causal", "div"):
+        for key in ("mask", "sev", "causal", "div", "energy"):
             if c.get(key) is not None:
                 have.add(key)
     rows = [v for v in VIEWS if v[2] is None or v[2] in have]
@@ -274,7 +276,8 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
 
     img = ov._panel(kind, t, c["rgb"],
                     None if c["is_valid"] else c["mask"],
-                    c["sev"], c["causal"], c["div"], cell, c["ref"])
+                    c["sev"], c["causal"], c["div"], cell, c["ref"],
+                    c.get("energy"))
     f[y:y + cell, x:x + cell] = img
     cv2.rectangle(f, (x, y), (x + cell - 1, y + cell - 1), (60, 60, 70), 1)
 
@@ -284,6 +287,13 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
             ov._text(f, "%s %d px" % ("should-be" if c["is_valid"] else "violation",
                                       int(src[t].sum())),
                      (x + 5, y + cell - 7), ov.C_DIM, 0.36, 1)
+    elif kind == "energy" and c.get("etrace") is not None:
+        tr = c["etrace"]
+        if compact:
+            ov._text(f, "E %.1fJ" % float(tr["total"][t]), (x + 5, y + cell - 7),
+                     (255, 255, 255), 0.38, 1)
+        else:
+            ov._energy_curve(f, x, y, cell, t, tr)
     elif kind == "sev" and c["tl"] is not None:
         s = float(c["tl"]["severity_t"][t])
         if compact:
@@ -343,6 +353,9 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "sev": (lambda a: None if a is None else a.astype(np.float32))(
                 ov._npz(cdir, "severity_map.npz", "severity")),
             "causal": ov._npz(cdir, "causal_mask.npz", "mask"),
+            "energy": (lambda a: None if a is None else a.astype(np.float32))(
+                ov._npz(cdir, "energy_map.npz", "energy")),
+            "etrace": ov._energy_trace(cdir),
             "div": (lambda a: None if a is None else a.astype(np.float32))(
                 ov._npz(cdir, "divergence_map.npz", "divergence")),
             "tl": np.load(tlp) if os.path.exists(tlp) else None,
