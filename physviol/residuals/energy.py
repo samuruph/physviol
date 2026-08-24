@@ -287,3 +287,69 @@ def energy_map(trace: EnergyTrace, seg: np.ndarray) -> np.ndarray:
             if e[t] != 0.0:
                 out[t][seg[t] == bid] = np.float32(e[t])
     return out
+
+
+def body_state(traj, spec) -> Dict[str, np.ndarray]:
+    """Per-body physical quantities, so a release clip is self-contained.
+
+    `traj.npz` stays in the worker directory and is not published, so without
+    this a consumer gets `energy.npz` without the mass and velocity that
+    produced it -- the number but not the physics. Everything here is what the
+    energy terms were actually computed from, sharing `inertia_diag` and the
+    mass-follows-volume rule rather than re-deriving them, so the two can never
+    disagree.
+
+    A consumer can recompute E from these columns and get the shipped trace back
+    to floating-point noise, which `tests/test_energy.py` pins.
+    """
+    bodies = {b.name: b for b in spec.bodies}
+    g = np.asarray(traj.gravity, np.float64)
+    g_norm = float(np.linalg.norm(g))
+    g_hat = g / max(g_norm, 1e-12)
+    datum = float(getattr(spec, "floor_level", 0.0))
+    T, B = traj.num_frames, traj.num_bodies
+
+    mass = np.zeros((T, B)); inertia = np.zeros((T, B, 3))
+    height = np.zeros((T, B)); is_static = np.zeros(B, bool)
+    for j, name in enumerate(traj.body_names):
+        body = bodies.get(name)
+        if body is None:
+            continue
+        is_static[j] = bool(body.static)
+        lin = np.asarray(traj.scale_mul[:, j, :], np.float64)
+        m = float(getattr(body, "mass", 1.0)) * np.clip(
+            np.prod(lin, axis=1), 1e-9, None)
+        mass[:, j] = m
+        I0 = inertia_diag(body.kind, getattr(body, "scale", (0.5,) * 3), 1.0)
+        inertia[:, j, :] = m[:, None] * I0[None, :] * lin ** 2
+        height[:, j] = -(np.asarray(traj.pos[:, j, :], np.float64) @ g_hat) - datum
+
+    v = np.asarray(traj.lin_vel, np.float64)
+    w = np.asarray(traj.ang_vel, np.float64)
+    R = np.stack([_quat_matrix(np.asarray(traj.quat[:, j, :], np.float64))
+                  for j in range(B)], axis=1)                  # [T,B,3,3]
+    w_body = np.einsum("tbji,tbj->tbi", R, w)
+    kinetic = 0.5 * mass * (v ** 2).sum(-1) + 0.5 * (inertia * w_body ** 2).sum(-1)
+
+    return {
+        "body_ids": np.asarray(traj.body_ids, np.int32),
+        "static": is_static,
+        "present": np.asarray(traj.present, bool),
+        "mass": mass,                                  # [T,B]  kg, follows volume
+        "radius": np.asarray(traj.radius, np.float32),  # [B]   m
+        "inertia": inertia,                            # [T,B,3] body-frame diag
+        "position": np.asarray(traj.pos, np.float32),   # [T,B,3] m
+        "quaternion": np.asarray(traj.quat, np.float32),  # [T,B,4] w,x,y,z
+        "velocity": np.asarray(traj.lin_vel, np.float32),   # [T,B,3] m/s
+        "speed": np.linalg.norm(v, axis=-1),                # [T,B]
+        "angular_velocity": np.asarray(traj.ang_vel, np.float32),
+        "angular_speed": np.linalg.norm(w, axis=-1),
+        "momentum": (mass[..., None] * v),              # [T,B,3] kg m/s
+        "momentum_magnitude": np.linalg.norm(mass[..., None] * v, axis=-1),
+        "angular_momentum": (inertia * w_body),         # [T,B,3] body frame
+        "height": height,                               # [T,B] above floor datum
+        "kinetic": kinetic,                             # [T,B] J
+        "potential": mass * g_norm * height,            # [T,B] J
+        "gravity": np.asarray(traj.gravity, np.float32),
+        "dt": np.float32(traj.dt),
+    }

@@ -269,6 +269,11 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
         np.savez_compressed(
             os.path.join(cdir, "energy_map.npz"),
             energy=energy_mod.energy_map(etrace, seg_here))
+        # The physical quantities the energy was computed from. `traj.npz` stays
+        # in the worker directory and is never published, so without this a
+        # consumer gets the number without the mass and velocity behind it.
+        np.savez_compressed(os.path.join(cdir, "bodies.npz"),
+                            **energy_mod.body_state(traj, spec))
         energy_summary = etrace.summary()
         # Shipped on BOTH twins: the lawful footprint of the bodies the
         # violation acts on, so "where it should be" is always available

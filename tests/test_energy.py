@@ -136,3 +136,48 @@ def test_law_is_silent_without_a_spec_rather_than_wrong():
     got = laws._LAWS["energy_balance"](traj, 0, {})
     assert got.shape == (traj.num_frames,)
     assert np.all(got == 0.0)
+
+
+def test_body_state_reproduces_the_shipped_energy():
+    """The published clip must be self-contained: a consumer with `bodies.npz`
+    and nothing else must be able to recompute the energy trace and get the
+    shipped one back."""
+    sc, spec, traj = _scene("drop")
+    trace = E.compute(traj, spec)
+    st = E.body_state(traj, spec)
+    here = st["present"] & ~st["static"][None, :]
+    recomputed = ((st["kinetic"] + st["potential"]) * here).sum(axis=1)
+    assert np.allclose(recomputed, trace.total, rtol=1e-6, atol=1e-6)
+
+
+def test_body_state_columns_are_physically_consistent():
+    sc, spec, traj = _scene("collision")
+    st = E.body_state(traj, spec)
+    # momentum = m*v, and its magnitude agrees with the vector
+    assert np.allclose(st["momentum"], st["mass"][..., None] * st["velocity"],
+                       rtol=1e-5, atol=1e-6)
+    assert np.allclose(st["momentum_magnitude"],
+                       np.linalg.norm(st["momentum"], axis=-1), rtol=1e-5)
+    assert np.allclose(st["speed"], np.linalg.norm(st["velocity"], axis=-1),
+                       rtol=1e-5)
+    # potential = m*g*h against the same datum the trace uses
+    g = float(np.linalg.norm(st["gravity"]))
+    assert np.allclose(st["potential"], st["mass"] * g * st["height"],
+                       rtol=1e-5, atol=1e-6)
+    # Dynamic bodies only: PyBullet spells "static" as mass 0, and the floor
+    # keeps that convention all the way through the seam.
+    assert np.all(st["mass"][:, ~st["static"]] > 0)
+
+
+def test_mass_follows_volume_in_the_shipped_columns():
+    """`bodies.npz` must tell the same story the energy does: uniform growth
+    adds matter, volume-preserving squash does not."""
+    sc, spec, traj = _scene("drop")
+    base = E.body_state(traj, spec)["mass"]
+    for family, grows in (("immutability", True), ("deformation", False)):
+        inj = get_injector(family)
+        plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
+        assert plan is not None, family
+        m = E.body_state(inj.apply(spec, traj, plan), spec)["mass"]
+        changed = bool(np.abs(m - base).max() > 1e-3 * base.max())
+        assert changed is grows, "%s: mass changed=%s" % (family, changed)

@@ -87,6 +87,7 @@ scored against its own twin rather than against a global constant.
 |---|---|
 | `energy.npz` | `total[T]`, `kinetic_translational[T]`, `kinetic_rotational[T]`, `potential[T]`, `by_body[T,B]`, `body_ids[B]`, `dissipated[T]`, `free_anomaly[T]`, `contact_anomaly[T]`, `excess_loss[T]` |
 | `energy_map.npz` | `energy[T,H,W]` -- each body's energy painted onto its pixels through the segmentation pass, the same mechanism `severity_map` already uses |
+| `bodies.npz` | the physical quantities the energy was computed from — `mass[T,B]`, `velocity[T,B,3]`, `speed`, `momentum`, `angular_momentum`, `inertia`, `height`, `kinetic`, `potential`, plus `gravity` and `dt`. See [schema.md](schema.md) |
 | `meta.json` | an `energy` block: `E0`, `E_end`, `peak_free_anomaly`, `peak_contact_anomaly`, `total_dissipated`, all normalised by `E₀` as well as in joules |
 
 `energy_map` is per-body constant within a body's silhouette. For a rigid body that is the
@@ -178,7 +179,10 @@ block do.
 
 The `ENERGY` panel appears in three places, all driven by the same arrays:
 
-- **`physviol overlay`** — the energy map beside the other passes, with `E(t)` drawn inside
+- **`physviol overlay`** — panel order is RGB / ENERGY / MASK / SEVERITY / CAUSAL /
+  DIVERGENCE. The energy panel carries a VIRIDIS key running `0 → 4x E0` with a tick at the
+  frame's largest per-body value, because a field of colours with no key tells you two bodies
+  differ but not by how much, which is most of what the panel is for. `E(t)` is drawn inside
   it as a two-line curve: the clip in red, its valid twin in green, playhead on the current
   frame, and the live anomaly percentage when it exceeds 1%. The map answers "where is the
   energy"; the curve answers "what did it do", which is the question the annotation exists

@@ -141,6 +141,31 @@ judged against. `energy.npz`: `total[T]`, `kinetic_translational[T]`,
 each body's energy painted onto its own pixels through the segmentation pass — constant
 inside a rigid body's silhouette, which is the honest spatial resolution.
 
+### `bodies.npz` — the physical quantities behind the energy
+
+`traj.npz` stays in the worker directory and is never published, so without this a consumer
+gets the energy number without the mass and velocity that produced it. Everything here is
+what the energy terms were actually computed from, sharing the same `inertia_diag` and
+mass-follows-volume rule, so the two can never disagree — a consumer can recompute `E` from
+these columns and get the shipped trace back to floating-point noise
+(`tests/test_energy.py` pins that).
+
+| key | shape | |
+|---|---|---|
+| `body_ids` | `[B]` | matches `seg.npz` instance ids |
+| `static`, `present` | `[B]`, `[T,B]` | static bodies carry `mass == 0`, PyBullet's convention |
+| `mass` | `[T,B]` | kg, **follows volume** — see [energy.md](energy.md) |
+| `radius` | `[B]` | m |
+| `inertia` | `[T,B,3]` | body-frame principal moments |
+| `position`, `quaternion` | `[T,B,3]`, `[T,B,4]` | m; `(w,x,y,z)` |
+| `velocity`, `speed` | `[T,B,3]`, `[T,B]` | m/s |
+| `angular_velocity`, `angular_speed` | `[T,B,3]`, `[T,B]` | rad/s |
+| `momentum`, `momentum_magnitude` | `[T,B,3]`, `[T,B]` | kg·m/s |
+| `angular_momentum` | `[T,B,3]` | body frame |
+| `height` | `[T,B]` | m above the scene's floor datum |
+| `kinetic`, `potential` | `[T,B]` | J |
+| `gravity`, `dt` | `[3]`, scalar | the constants the rest is measured against |
+
 `meta.json` carries an `energy` block: `E0`, `E_end`, `total_dissipated`,
 `total_dissipated_fraction`, `peak_free_anomaly`, `peak_contact_anomaly`, `peak_excess_loss`.
 Anomalies are fractions of `E0`. See [energy.md](energy.md) for the three channels and the

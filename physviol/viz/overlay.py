@@ -72,16 +72,16 @@ def build(clip_dir: str, out_path: Optional[str] = None,
     t_end = int(v.get("t_end_frame", -1))
     peak = (v.get("peak_residual") or {})
 
-    panels: List[Tuple[str, str]] = [("RGB", "rgb"),
-                                     ("MASK red=violation  green=should-be", "mask")]
+    panels: List[Tuple[str, str]] = [("RGB", "rgb")]
+    if energy is not None:
+        panels.append(("ENERGY  per body, fraction of E0", "energy"))
+    panels.append(("MASK red=violation  green=should-be", "mask"))
     if sev is not None:
         panels.append(("SEVERITY MAP", "sev"))
     if causal is not None:
         panels.append(("CAUSAL MASK", "causal"))
     if diverg is not None:
         panels.append(("DIVERGENCE (not GT)", "div"))
-    if energy is not None:
-        panels.append(("ENERGY  fraction of E0", "energy"))
 
     n = len(panels)
     W = n * panel + (n + 1) * PAD
@@ -107,8 +107,12 @@ def build(clip_dir: str, out_path: Optional[str] = None,
             if kind == "mask":
                 px = int(mask[t].sum()) if mask is not None else 0
                 _text(f, "%d px" % px, (x + 5, y + panel - 8), C_DIM, 0.40, 1)
-            if kind == "energy" and etrace is not None:
-                _energy_curve(f, x, y, panel, t, etrace, etwin)
+            if kind == "energy":
+                _energy_scale(f, x, y, panel,
+                              float(np.abs(energy[t]).max()) if energy is not None
+                              else None)
+                if etrace is not None:
+                    _energy_curve(f, x, y, panel, t, etrace, etwin)
 
         _header(f, W, meta, t, T, active, observable, occluded)
         _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end,
@@ -162,8 +166,8 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None)
         # VIRIDIS, deliberately not severity's INFERNO: the two panels sit side
         # by side and answer different questions, so they must not be mistakable
         # for one another at a glance.
-        e = np.abs(np.clip(energy[t], -4.0, 4.0)) / 4.0
-        heat = cv2.applyColorMap((np.sqrt(e) * 255).astype(np.uint8),
+        e = np.abs(np.clip(energy[t], -ENERGY_CLIP, ENERGY_CLIP)) / ENERGY_CLIP
+        heat = cv2.applyColorMap((e ** ENERGY_GAMMA * 255).astype(np.uint8),
                                  cv2.COLORMAP_VIRIDIS)[..., ::-1].astype(np.float32)
         a = (e > 1e-6)[..., None].astype(np.float32) * 0.9
         img = base * (1 - a) * 0.5 + heat * a
@@ -383,6 +387,36 @@ def _energy_trace(clip_dir):
         return None
     z = np.load(path)
     return {k: z[k] for k in z.files}
+
+
+#: Energy map display range, as a multiple of E0, and the gamma the panel uses.
+#: A body typically holds well under E0 on its own, so the useful range is the
+#: low end -- hence the sqrt, which is monotone so brighter still means more.
+ENERGY_CLIP = 4.0
+ENERGY_GAMMA = 0.5
+
+
+def _energy_scale(f, x, y, size, value=None):
+    """VIRIDIS legend for the energy map, carrying the panel's own gamma.
+
+    Without it the map is a field of colours with no key -- you can see that two
+    bodies differ but not by how much, which is most of what the panel is for.
+    A linear ramp under a gamma'd map would also put colours on the scale that
+    never appear in the image beside it.
+    """
+    import cv2
+    bw, bh = size - 20, 9
+    bx, by = x + 10, y + size - 26 - max(34, size // 5)
+    axis = np.linspace(0.0, 1.0, bw) ** ENERGY_GAMMA
+    ramp = (axis * 255).astype(np.uint8)[None, :].repeat(bh, 0)
+    f[by:by + bh, bx:bx + bw] = cv2.applyColorMap(
+        ramp, cv2.COLORMAP_VIRIDIS)[..., ::-1]
+    _text(f, "0", (bx, by - 4), C_DIM, 0.34, 1)
+    hi = "%.0fx E0" % ENERGY_CLIP
+    _text(f, hi, (bx + bw - _w(hi, 0.34), by - 4), C_DIM, 0.34, 1)
+    if value is not None:
+        mx = bx + int(np.clip(value / ENERGY_CLIP, 0, 1) ** ENERGY_GAMMA * (bw - 1))
+        cv2.line(f, (mx, by - 3), (mx, by + bh + 3), (255, 255, 255), 1)
 
 
 def _energy_curve(f, x, y, size, t, trace, twin=None):
