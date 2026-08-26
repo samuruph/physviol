@@ -317,6 +317,20 @@ TIME_SLIP_NEEDS_MOTION = (
     "there would be indistinguishable from the body simply having stopped. "
     "Temporary: see docs/decisions_pending.md section 3")
 
+#: Cells that are stageable but should not be built, each with a written reason.
+#:
+#: Two kinds live here. Some are wrong in principle -- `newton2_mass` on
+#: `pyramid_impact` pits a cube against a sphere, so "the cube is heavy" is a
+#: lawful reading and there is no violation for a viewer to catch. Others are
+#: **measured invisible**: the family has nothing to act on in that scenario, so
+#: the clip carries a full set of labels describing a violation the video does
+#: not contain, which teaches a model that nothing is something.
+#:
+#: The second kind is found, not guessed. `physviol audit <release>` measures
+#: severity, observable frames and peak pixel evidence inside the mask for every
+#: cell, and `tests/test_visible_violation.py` fails the build if one that is
+#: still marked BUILD depicts nothing. Move a flagged cell here with its
+#: numbers, or fix the scenario so the family has something to act on.
 NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
     ("newton2_mass", "pyramid_impact"):
         "the spheres are identical to each other but never strike one another "

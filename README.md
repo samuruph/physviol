@@ -203,6 +203,7 @@ Every subcommand takes `--config NAME`.
 | `sheet` | one scenario: every family × every severity at once |
 | `coverage` | every invalid clip in the release, tiled into one video |
 | `validate` | schema + cross-checks over a whole release |
+| `audit` | cells whose violation is **not visible** — candidates to drop |
 | `config-path` | print the outdir a config resolves to |
 
 ```bash

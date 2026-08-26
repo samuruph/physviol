@@ -101,6 +101,29 @@ after emerging) and tier v1 (11), which are the tiers that ship. Fixing it prope
 either estimating emergence from the screen geometry rather than from `occluded_frames`, or
 giving `occluder_pass` more runway to the right of its screen.
 
+## 3a. Cells that depict nothing should not be built
+
+**Decided with the user.** A `(scenario, family)` pair can be well-formed and still not worth
+generating: `friction` applied to a body that has already come to rest changes nothing, and
+the clip ships a full set of labels describing a violation the video does not contain.
+
+This is now measured rather than argued. `physviol audit <release>` reports, per cell:
+
+| signal | what it asks |
+|---|---|
+| `peak_severity` | the annotation's own claim about how wrong it is |
+| `observable_frames` | frames on which the twins differ at all |
+| `evidence` | peak pixel divergence **inside the violation mask** — the only one that asks whether a viewer could see it |
+
+A cell is flagged only when it fails all three, since each catches cases the others miss.
+`tests/test_visible_violation.py` fails the build if a cell still marked BUILD is invisible,
+so a flagged cell cannot quietly stay.
+
+The workflow: run the audit on a fresh release, then for each flagged cell either move it to
+`taxonomy.NOT_MEANINGFUL` with its measured numbers, or fix the scenario so the family has
+something to act on. `friction` is the first candidate — but which scenarios it should be
+dropped from is an output of the audit, not a guess.
+
 ## 3b. `newton3_reaction` has no severity ladder, and probably should not
 
 Staged in the simulator it is `changeDynamics(mass=0)` -- the struck body becomes

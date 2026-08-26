@@ -349,6 +349,45 @@ def cmd_config_path(a) -> int:
     return 0
 
 
+def cmd_audit(a) -> int:
+    """Report cells whose violation is not visible.
+
+    The tool behind "if a cell does not change anything, do not build it": it
+    measures severity, observability and pixel evidence per cell so the decision
+    to drop one is a number rather than an opinion.
+    """
+    from .annotate.audit import audit, is_invisible
+
+    rows = audit(a.root)
+    if not rows:
+        print("no invalid clips under %s" % a.root, file=sys.stderr)
+        return 2
+
+    flagged = [r for r in rows if is_invisible(r)]
+    weak = sorted((r for r in rows if not is_invisible(r)),
+                  key=lambda r: float(r["peak_severity"]))[:a.show_weak]
+
+    print("%d invalid clips, %d with NO visible violation\n" % (len(rows),
+                                                                len(flagged)))
+    if flagged:
+        print("%-16s %-18s %-7s %8s %6s %9s" % (
+            "scenario", "family", "bin", "severity", "obs_f", "evidence"))
+        for r in flagged:
+            print("%-16s %-18s %-7s %8.3f %6d %9.4f" % (
+                r["scenario"], r["family"], r["severity_bin"],
+                r["peak_severity"], r["observable_frames"], r["evidence"]))
+        print("\nThese depict nothing a viewer can see. Add them to")
+        print("taxonomy.NOT_MEANINGFUL with the measured reason, or fix the")
+        print("scenario so the family has something to act on.")
+    if weak:
+        print("\nweakest cells that DO show something:")
+        for r in weak:
+            print("   %-16s %-18s severity %.3f  evidence %.3f"
+                  % (r["scenario"], r["family"], r["peak_severity"],
+                     r["evidence"]))
+    return 0
+
+
 def cmd_validate(a) -> int:
     from .schema.validate import validate_release
     rep = validate_release(a.root)
@@ -481,6 +520,13 @@ def _build(suppress: bool = False):
                    help="print the outdir a config resolves to")
     p.add_argument("--outdir")
     p.set_defaults(fn=cmd_config_path)
+
+    p = add_parser("audit",
+                   help="cells whose violation is not visible")
+    p.add_argument("root", nargs="?", default="out/release")
+    p.add_argument("--show-weak", type=int, default=10,
+                   help="also list the N weakest cells that DO show something")
+    p.set_defaults(fn=cmd_audit)
 
     p = add_parser("validate", help="schema + cross-checks over a release")
     p.add_argument("root", default="out/release", nargs="?")
