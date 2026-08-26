@@ -42,9 +42,34 @@ class InterventionPlan:
     spatial_extent: str = "local"               # local | global
     notes: Dict[str, Any] = field(default_factory=dict)
 
+    #: When we are ACTIVELY changing something -- the colour ramping, the body
+    #: shrinking, the teleport happening. Ends when the change is complete.
+    intervention_windows: Optional[List[Tuple[int, int]]] = None
+    #: When the scene differs from lawful AS A RESULT. Runs on after the
+    #: intervention finishes, and for `permanence` never ends.
+    consequence_windows: Optional[List[Tuple[int, int]]] = None
+
+    def __post_init__(self) -> None:
+        # `windows` stays the union of the two and remains the field every
+        # existing consumer reads. A family that says nothing declares an
+        # intervention that lasts the whole window, which is what every family
+        # meant before the split existed.
+        if self.intervention_windows is None:
+            self.intervention_windows = list(self.windows)
+        if self.consequence_windows is None:
+            self.consequence_windows = list(self.windows)
+
     @property
     def t_end(self) -> int:
         return max(e for _, e in self.windows)
+
+    @property
+    def t_intervention_end(self) -> int:
+        return max(e for _, e in self.intervention_windows)
+
+    @property
+    def t_consequence_end(self) -> int:
+        return max(e for _, e in self.consequence_windows)
 
     def active_mask(self, num_frames: int) -> np.ndarray:
         """Rasterise `windows` into the per-frame boolean timeline (PLAN 3.2)."""
@@ -58,6 +83,10 @@ class InterventionPlan:
             "family": self.family, "kind": self.kind,
             "t_event_frame": self.t_event, "t_end_frame": self.t_end,
             "violation_windows": [list(w) for w in self.windows],
+            "intervention_windows": [list(w) for w in self.intervention_windows],
+            "consequence_windows": [list(w) for w in self.consequence_windows],
+            "t_intervention_end_frame": self.t_intervention_end,
+            "t_consequence_end_frame": self.t_consequence_end,
             "causal_body_ids": list(self.causal_body_ids),
             "spatial_extent": self.spatial_extent,
             "intervention": {
@@ -90,6 +119,22 @@ class Injector:
     #: it just stops annotating the tail of it -- which is how `shadow` came to
     #: ship a detached shadow across frames `active` said were lawful.
     persistent: bool = False
+
+    @staticmethod
+    def _split_windows(t0: int, T: int, applied_frames: int):
+        """(union, intervention, consequence) for "change for N frames, then it
+        stays changed".
+
+        The shape most of the taxonomy has and the one the released windows got
+        wrong: a colour that finishes turning green at frame 12 is not still
+        *being changed* at frame 24, even though the scene is still unlawful
+        there. Callers that genuinely change something for the whole clip --
+        `antigravity` holds a body up every frame it is airborne -- keep the
+        default and declare nothing.
+        """
+        end = min(T - 1, t0 + max(1, int(applied_frames)) - 1)
+        union = [(t0, T - 1)]
+        return union, [(t0, end)], [(t0, T - 1)]
 
     def _window_len(self, default: int, t0: int, num_frames: int) -> int:
         if self.persistent:

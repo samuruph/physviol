@@ -65,11 +65,16 @@ beyond `physviol/render/worker_smoke.py`.
 2. **`divergence_map` is not the violation region.** It is `|valid − invalid|` in pixel
    space and it diverges everywhere downstream of the event. Ship it, label it, never train
    on it. The training targets are `violation_mask` and `severity_map`.
-3. **The mask is the union over BOTH twins**:
+3. **`violation_mask` is the union over BOTH twins**:
    `violation_mask[t] = footprint(culprit, invalid, t) ∪ footprint(culprit, valid, t)`.
    Without this, vanish and teleport violations produce empty or half-empty masks — the body
    has no pixels in the invalid render precisely because it vanished. Guarded by
    `test_mask_union.py`.
+   **`severity_map` and `causal_mask` are the invalid side only**, and `mask_invalid` ships
+   that footprint on its own. They answer "where is the thing that is wrong", and at
+   inference a model only has the invalid video. The cost is accepted and documented:
+   `permanence` and `dissolve` get an all-zero severity map, with `reference_mask` carrying
+   where the body should have been.
 4. **Injectors edit trajectories, never the sim rng.** Otherwise the twin diverges from
    frame 0 and (1) breaks.
 5. **Look at the clips before scaling.** Overlay video with mask, severity and all three

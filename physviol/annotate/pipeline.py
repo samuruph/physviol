@@ -204,6 +204,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # ---- 3.2 windows and timelines ---------------------------------------
     plan_windows = [tuple(w) for w in plan_d["violation_windows"]]
     active = win_mod.rasterise(plan_windows, T)
+    # The two halves of `active`, shipped beside it rather than instead of it.
+    # `intervening` is when we are changing something -- the colour ramping, the
+    # body shrinking; `consequence` is when the scene differs as a result. They
+    # were the same array, so a colour that finished turning green at frame 14
+    # was still reported as "being changed" at frame 24.
+    intervening = win_mod.rasterise(
+        [tuple(w) for w in plan_d.get("intervention_windows", plan_windows)], T)
+    consequence = win_mod.rasterise(
+        [tuple(w) for w in plan_d.get("consequence_windows", plan_windows)], T)
 
     # Observability is measured on the dynamic causal bodies only -- see the
     # note in windows.observable_frames -- and it gates the *spatial*
@@ -216,30 +225,52 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
     # ---- 3.3 masks (the union rule) --------------------------------------
     vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, visible)
+    imask = masks_mod.invalid_mask(seg_i, dynamic_ids, visible)
     rmask = masks_mod.reference_mask(seg_v, dynamic_ids)
-    cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, static_ids, visible)
+    # Level 2 is MEASURED, not declared. `static_ids` are the participants the
+    # plan named -- the floor a ball sinks through -- and to those we add every
+    # body whose trajectory provably departs from the valid twin without being
+    # a culprit itself. That turns "affected" from a hand-maintained list into a
+    # comparison, and it is the same comparison the bystander guard runs.
+    affected = list(static_ids) + _disturbed_bodies(traj_v, traj_i, causal_ids)
+    cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, affected, visible)
     dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
 
     # ---- 3.4 steps 4-5: paint, then the temporal profile ------------------
     # Every dynamic culprit is painted, not just the primary. `global_gravity`
     # acts on the whole scene and `fission` on both halves; painting one body
     # would leave the severity field describing a fraction of the violation.
+    # INVALID SIDE ONLY. `paint` reads `seg_i`, and the union's extra pixels --
+    # where the culprit sits in the valid twin but not in the invalid render --
+    # used to be filled in with the same score here. That put severity on the
+    # object's *lawful* footprint, which at inference is a place the model
+    # cannot see anything wrong: it only ever has the invalid video, and there
+    # is nothing there.
+    #
+    # The cost, accepted deliberately: `permanence` and `dissolve` get an
+    # all-zero severity map once the body is gone. That is honest -- there is no
+    # pixel evidence of severity where nothing is rendered -- and
+    # `reference_mask` still says where it should have been.
     smap = sev_mod.paint(seg_i, {int(b): s_visible for b in dynamic_ids or [primary_id]},
                          active=visible)
-    # The union rule can mark pixels the culprit does not occupy in the invalid
-    # render (it vanished / moved). Those carry the same score.
-    extra = vmask & (smap == 0)
-    if extra.any():
-        smap = smap.astype(np.float32)
-        broadcast = np.broadcast_to(s_visible.astype(np.float32)[:, None, None],
-                                    smap.shape)
-        smap = np.where(extra, broadcast, smap).astype(np.float16)
     sev_t = sev_mod.temporal_profile(smap)
 
     tinfo = win_mod.build(plan_windows, T, seg_v, seg_i, dynamic_ids or causal_ids,
                           primary_id, severity_t=sev_t, observable=observable)
     arrays = tinfo.pop("_arrays")
     arrays["severity_t"] = sev_t
+    arrays["intervening"] = intervening
+    arrays["consequence"] = consequence
+    tinfo["intervention_windows"] = [list(w) for w in
+                                     plan_d.get("intervention_windows",
+                                                plan_windows)]
+    tinfo["consequence_windows"] = [list(w) for w in
+                                    plan_d.get("consequence_windows",
+                                               plan_windows)]
+    tinfo["t_intervention_end_frame"] = int(
+        max(e for _, e in tinfo["intervention_windows"]))
+    tinfo["t_consequence_end_frame"] = int(
+        max(e for _, e in tinfo["consequence_windows"]))
 
     # ---- 3.6 token grids --------------------------------------------------
     g = grids_mod.reduce_all(vmask, smap.astype(np.float32),
@@ -293,6 +324,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
 
         if label == "invalid":
             np.savez_compressed(os.path.join(cdir, "violation_mask.npz"), mask=vmask)
+            np.savez_compressed(os.path.join(cdir, "mask_invalid.npz"), mask=imask)
             np.savez_compressed(os.path.join(cdir, "causal_mask.npz"), mask=cmask)
             np.savez_compressed(os.path.join(cdir, "severity_map.npz"), severity=smap)
             np.savez_compressed(os.path.join(cdir, "divergence_map.npz"),
@@ -309,6 +341,8 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             np.savez_compressed(
                 os.path.join(cdir, "timelines.npz"),
                 active=np.zeros((T,), bool), observable=np.zeros((T,), bool),
+                intervening=np.zeros((T,), bool),
+                consequence=np.zeros((T,), bool),
                 occluded=win_mod.occluded_frames(seg_v, primary_id),
                 severity_t=zeros_t)
             np.savez_compressed(os.path.join(cdir, "residuals.npz"),
@@ -345,6 +379,26 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             "peak_severity": float(sev_t.max()),
             "mask": masks_mod.summarise(vmask),
             "noise_floor": floor.to_dict(r_strong)}
+
+
+def _disturbed_bodies(traj_v, traj_i, causal_ids, tol: float = 1e-3) -> List[int]:
+    """Bodies that moved differently from the valid twin without being culprits.
+
+    A collision the intervention prevented leaves the body that was going to be
+    struck on a different path; a body shoved by a fissioned half likewise. Both
+    are consequences of the violation and belong in `causal_mask` level 2, and
+    neither is something a plan can enumerate in advance.
+    """
+    culprits = {int(i) for i in causal_ids}
+    out: List[int] = []
+    for j, bid in enumerate(np.asarray(traj_v.body_ids, int)):
+        if int(bid) in culprits:
+            continue
+        a = np.asarray(traj_v.pos[:, j, :], np.float64)
+        b = np.asarray(traj_i.pos[:, j, :], np.float64)
+        if a.shape == b.shape and float(np.abs(a - b).max()) > tol:
+            out.append(int(bid))
+    return out
 
 
 def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
@@ -448,6 +502,10 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "t_event_frame": tinfo["t_event_frame"],
             "t_observable_frame": tinfo["t_observable_frame"],
             "t_end_frame": tinfo["t_end_frame"],
+            "t_intervention_end_frame": tinfo["t_intervention_end_frame"],
+            "t_consequence_end_frame": tinfo["t_consequence_end_frame"],
+            "intervention_windows": tinfo["intervention_windows"],
+            "consequence_windows": tinfo["consequence_windows"],
             "observability_lag_frames": tinfo["observability_lag_frames"],
             "violation_windows": tinfo["violation_windows"],
             "observable_windows": tinfo["observable_windows"],

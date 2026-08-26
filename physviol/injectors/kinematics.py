@@ -472,9 +472,13 @@ class Newton1Inertia(Injector):
 
         fraction = float(self.HALT_BY_BIN[severity_bin])
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
+        # The halt happens between two frames; the body then simply stays
+        # stopped, which is the consequence rather than more intervening.
+        union, applied, after = self._split_windows(t0, T, 1)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
-            windows=[(t0, T - 1)],
+            windows=union, intervention_windows=applied,
+            consequence_windows=after,
             causal_body_ids=[int(actor.segmentation_id)],
             params={"type": "velocity_damp", "removed_fraction": fraction},
             magnitude=float(speed[t0] * fraction / max(g_dt, 1e-9)),

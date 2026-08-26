@@ -291,8 +291,10 @@ Output lands in `out/release/clips/<release>/<scenario>/<seed>/{valid,invalid_<f
 meta.json            labels, taxonomy, violation windows, severity, provenance
 rgb.mp4              the video
 overlay.mp4          annotated: mask + severity + clocks + window bar
-timelines.npz        active[T], observable[T], occluded[T], severity_t[T]
-violation_mask.npz   bool [T,H,W]  <- the primary annotation: where AND when
+timelines.npz        active[T], intervening[T], consequence[T], observable[T],
+                     occluded[T], severity_t[T]
+violation_mask.npz   bool [T,H,W]  <- the primary annotation: union over both twins
+mask_invalid.npz     bool [T,H,W]  the culprit in the INVALID render only
 reference_mask.npz   bool [T,H,W]  where the culprit SHOULD be (valid twin); on both clips
 causal_mask.npz      uint8 [T,H,W] 0=none, 1=culprit, 2+=participants
 severity_map.npz     f16  [T,H,W]  how badly, localised in space and time

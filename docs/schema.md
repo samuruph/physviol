@@ -141,6 +141,50 @@ judged against. `energy.npz`: `total[T]`, `kinetic_translational[T]`,
 each body's energy painted onto its own pixels through the segmentation pass — constant
 inside a rigid body's silhouette, which is the honest spatial resolution.
 
+### Three timelines, not two
+
+A violation has three distinct clocks and the release used to carry two, conflating the first
+with the second:
+
+| field | meaning |
+|---|---|
+| `intervention_windows` | when we are **actively changing something** — the colour ramping, the body shrinking, the teleport happening. Ends when the change completes |
+| `consequence_windows` | when the scene **differs from lawful as a result**. Runs on afterwards, and for `permanence` never ends |
+| `observable_windows` | when a viewer **could tell**. Gated by occlusion; the gap from `t_event` is the observability lag |
+
+`violation_windows` is defined as the union of the first two and stays the field every
+existing consumer reads. `timelines.npz` carries `intervening[T]` and `consequence[T]`
+alongside `active[T]`, and `meta.json` adds `t_intervention_end_frame` and
+`t_consequence_end_frame`.
+
+Concretely, `colour_shift` at strong on a 25-frame clip: `t_event` 9, intervention ends 14
+when the colour has finished turning, consequence runs to 24. `friction` and `support` are
+the other shape — they change a property that keeps acting, so their intervention runs the
+whole clip.
+
+### Masks — which side of the twin each one lives on
+
+| array | side | |
+|---|---|---|
+| `violation_mask` | **union** of both twins | the documented training target. The only mask with pixels for a vanished body |
+| `mask_invalid` | invalid only | where the wrong thing actually is, in the video a model will see |
+| `reference_mask` | valid only | where it *should* have been. Ungated in time |
+| `severity_map` | **invalid only** | how badly, per pixel |
+| `causal_mask` | **invalid only** | `1` = culprit, `2` = a body it measurably disturbed |
+
+Severity and causal moved off the union deliberately. They answer "where is the thing that is
+wrong", and at inference a model only ever has the invalid video — marking the object's
+lawful footprint asks it for pixels the question does not contain.
+
+**The accepted cost:** `permanence` and `dissolve` get an all-zero severity map once the body
+is gone. That is honest — there is no pixel evidence of severity where nothing is rendered —
+and `reference_mask` still says where it should have been. `violation_mask` keeps the union
+and keeps its pixels, so the training target is unaffected.
+
+`causal_mask` level 2 is **measured**: bodies whose trajectory provably departs from the valid
+twin without being culprits themselves, which is the same comparison the bystander guard
+runs. It is no longer a list a plan has to enumerate in advance.
+
 ### `instances` and `segmentation` — the label space
 
 A segmentation map is unusable without the id → name table beside it. `meta.json` carries

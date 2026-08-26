@@ -59,6 +59,8 @@ class Permanence(Injector):
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
+            intervention_windows=[(t0, t0)],
+            consequence_windows=[(t0, t1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "remove_body",
                     "bodies": [int(b.segmentation_id) for b in targets],
@@ -140,8 +142,10 @@ class Immutability(Injector):
         k = self._factor(severity_bin, grow)
         ramp = max(2, min(self.RAMP_FRAMES, T - t0))
         occ = spec.notes.get("occluded_frames") or []
+        union, applied, after = self._split_windows(t0, T, ramp)
         return InterventionPlan(
-            family=self.family, kind="sustained", t_event=t0, windows=[(t0, T - 1)],
+            family=self.family, kind="sustained", t_event=t0, windows=union,
+            intervention_windows=applied, consequence_windows=after,
             causal_body_ids=[int(actor.segmentation_id)],
             params={"type": "scale_ramp", "scale_factor": k,
                     "volume_ratio": k ** 3, "ramp_frames": int(ramp),
@@ -261,6 +265,8 @@ class Fission(Injector):
         occ = spec.notes.get("occluded_frames") or []
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, T - 1)],
+            intervention_windows=[(t0, t0)],
+            consequence_windows=[(t0, T - 1)],
             causal_body_ids=[int(actor.segmentation_id),
                              int(twin.segmentation_id)],
             params={"type": "split_body", "separation_speed": speed,
@@ -393,9 +399,14 @@ class Fusion(Injector):
         keepers = [int(a.segmentation_id) for a, _, _ in pairs]
         absorbed = [int(b.segmentation_id) for _, b, _ in pairs]
 
+        draw_in = max(self.DRAW_IN_MIN,
+                      int(round(self.DRAW_IN_FRACTION * traj.num_frames)))
+        union, applied, after = self._split_windows(
+            t0, traj.num_frames, draw_in)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
-            windows=[(t0, traj.num_frames - 1)],
+            windows=union, intervention_windows=applied,
+            consequence_windows=after,
             causal_body_ids=keepers + absorbed,
             params={"type": "merge_bodies", "pairs": len(pairs),
                     "meet_radii": self.MEET_RADII[severity_bin]},
@@ -491,9 +502,11 @@ class Dissolve(Injector):
                    int(round(self.FADE_BY_BIN[severity_bin] * T)))
         fade = max(1, min(fade, T - t0))
         occ = spec.notes.get("occluded_frames") or []
+        union, applied, after = self._split_windows(t0, T, fade)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
-            windows=[(t0, T - 1)],
+            windows=union, intervention_windows=applied,
+            consequence_windows=after,
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "dissolve_body", "fade_frames": int(fade)},
             magnitude=1.0, magnitude_unit="opacity_lost",

@@ -60,13 +60,45 @@ def test_static_participant_does_not_flood_the_mask():
     """A floor is a causal body for solidity, but the mask must not become the
     whole plane; static participants belong in causal_mask level 2."""
     sv, si = _seg(fill=1), _seg(fill=1)    # 1 == floor everywhere
-    sv[:, 1, 1] = 2                        # 2 == ball
+    sv[:, 1, 1] = 2                        # 2 == ball, present in both twins
+    si[:, 1, 1] = 2
     m = masks.violation_mask(sv, si, [2], np.ones(3, bool))
     assert m.sum() == 3, "only the dynamic body should contribute"
     c = masks.causal_mask(sv, si, [2], [1], np.ones(3, bool), neighbourhood=1)
     assert (c == 1).sum() == 3
     assert (c == 2).sum() > 0, "the floor should appear near the culprit"
     assert (c == 2).sum() < sv.size, "but not everywhere"
+
+
+def test_causal_and_invalid_masks_are_invalid_side_only():
+    """A body that is not in the invalid render has no causal mask.
+
+    The deliberate consequence of moving causal_mask and severity_map off the
+    union: they answer "where is the thing that is wrong", and at inference a
+    model only ever has the invalid video. For `permanence` and `dissolve` that
+    means an empty mask once the body goes -- honest, because there is nothing
+    rendered there -- and `reference_mask` still carries where it should have
+    been. `violation_mask` keeps the union and keeps its pixels.
+    """
+    sv, si = _seg(fill=1), _seg(fill=1)
+    sv[:, 1, 1] = 2                        # in the valid twin only: it vanished
+    active = np.ones(3, bool)
+
+    assert masks.violation_mask(sv, si, [2], active).sum() == 3
+    assert masks.reference_mask(sv, [2]).sum() == 3
+    assert masks.invalid_mask(si, [2], active).sum() == 0
+    assert masks.causal_mask(sv, si, [2], [1], active).sum() == 0
+
+
+def test_invalid_mask_is_a_subset_of_the_union():
+    sv, si = _seg(fill=1), _seg(fill=1)
+    sv[:, 1, 1] = 2
+    si[:, 2, 2] = 2                        # moved: both twins contribute
+    active = np.ones(3, bool)
+    u = masks.violation_mask(sv, si, [2], active)
+    i = masks.invalid_mask(si, [2], active)
+    assert i.sum() == 3 and u.sum() == 6
+    assert np.all(u[i]), "invalid-side pixels must all be inside the union"
 
 
 @pytest.mark.parametrize("which", ["violation_mask"])

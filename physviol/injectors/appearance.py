@@ -69,9 +69,11 @@ class _Squash(Injector):
             int(targets[0].segmentation_id)), 2] - radius <= top + 1e-2)
         axis = int(rng.randint(2)) if resting else int(rng.randint(3))
         ramp = max(2, min(self.RAMP_FRAMES, T - t0))
+        union, applied, after = self._split_windows(t0, T, ramp)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
-            windows=[(t0, T - 1)],
+            windows=union, intervention_windows=applied,
+            consequence_windows=after,
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "aspect_scale", "aspect": k, "axis": axis,
                     "ramp_frames": int(ramp)},
@@ -231,9 +233,11 @@ class ColourShift(Injector):
             rgb, dist = self._shift_to_distance(body.color, target, sign)
             finals[int(body.segmentation_id)] = [float(x) for x in rgb]
             reached.append(dist)
+        union, applied, after = self._split_windows(t0, T, ramp)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
-            windows=[(t0, T - 1)],
+            windows=union, intervention_windows=applied,
+            consequence_windows=after,
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "colour_ramp", "target_distance": target,
                     "ramp_frames": int(min(ramp, T - t0))},

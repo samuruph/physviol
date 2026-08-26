@@ -49,22 +49,47 @@ def violation_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
     return u & np.asarray(active, bool)[:, None, None]
 
 
+def invalid_mask(seg_invalid: np.ndarray, dynamic_causal_ids: Sequence[int],
+                 active: np.ndarray) -> np.ndarray:
+    """The culprit's footprint in the INVALID render alone, gated to `active`.
+
+    The union in `violation_mask` exists so that a vanished body still has a
+    mask, and it stays the documented training target. But it also marks pixels
+    where the object lawfully *is*, and at inference a model only ever sees the
+    invalid video -- so for anything that asks "where is the thing that is
+    wrong", the union is asking for pixels the question does not contain.
+
+    Empty for `permanence` and `dissolve` after the body goes, which is correct
+    rather than unfortunate: there is no evidence in the invalid frame at a
+    place where nothing is rendered. `reference_mask` still says where it
+    should have been.
+    """
+    return (footprint(seg_invalid, dynamic_causal_ids)
+            & np.asarray(active, bool)[:, None, None])
+
+
 def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
                 primary_ids: Sequence[int], secondary_ids: Sequence[int],
                 active: np.ndarray, neighbourhood: int = 3) -> np.ndarray:
-    """uint8 [T,H,W]: 0 = nothing, 1 = primary culprit, 2.. = other participants.
+    """uint8 [T,H,W]: 0 = nothing, 1 = the culprit, 2 = a body it disturbed.
 
-    Static participants are included only in a small neighbourhood of the
-    primary culprit, so "the floor" becomes "the bit of floor being passed
-    through" rather than the whole plane.
+    **Invalid side only.** The question this array answers is "who did it, and
+    what did it disturb", and both halves of that are about the clip in front of
+    you -- not about where a body would have been in a rollout the viewer never
+    sees.
+
+    Level 2 is *measured*, not declared: `secondary_ids` are the bodies whose
+    trajectory provably differs from the valid twin as a consequence, which is
+    the same comparison `Injector._settle_bystanders` runs. Static participants
+    are included only near the culprit, so "the floor" is the bit of floor being
+    passed through rather than the whole plane.
     """
-    prim = violation_mask(seg_valid, seg_invalid, primary_ids, active)
+    prim = invalid_mask(seg_invalid, primary_ids, active)
     out = np.zeros(prim.shape, np.uint8)
     out[prim] = 1
     if len(secondary_ids):
         near = _dilate(prim, neighbourhood)
-        sec = (footprint(seg_valid, secondary_ids)
-               | footprint(seg_invalid, secondary_ids))
+        sec = footprint(seg_invalid, secondary_ids)
         sec = sec & near & np.asarray(active, bool)[:, None, None] & ~prim
         out[sec] = 2
     return out

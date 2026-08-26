@@ -12,6 +12,8 @@ from typing import Dict, List
 
 import numpy as np
 
+from ..annotate.windows import rasterise as win_rasterise
+
 from ..annotate import windows as win
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of, is_compatible
 
@@ -96,10 +98,46 @@ def validate_clip(cdir: str) -> List[str]:
     # 12. violation is null iff label == valid
     if (v is None) != (m.get("label") == "valid"):
         bad("violation/label mismatch (label=%r)" % m.get("label"))
+
     if v is None:
         return errs
 
     T = int(m["num_frames"])
+
+    # 10b. the two new window families are consistent with the union they
+    # decompose. `intervention` is when we are actively changing something and
+    # `consequence` is when the scene differs as a result; both must sit inside
+    # `violation_windows`, which is defined as their union.
+    if v is not None:
+        for key in ("intervention_windows", "consequence_windows"):
+            wins = v.get(key)
+            if not wins:
+                continue
+            union = win_rasterise([tuple(w) for w in v["violation_windows"]], T)
+            part = win_rasterise([tuple(w) for w in wins], T)
+            if bool((part & ~union).any()):
+                bad("%s falls outside violation_windows" % key)
+        if v.get("intervention_windows") and v.get("consequence_windows"):
+            union = win_rasterise([tuple(w) for w in v["violation_windows"]], T)
+            both = (win_rasterise([tuple(w) for w in v["intervention_windows"]], T)
+                    | win_rasterise([tuple(w) for w in v["consequence_windows"]], T))
+            if not np.array_equal(both, union):
+                bad("intervention | consequence does not reconstruct "
+                    "violation_windows")
+
+    # 10c. the invalid-side mask is a subset of the union it was carved from.
+    ipath = os.path.join(cdir, "mask_invalid.npz")
+    vpath = os.path.join(cdir, "violation_mask.npz")
+    if os.path.exists(ipath) and os.path.exists(vpath):
+        try:
+            im = np.load(ipath)["mask"].astype(bool)
+            vm = np.load(vpath)["mask"].astype(bool)
+            if im.shape != vm.shape:
+                bad("mask_invalid and violation_mask disagree on shape")
+            elif bool((im & ~vm).any()):
+                bad("mask_invalid has pixels outside violation_mask")
+        except Exception as exc:                              # noqa: BLE001
+            bad("mask_invalid unreadable: %s" % exc)
     te, to, tend = (int(v["t_event_frame"]), int(v["t_observable_frame"]),
                     int(v["t_end_frame"]))
     # 2. ordering. Evidence cannot precede its cause, and a window cannot end
