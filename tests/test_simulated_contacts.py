@@ -38,6 +38,35 @@ def _plans():
                                          "plan.json"), recursive=True))
 
 
+#: A contact whose normal is within this of vertical is something the body is
+#: resting ON, not something it was moved PAST.
+SUPPORT_COS = 0.7            # ~45 degrees
+
+
+def _obstacle_pairs(traj, t_event):
+    """Post-event contacts that are not supports.
+
+    Naming the floor is not enough -- a ramp and a table top are supports too,
+    and a body teleported along a ramp still rests on it, correctly. What
+    separates the two is the contact normal: a near-vertical normal means the
+    body is sitting on the surface, and gravity puts it back there whatever the
+    intervention did. A near-horizontal one means the surface is in the way.
+    """
+    import numpy as np
+
+    c = traj.contacts
+    out = set()
+    for k in range(len(c)):
+        if int(c.frame[k]) < t_event:
+            continue
+        n = np.asarray(c.normal[k], float)
+        mag = float(np.linalg.norm(n))
+        if mag > 1e-9 and abs(float(n[2]) / mag) > SUPPORT_COS:
+            continue                      # resting on it
+        out.add((int(c.body_a[k]), int(c.body_b[k])))
+    return out
+
+
 def _pairs_after(traj, t_event):
     c = traj.contacts
     return {(int(a), int(b)) for f, a, b in
@@ -103,11 +132,25 @@ def test_a_prevented_collision_leaves_no_contact(work):
         if b.meta.get("contacts") != "simulated":
             continue
         te = int(blob["t_event_frame"])
-        lost = _pairs_after(a, te) - _pairs_after(b, te)
-        assert lost, (
-            "%s: the invalid clip kept every contact the valid one had -- the "
-            "body it was moved past or through is still stopping it"
-            % blob["family"])
+        before = _pairs_after(a, te)
+        culprits = {int(i) for i in blob["causal_body_ids"]}
+
+        # Only where there was something to prevent. A body teleported across
+        # flat ground still lands on the floor, and no contact is lost -- which
+        # is correct, not a failure. The claim is about an OBSTACLE: a wall the
+        # body was moved past, or a surface it was sent through. Floor contacts
+        # are excluded because gravity puts the body back on the floor either
+        # way.
+        obstacle = {p for p in _obstacle_pairs(a, te)
+                    if p[0] in culprits or p[1] in culprits}
+        if not obstacle:
+            continue
+
+        lost = before - _pairs_after(b, te)
+        assert lost & obstacle, (
+            "%s: the invalid clip kept every obstacle contact the valid one had "
+            "(%s) -- the body it was moved past or through is still stopping it"
+            % (blob["family"], sorted(obstacle)))
         checked += 1
     if not checked:
         pytest.skip("no simulated continuity/solidity variants present")

@@ -253,6 +253,27 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # `reference_mask` still says where it should have been.
     smap = sev_mod.paint(seg_i, {int(b): s_visible for b in dynamic_ids or [primary_id]},
                          active=visible)
+
+    # ONE exception, and only where the invalid side has nothing at all. A body
+    # that MOVED has pixels in the invalid render, so its lawful footprint stays
+    # unpainted -- that is the case you asked about and it behaves as you asked.
+    # A body that VANISHED has no invalid footprint anywhere, so invalid-only
+    # leaves the whole family unscoreable: `severity_t[t] == severity_map[t].max()`
+    # is a schema guarantee, so an empty map is a zero timeline, and `permanence`
+    # came out at severity 0.00 on all fourteen of its cells.
+    #
+    # Where there is no wrong place to confuse it with, "where it should have
+    # been" is the only honest localisation available, and it is exactly what
+    # reference_mask carries.
+    gone = visible & ~imask.any(axis=(1, 2))
+    if gone.any():
+        fallback = rmask & gone[:, None, None]
+        if fallback.any():
+            smap = smap.astype(np.float32)
+            broadcast = np.broadcast_to(
+                s_visible.astype(np.float32)[:, None, None], smap.shape)
+            smap = np.where(fallback & (smap == 0), broadcast, smap)
+        smap = smap.astype(np.float16)
     sev_t = sev_mod.temporal_profile(smap)
 
     tinfo = win_mod.build(plan_windows, T, seg_v, seg_i, dynamic_ids or causal_ids,

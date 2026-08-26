@@ -176,10 +176,15 @@ Severity and causal moved off the union deliberately. They answer "where is the 
 wrong", and at inference a model only ever has the invalid video — marking the object's
 lawful footprint asks it for pixels the question does not contain.
 
-**The accepted cost:** `permanence` and `dissolve` get an all-zero severity map once the body
-is gone. That is honest — there is no pixel evidence of severity where nothing is rendered —
-and `reference_mask` still says where it should have been. `violation_mask` keeps the union
-and keeps its pixels, so the training target is unaffected.
+**One exception, where the invalid side has nothing at all.** A body that *moved* has pixels
+in the invalid render, so its lawful footprint stays unpainted — `continuity` gets severity
+only where the object actually is. A body that *vanished* has no invalid footprint anywhere,
+and since `severity_t[t] == severity_map[t].max()` is a schema guarantee, an empty map is a
+zero timeline: `permanence` came out unscoreable on all fourteen of its cells. Where there is
+no wrong place to confuse it with, "where it should have been" is the only honest
+localisation, so severity falls back to `reference_mask` on exactly those frames.
+
+`violation_mask` keeps the union throughout, so the training target is unaffected.
 
 `causal_mask` level 2 is **measured**: bodies whose trajectory provably departs from the valid
 twin without being culprits themselves, which is the same comparison the bystander guard

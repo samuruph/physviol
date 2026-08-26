@@ -310,19 +310,27 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
 
 
 def _window_bar(f, c, t, T, x, by, width) -> None:
-    """Violation windows in red, observable windows in amber, playhead white."""
+    """All three clocks, in the overlay's colours and the overlay's order.
+
+    intervening (blue) is when we are changing something, consequence (red) is
+    when the scene is wrong as a result, observable (amber) is when a viewer
+    could tell. Drawing only the last two -- which is what this did -- makes a
+    `colour_shift` that finishes turning at frame 14 look like it goes on to the
+    end of the clip, because the union does.
+    """
     import cv2
-    cv2.rectangle(f, (x, by), (x + width - 1, by + 7), (40, 40, 48), -1)
-    for s, e in c["vwin"]:
-        cv2.rectangle(f, (x + int(s / T * width), by),
-                      (x + max(int((e + 1) / T * width) - 1,
-                               int(s / T * width) + 1), by + 7), ov.C_MASK, -1)
-    for s, e in c["owin"]:
-        cv2.rectangle(f, (x + int(s / T * width), by + 8),
-                      (x + max(int((e + 1) / T * width) - 1,
-                               int(s / T * width) + 1), by + 13), ov.C_OBS, -1)
+    rows = ((c.get("iwin") or c["vwin"], ov.C_INTERVENE),
+            (c.get("cwin") or c["vwin"], ov.C_MASK),
+            (c["owin"], ov.C_OBS))
+    for row, (wins, colour) in enumerate(rows):
+        ry = by + row * 5
+        cv2.rectangle(f, (x, ry), (x + width - 1, ry + 4), (40, 40, 48), -1)
+        for s, e in wins:
+            cv2.rectangle(f, (x + int(s / T * width), ry),
+                          (x + max(int((e + 1) / T * width) - 1,
+                                   int(s / T * width) + 1), ry + 4), colour, -1)
     px = x + min(width - 1, int((t + 0.5) / T * width))
-    cv2.line(f, (px, by - 2), (px, by + 14), (255, 255, 255), 1)
+    cv2.line(f, (px, by - 2), (px, by + 15), (255, 255, 255), 1)
 
 
 def _wrap(s: str, width: int) -> List[str]:
@@ -374,6 +382,8 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "tl": np.load(tlp) if os.path.exists(tlp) else None,
             "vwin": [tuple(w) for w in v.get("violation_windows", [])],
             "owin": [tuple(w) for w in v.get("observable_windows", [])],
+            "iwin": [tuple(w) for w in v.get("intervention_windows", [])],
+            "cwin": [tuple(w) for w in v.get("consequence_windows", [])],
             "lag": v.get("observability_lag_frames"),
             "mag": (v.get("intervention") or {}).get("magnitude"),
             "mag_unit": (v.get("intervention") or {}).get("magnitude_unit", ""),

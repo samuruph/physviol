@@ -29,7 +29,7 @@ from . import video as vid
 
 PANEL = 288                      # each panel is rendered at this size
 HEADER = 34
-TIMELINE = 78
+TIMELINE = 84
 PAD = 6
 
 C_BG = (18, 18, 22)
@@ -71,6 +71,8 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 
     vwin = [tuple(w) for w in v.get("violation_windows", [])]
     owin = [tuple(w) for w in v.get("observable_windows", [])]
+    iwin = [tuple(w) for w in v.get("intervention_windows", [])]
+    cwin = [tuple(w) for w in v.get("consequence_windows", [])]
     t_event = int(v.get("t_event_frame", -1))
     t_obs = int(v.get("t_observable_frame", -1))
     t_end = int(v.get("t_end_frame", -1))
@@ -148,7 +150,7 @@ def build(clip_dir: str, out_path: Optional[str] = None,
 
         _header(f, W, meta, t, T, active, observable, occluded)
         _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end,
-                  float(tl["severity_t"][t]), peak, v)
+                  float(tl["severity_t"][t]), peak, v, iwin, cwin)
         out[t] = f
 
     out_path = out_path or os.path.join(clip_dir, "overlay.mp4")
@@ -331,7 +333,14 @@ def _header(f, W, meta, t, T, active, observable, occluded):
         _text(f, mid, (lx, 22), C_DIM, 0.46, 1)
 
 
-def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v):
+#: The intervention bar. Deliberately a different hue from the consequence bar:
+#: they overlap at the start and the eye needs to separate "we are changing
+#: something" from "the scene is wrong as a result".
+C_INTERVENE = (120, 200, 255)
+
+
+def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
+              iwin=None, cwin=None):
     import cv2
     y0 = H - TIMELINE + 4
     x0, x1 = PAD + 2, W - PAD - 2
@@ -340,18 +349,28 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v):
     def fx(frame):
         return int(x0 + (frame / max(T, 1)) * span)
 
-    _text(f, "violation window", (x0, y0 + 10), C_MASK, 0.42, 1)
-    _text(f, "observable", (x0 + 150, y0 + 10), C_OBS, 0.42, 1)
+    # THREE clocks, not two. The split is in the data but was not drawn, so a
+    # `colour_shift` whose intervention ends at frame 14 still looked like it
+    # ran to frame 24 -- the bar being shown was the union, which does.
+    iwin = iwin if iwin else vwin
+    cwin = cwin if cwin else vwin
+    rows = [("intervening", iwin, C_INTERVENE),
+            ("consequence", cwin, C_MASK),
+            ("observable", owin, C_OBS)]
+    lx = x0
+    for label, _wins, colour in rows:
+        _text(f, label, (lx, y0 + 10), colour, 0.40, 1)
+        lx += _w(label, 0.40) + 14
 
-    for (label, wins, color, row) in (("v", vwin, C_MASK, 0), ("o", owin, C_OBS, 1)):
-        ry = y0 + 16 + row * 13
-        cv2.rectangle(f, (x0, ry), (x1, ry + 10), (40, 40, 48), -1)
+    for row, (_label, wins, color) in enumerate(rows):
+        ry = y0 + 16 + row * 9
+        cv2.rectangle(f, (x0, ry), (x1, ry + 7), (40, 40, 48), -1)
         for s, e in wins:
-            cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 10),
+            cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
                           color, -1)
 
     # frame ticks every frame, labelled every 4
-    ty = y0 + 42
+    ty = y0 + 45
     for i in range(T):
         cv2.line(f, (fx(i), ty), (fx(i), ty + 4), (90, 90, 100), 1)
         if i % 4 == 0:
@@ -360,7 +379,10 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v):
     # Markers. Clocks that land on the same frame -- t_event == t_obs is the
     # common case whenever nothing occludes the culprit -- are merged into one
     # label rather than overprinted.
-    marks = [(t_event, "t_event", C_MASK), (t_obs, "t_obs", C_OBS),
+    t_iend = max((e for _, e in iwin), default=t_event)
+    marks = [(t_event, "t_event", C_INTERVENE),
+             (t_iend, "t_applied", C_INTERVENE),
+             (t_obs, "t_obs", C_OBS),
              (t_end, "t_end", (170, 170, 210))]
     by_frame = {}
     for frame, tag, col in marks:
@@ -370,7 +392,7 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v):
         tags = by_frame[frame]
         col = tags[0][1]
         label = "=".join(t for t, _ in tags)
-        cv2.line(f, (fx(frame), y0 + 16), (fx(frame), ty + 4), col, 1)
+        cv2.line(f, (fx(frame), y0 + 14), (fx(frame), ty + 4), col, 1)
         tw = _w(label, 0.36)
         tx = fx(frame) + 3
         if tx + tw > x1:
@@ -382,9 +404,9 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v):
     cv2.line(f, (px, y0 + 14), (px, ty + 5), (255, 255, 255), 1)
 
     lag = v.get("observability_lag_frames", 0)
-    info = ("t_event=%d  t_obs=%d  t_end=%d  lag=%d  |  severity(t)=%.3f  "
-            "peak=%.3f  r=%.3f (%s)"
-            % (t_event, t_obs, t_end, lag, sev_t,
+    info = ("t_event=%d  applied_to=%d  t_obs=%d  t_end=%d  lag=%d  |  "
+            "severity(t)=%.3f  peak=%.3f  r=%.3f (%s)"
+            % (t_event, t_iend, t_obs, t_end, lag, sev_t,
                float(peak.get("score", 0.0)), float(peak.get("value", 0.0)),
                peak.get("law", "-")))
     _text(f, info, (x0, H - 6), C_TEXT, 0.44, 1)

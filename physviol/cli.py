@@ -190,6 +190,20 @@ def cmd_generate(a) -> int:
         return {"scenario": scenario, "seed": seed, "rc": 0, "info": info,
                 "results": results, "bad": bad}
 
+    done_count = {"n": 0}
+
+    def run_and_report(job):
+        out = run_one(job)
+        done_count["n"] += 1
+        # A progress line as each job lands. The parallel path used to collect
+        # every outcome before printing anything, so a twenty-minute run showed
+        # nothing at all until it finished. The ordered results still print
+        # afterwards, so the transcript stays identical at any worker count.
+        print("  [%d/%d] %-16s seed=%-6d %s"
+              % (done_count["n"], len(jobs), out["scenario"], out["seed"],
+                 "ok" if out["rc"] == 0 else "FAILED"), flush=True)
+        return out
+
     workers = max(1, int(getattr(a, "workers", 1) or 1))
     if workers > 1 and len(jobs) > 1:
         # The FIRST job runs alone. Kubric fetches its assets from
@@ -199,12 +213,12 @@ def cmd_generate(a) -> int:
         # carried on under --keep-going without anyone noticing. One serial job
         # populates the cache; everything after it reads.
         from concurrent.futures import ThreadPoolExecutor
-        outcomes = [run_one(jobs[0])]
+        outcomes = [run_and_report(jobs[0])]
         if len(jobs) > 1:
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                outcomes += list(pool.map(run_one, jobs[1:]))
+                outcomes += list(pool.map(run_and_report, jobs[1:]))
     else:
-        outcomes = [run_one(j) for j in jobs]
+        outcomes = [run_and_report(j) for j in jobs]
 
     # Reported in job order, not completion order, so two runs at different
     # worker counts produce the same transcript.
