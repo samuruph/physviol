@@ -240,7 +240,13 @@ class Fission(Injector):
         if t0 is None or not (1 <= t0 < T - 1):
             return None
 
-        heading = float(rng.uniform(0.0, 2.0 * np.pi))
+        # Direction is a property of the SCENE, not of the bin. Drawn from
+        # the per-bin rng it came out different for weak, medium and strong,
+        # so the three were three different violations and their magnitudes
+        # stopped being comparable -- phantom_impulse reported 0.87 / 2.08 /
+        # 1.95 for bins that scale 1.0 / 2.4 / 4.5, because each heading got
+        # its own frustum-fit scale.
+        heading = float(self._instance_rng(spec).uniform(0.0, 2.0 * np.pi))
         unit = np.array([np.cos(heading), np.sin(heading), 0.0])
         twin_spec = [actor, twin]
         half_scale = self.SCALE_BY_BIN[severity_bin]

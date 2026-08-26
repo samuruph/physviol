@@ -38,9 +38,17 @@ class NoiseFloor:
     def z(self, r: np.ndarray) -> np.ndarray:
         return (np.asarray(r, np.float64) - self.mu) / self.sigma_eff
 
-    def to_dict(self) -> Dict[str, float]:
-        return {"mu": float(self.mu), "sigma": float(self.sigma),
-                "sigma_eff": float(self.sigma_eff), "n_samples": int(self.n_samples)}
+    def to_dict(self, r_strong: Optional[float] = None) -> Dict[str, float]:
+        out = {"mu": float(self.mu), "sigma": float(self.sigma),
+               "sigma_eff": float(self.sigma_eff),
+               "n_samples": int(self.n_samples)}
+        # The family's residual at its `strong` bin -- the scale every severity
+        # is divided by. It was reaching meta.json as null, which left a reader
+        # unable to tell whether a score of 0.4 meant a weak violation or a
+        # strong one measured against a large reference.
+        if r_strong is not None:
+            out["r_strong"] = float(r_strong)
+        return out
 
     @staticmethod
     def calibrate(valid_residuals: Sequence[np.ndarray]) -> "NoiseFloor":
@@ -101,9 +109,24 @@ def bounded_score(r: np.ndarray, floor: NoiseFloor, r_strong: float,
     if baseline is None:
         denom = max(float(r_strong) - floor.mu, 1e-9)
         return np.clip((r - floor.mu) / denom, 0.0, 1.0)
+
+    # ABSOLUTE departure from the twin, not a one-sided excess. A violation can
+    # move a residual either way, and half the taxonomy moves it *down*:
+    # `newton1_inertia` stops a body dead, so its momentum residual falls below
+    # the twin's and `max(0, r - base)` scored it as exactly nothing. Four
+    # families shipped at severity 0.000 for this reason -- newton1_inertia,
+    # phantom_impulse, newton2_mass and newton3_reaction, all of them on
+    # `linear_momentum`.
     base = np.asarray(baseline, np.float64)
-    denom = max(float(r_strong) - float(floor.mu), 1e-9)
-    return np.clip(np.maximum(0.0, r - base) / denom, 0.0, 1.0)
+
+    # The floor does NOT belong in the denominator here. Subtracting the twin
+    # frame by frame has already removed it, and subtracting it a second time
+    # is what made this negative: `linear_momentum` has r_strong 5.5 against a
+    # floor mu of 22 -- because Kubric reports contact force rather than impulse
+    # and a resting body reads ~20 -- so the denominator clamped to 1e-9 and
+    # every nonzero difference saturated at 1.0, flattening the severity ladder.
+    denom = max(float(r_strong), 1e-9)
+    return np.clip(np.abs(r - base) / denom, 0.0, 1.0)
 
 
 def paint(seg: np.ndarray, score_by_body: Dict[int, np.ndarray],

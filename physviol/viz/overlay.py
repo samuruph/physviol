@@ -126,6 +126,12 @@ def build(clip_dir: str, out_path: Optional[str] = None,
                 ids = [int(u) for u in np.unique(seg[t]) if u]
                 _text(f, "ids %s" % ",".join(map(str, ids[:8])),
                       (x + 5, y + panel - 8), C_DIM, 0.36, 1)
+            if kind == "flow" and flow is not None and t >= len(flow) - 1:
+                # Kubric writes zeros here: forward flow at the last frame has
+                # no next frame to point at. Saying so beats rendering a black
+                # square that looks like a broken pass.
+                _text(f, "undefined at last frame", (x + 5, y + panel - 8),
+                      C_DIM, 0.36, 1)
             if kind == "depth" and depth is not None:
                 d = np.asarray(depth[t], np.float32)
                 d = d[..., 0] if d.ndim == 3 else d
@@ -166,6 +172,23 @@ SEG_PALETTE = [
 #: Depth beyond this is the renderer's "nothing here" sentinel (~1e10), not a
 #: distance. Anything past it is background and must not enter the normalisation.
 DEPTH_SENTINEL = 1e6
+
+
+_FLOW_SCALE_CACHE: Dict[int, float] = {}
+
+
+def _flow_scale(flow) -> float:
+    """One magnitude scale for the whole clip, from a high percentile.
+
+    The 99th rather than the max, so a couple of edge pixels at a silhouette --
+    where flow is undefined and can be enormous -- do not black out the body
+    they belong to.
+    """
+    key = id(flow)
+    if key not in _FLOW_SCALE_CACHE:
+        mag = np.linalg.norm(np.asarray(flow, np.float32), axis=-1)
+        _FLOW_SCALE_CACHE[key] = max(float(np.percentile(mag, 99.0)), 1e-6)
+    return _FLOW_SCALE_CACHE[key]
 
 
 def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None,
@@ -228,15 +251,22 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None,
         # The standard flow wheel: hue is direction, value is magnitude. Our
         # flow is (row, col), so the angle is atan2(col, row) to read as screen
         # direction rather than transposed.
+        #
+        # Scaled over the WHOLE clip, not per frame. Per-frame normalisation
+        # makes the colour scale jump between frames, so a body at constant
+        # speed changes brightness for no reason -- and it degenerates entirely
+        # on the terminal frame, where forward flow is all zeros because there
+        # is no frame T to flow to.
         fl = np.asarray(flow[t], np.float32)
         mag = np.linalg.norm(fl, axis=-1)
+        scale = _flow_scale(flow)
         ang = np.arctan2(fl[..., 1], fl[..., 0])
         hsv = np.zeros(base.shape, np.uint8)
         hsv[..., 0] = ((ang + np.pi) / (2 * np.pi) * 179).astype(np.uint8)
         hsv[..., 1] = 255
-        hsv[..., 2] = np.clip(mag / max(float(mag.max()), 1e-6) * 255,
-                              0, 255).astype(np.uint8)
+        hsv[..., 2] = np.clip(mag / scale * 255, 0, 255).astype(np.uint8)
         img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB).astype(np.float32)
+        img = img * 0.9 + base * 0.1
     elif kind == "normals":
         img = (np.asarray(normals[t], np.float32) / 65535.0 * 255.0)
     elif kind == "energy":
@@ -533,8 +563,14 @@ def _energy_curve(f, x, y, size, t, trace, twin=None):
         _text(f, "valid", (lx, by + 11), C_REF, 0.34, 1)
         _text(f, "this", (lx + 6 + _w("valid", 0.34), by + 11),
               (255, 120, 120), 0.34, 1)
-    peak = max(float(trace["free_anomaly"][t]), float(trace["contact_anomaly"][t]),
-               float(trace["excess_loss"][t]))
+    # Name the channel instead of signing the number. All three are
+    # non-negative by construction, so "%+.0f%%" printed a plus on every frame
+    # and told the reader nothing -- and which channel fired is the part that
+    # distinguishes energy appearing from energy vanishing.
+    channels = (("gain", float(trace["contact_anomaly"][t])),
+                ("uncaused", float(trace["free_anomaly"][t])),
+                ("loss", float(trace["excess_loss"][t])))
+    name, peak = max(channels, key=lambda kv: kv[1])
     if peak > 0.01:
-        _text(f, "anomaly %+.0f%%" % (100 * peak), (bx + 3, by + h - 4),
+        _text(f, "%s %.0f%%" % (name, 100 * peak), (bx + 3, by + h - 4),
               (255, 120, 120), 0.36, 1)

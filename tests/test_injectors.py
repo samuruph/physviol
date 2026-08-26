@@ -2,6 +2,7 @@
 import numpy as np
 import pytest
 
+import mockroll
 from physviol import injectors, scenarios
 from physviol.scenarios import TIERS
 from physviol.sim.trajectory import Contacts, Trajectory, prefix_identical
@@ -257,3 +258,27 @@ def test_newton2_needs_visually_identical_bodies():
         a, b = [x for x in spec.bodies if x.role == "actor" and not x.dormant]
         assert a.scale == b.scale, seed
         assert a.color == b.color, seed
+
+
+@pytest.mark.parametrize("scenario", ["collision", "drop", "barrier_pass", "toss"])
+@pytest.mark.parametrize("family", ["phantom_impulse", "continuity"])
+def test_only_the_magnitude_varies_across_bins(scenario, family):
+    """Weak, medium and strong must be three strengths of ONE violation.
+
+    Direction is a property of the scene, not of the bin. Drawn from the per-bin
+    rng it came out different for each, so the three were three different
+    violations and their magnitudes stopped being comparable: `phantom_impulse`
+    reported 0.87 / 2.08 / 1.95 for bins that scale 1.0 / 2.4 / 4.5, because
+    every heading got its own frustum-fit scale.
+    """
+    sc = scenarios.get(scenario)
+    spec = sc.sample(777, TIERS["debug"], "L0")
+    traj = mockroll.roll(spec, sc)
+    inj = injectors.get(family)
+    plans = [inj.plan(spec, traj, np.random.RandomState(0), s)
+             for s in ("weak", "medium", "strong")]
+    if any(p is None for p in plans):
+        pytest.skip("%s does not stage %s" % (scenario, family))
+    mags = [float(p.magnitude) for p in plans]
+    assert mags[0] <= mags[1] <= mags[2], mags
+    assert plans[0].causal_body_ids == plans[2].causal_body_ids

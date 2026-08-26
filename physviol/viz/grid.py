@@ -287,12 +287,19 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
                                       int(src[t].sum())),
                      (x + 4, y + cell - 6), ov.C_DIM, 0.33, 1)
     elif kind == "energy" and c.get("etrace") is not None:
+        # The full curve, both lines and the colour key -- the same panel the
+        # single-clip overlay draws. The compact one-line form was dropping the
+        # comparison against the valid twin, which is the whole point: a number
+        # says the clip holds 77 J, the curve says it climbed there from 26.
         tr = c["etrace"]
-        if compact:
-            ov._text(f, "E %.1fJ" % float(tr["total"][t]), (x + 4, y + cell - 6),
-                     (255, 255, 255), 0.35, 1)
+        if c["is_valid"]:
+            ov._text(f, "E %.1fJ  (baseline)" % float(tr["total"][t]),
+                     (x + 4, y + cell - 6), ov.C_REF, 0.35, 1)
         else:
-            ov._energy_curve(f, x, y, cell, t, tr)
+            ov._energy_scale(f, x, y, cell,
+                             float(np.abs(c["energy"][t]).max())
+                             if c.get("energy") is not None else None)
+            ov._energy_curve(f, x, y, cell, t, tr, c.get("twin_etrace"))
     elif kind == "sev" and c["tl"] is not None:
         sv = float(c["tl"]["severity_t"][t])
         if compact:
@@ -356,6 +363,8 @@ def _collect(pair_dir: str, family: Optional[str]) -> List[Dict]:
             "energy": (lambda a: None if a is None else a.astype(np.float32))(
                 ov._npz(cdir, "energy_map.npz", "energy")),
             "etrace": ov._energy_trace(cdir),
+            "twin_etrace": ov._energy_trace(
+                os.path.join(os.path.dirname(cdir), "valid")),
             "seg": ov._npz(cdir, "seg.npz", "seg"),
             "depth": ov._npz(cdir, "depth.npz", "depth"),
             "flow": ov._npz(cdir, "flow_fwd.npz", "flow_fwd"),

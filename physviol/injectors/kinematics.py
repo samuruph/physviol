@@ -284,7 +284,14 @@ class Continuity(Injector):
             return None
         radius = float(actor.bounding_radius)
         jump_r = self.JUMP_RADII[severity_bin]
-        direction = np.array([1.0, 0.0, 0.0]) * float(rng.choice([-1.0, 1.0]))
+        # Direction is a property of the SCENE, not of the bin. Drawn from
+        # the per-bin rng it came out different for weak, medium and strong,
+        # so the three were three different violations and their magnitudes
+        # stopped being comparable -- phantom_impulse reported 0.87 / 2.08 /
+        # 1.95 for bins that scale 1.0 / 2.4 / 4.5, because each heading got
+        # its own frustum-fit scale.
+        direction = np.array([1.0, 0.0, 0.0]) * float(
+            self._instance_rng(spec).choice([-1.0, 1.0]))
         nominal = direction * jump_r * radius
         # A teleport big enough to leave the frame depicts an object vanishing,
         # which is `permanence`, not `continuity`. Shorten it until both lobes

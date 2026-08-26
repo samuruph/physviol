@@ -45,7 +45,13 @@ class PhantomImpulse(Injector):
         if not (1 <= t0 < T - 1):
             return None
 
-        heading = float(rng.uniform(0.0, 2.0 * np.pi))
+        # Direction is a property of the SCENE, not of the bin. Drawn from
+        # the per-bin rng it came out different for weak, medium and strong,
+        # so the three were three different violations and their magnitudes
+        # stopped being comparable -- phantom_impulse reported 0.87 / 2.08 /
+        # 1.95 for bins that scale 1.0 / 2.4 / 4.5, because each heading got
+        # its own frustum-fit scale.
+        heading = float(self._instance_rng(spec).uniform(0.0, 2.0 * np.pi))
         # Mostly sideways with a little lift: a purely horizontal shove on a
         # resting body is easy to mistake for a nudge from off screen, while a
         # visible hop is unmistakably uncaused.

@@ -206,6 +206,7 @@ def _set_visibility(renderer, obj, body) -> None:
 # --------------------------------------------------------------------------
 def simulate(spec, scene, simulator, objs) -> Trajectory:
     T = spec.tier.num_frames
+    steps_per_frame = max(int(scene.step_rate) // max(int(scene.frame_rate), 1), 1)
     animation, collisions = simulator.run(frame_start=0, frame_end=T - 1)
 
     order = [b.name for b in spec.bodies]
@@ -240,7 +241,21 @@ def simulate(spec, scene, simulator, objs) -> Trajectory:
         cb.append(seg_of[name_of_obj[b_obj]])
         cp.append(c["position"])
         cn.append(c["contact_normal"])
-        ci.append(float(c["force"]))
+        # FRAME-AVERAGED normal force, not the substep sum.
+        #
+        # Kubric records one contact row per *substep* -- 20 per frame at the
+        # 240 Hz step rate -- and rounding `frame` to an integer collapses all
+        # twenty onto the same frame, where `laws.linear_momentum` sums them.
+        # That inflated a resting body's contact force twentyfold: 1 kg at rest
+        # is 9.81 N, summed to 196 N, which through F*dt / (m*|g|*dt) reads as a
+        # momentum residual of ~20. That number is exactly the noise floor the
+        # `linear_momentum` families were being scored against, and it is why
+        # newton1_inertia, phantom_impulse and both newton2/3 shipped at
+        # severity 0.000 -- their real signal of 1-3 sat far underneath it.
+        #
+        # Dividing by the substep count makes the stored value a force again, so
+        # F*dt is the impulse actually delivered over the frame.
+        ci.append(float(c["force"]) / max(steps_per_frame, 1))
     n = len(cf)
     contacts = Contacts(
         np.asarray(cf, np.int32) if n else np.zeros((0,), np.int32),

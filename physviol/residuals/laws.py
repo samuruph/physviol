@@ -168,10 +168,20 @@ def linear_momentum(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
             f = int(c.frame[k])
             if not (0 <= f < traj.num_frames):
                 continue
+            # SIGN. PyBullet's `contactNormalOnB` points from B towards A, and
+            # Kubric hands the pair back swapped, so our stored normal points
+            # from `body_a` towards `body_b`. The force that contact exerts *on
+            # body_a* is therefore along MINUS the stored normal.
+            #
+            # With the signs the other way round the contact force added to
+            # gravity instead of cancelling it, and a body simply resting on the
+            # floor read `2*m*g*dt / (m*g*dt)` = 2.0 on every frame of a
+            # perfectly lawful clip. That constant bias is what the noise floor
+            # was calibrated against, and it swamped real signals of 1-3.
             if int(c.body_a[k]) == bid:
-                f_contact[f] += c.normal[k].astype(np.float64) * float(c.impulse[k])
-            elif int(c.body_b[k]) == bid:
                 f_contact[f] -= c.normal[k].astype(np.float64) * float(c.impulse[k])
+            elif int(c.body_b[k]) == bid:
+                f_contact[f] += c.normal[k].astype(np.float64) * float(c.impulse[k])
 
     resid = m * dv - (f_contact + m * g[None, :]) * dt
     denom = max(m * float(np.linalg.norm(g)) * dt, 1e-9)

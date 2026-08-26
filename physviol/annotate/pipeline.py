@@ -324,7 +324,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
                            tinfo, floor, law_name, r_invalid, s_invalid, family,
                            scenario, seed, primary_id, sev_bin, prefix_diff,
                            energy_summary,
-                           _instance_table(spec_d, plan_d, seg_here))
+                           _instance_table(spec_d, plan_d, seg_here), r_strong)
         with open(os.path.join(cdir, "meta.json"), "w") as fh:
             json.dump(meta, fh, indent=2, sort_keys=True)
         written[label] = cdir
@@ -344,7 +344,7 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             "peak_score": float(s_invalid.max()),
             "peak_severity": float(sev_t.max()),
             "mask": masks_mod.summarise(vmask),
-            "noise_floor": floor.to_dict()}
+            "noise_floor": floor.to_dict(r_strong)}
 
 
 def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
@@ -387,8 +387,8 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
                 floor, law_name, r_inv, s_inv, family, scenario, seed,
                 primary_id, sev_bin, prefix_diff: int = 0,
                 energy_summary: Optional[Dict[str, float]] = None,
-                instances: Optional[List[Dict[str, object]]] = None
-                ) -> Dict[str, object]:
+                instances: Optional[List[Dict[str, object]]] = None,
+                r_strong: Optional[float] = None) -> Dict[str, object]:
     instances = instances or []
     seg_names = [("0", "background")] + [
         (str(i["id"]), i["name"]) for i in instances]
@@ -439,7 +439,7 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
             "prefix_identical_upto_frame": tinfo["t_event_frame"],
         },
         "energy": energy_summary or {},
-        "noise_floor": {law_name: floor.to_dict()},
+        "noise_floor": {law_name: floor.to_dict(r_strong)},
         "real2sim": None,
     }
     if label == "invalid":

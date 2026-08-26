@@ -57,7 +57,7 @@ class Shadow(Injector):
                 else np.array([1.0, 0.0]))
         offset = (self.OFFSET_RADII[severity_bin]
                   * float(caster.bounding_radius)
-                  * perp * float(rng.choice([-1.0, 1.0])))
+                  * perp * float(self._instance_rng(spec).choice([-1.0, 1.0])))
 
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0, windows=[(t0, t1)],
