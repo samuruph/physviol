@@ -57,9 +57,23 @@ def measure_clip(cdir: str) -> Dict[str, object]:
 
 
 def is_invisible(row: Dict[str, object]) -> bool:
+    """Nothing happened that a viewer could see."""
     return (float(row["peak_severity"]) < MIN_SEVERITY
             and int(row["observable_frames"]) < MIN_OBSERVABLE_FRAMES
             and float(row["evidence"]) < MIN_EVIDENCE)
+
+
+def is_unscored(row: Dict[str, object]) -> bool:
+    """Something visibly happened and the annotation reports nothing.
+
+    The more dangerous of the two, and the one the first audit actually found.
+    An invisible cell ships a label with no picture; an unscored one ships a
+    picture with a severity of zero, which trains a model that a clearly wrong
+    clip is fine. Both belong in NOT_MEANINGFUL unless the residual can be made
+    to see the violation.
+    """
+    return (float(row["evidence"]) >= MIN_EVIDENCE
+            and float(row["peak_severity"]) < MIN_SEVERITY)
 
 
 def audit(release_root: str) -> List[Dict[str, object]]:

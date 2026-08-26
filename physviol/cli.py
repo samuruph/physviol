@@ -356,12 +356,24 @@ def cmd_audit(a) -> int:
     measures severity, observability and pixel evidence per cell so the decision
     to drop one is a number rather than an opinion.
     """
-    from .annotate.audit import audit, is_invisible
+    from .annotate.audit import audit, is_invisible, is_unscored
 
     rows = audit(a.root)
     if not rows:
         print("no invalid clips under %s" % a.root, file=sys.stderr)
         return 2
+
+    unscored = [r for r in rows if is_unscored(r)]
+    if unscored:
+        print("%d clip(s) VISIBLY WRONG BUT SCORED ZERO -- a picture with no "
+              "label, which is worse than no clip:\n" % len(unscored))
+        print("%-16s %-18s %-7s %8s %9s" % ("scenario", "family", "bin",
+                                            "severity", "evidence"))
+        for r in unscored:
+            print("%-16s %-18s %-7s %8.3f %9.4f" % (
+                r["scenario"], r["family"], r["severity_bin"],
+                r["peak_severity"], r["evidence"]))
+        print()
 
     flagged = [r for r in rows if is_invisible(r)]
     weak = sorted((r for r in rows if not is_invisible(r)),
