@@ -84,6 +84,24 @@ class PhantomImpulse(Injector):
         self._rewrite_from(spec, traj, out, actor, t0, v0=v0)
         return out
 
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        """Add the impulse to the body's live velocity, then let physics run.
+
+        Nothing about the shove needs prescribing beyond the instant it
+        happens: where the body goes afterwards is whatever gravity, the floor
+        and anything it hits decide, which is the point.
+        """
+        dv = np.asarray(plan.params["delta_v"], np.float64)
+        for bid in plan.causal_body_ids:
+            body = next(b for b in spec.bodies
+                        if int(b.segmentation_id) == int(bid))
+            obj = objs[body.name]
+            obj.velocity = tuple(float(x) for x in
+                                 np.asarray(obj.velocity, np.float64) + dv)
+        return ()
+
     def _apply(self, spec, traj, plan) -> Trajectory:
         push = np.asarray(plan.params["delta_v"], np.float64)
         by_id = {int(b.segmentation_id): b for b in spec.bodies}

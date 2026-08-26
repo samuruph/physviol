@@ -146,6 +146,63 @@ class Injector:
              severity_bin: str) -> Optional[InterventionPlan]:
         raise NotImplementedError
 
+    #: True when this family can express itself as a change the SIMULATOR
+    #: honours, so the worker re-runs PyBullet from `t_event` instead of
+    #: re-integrating the edited trajectory by hand. See `stage`.
+    simulated = False
+
+    def simulates(self, plan: InterventionPlan) -> bool:
+        """Whether THIS plan takes the simulated path.
+
+        Per plan, not per class: `solidity` stages a two-body pass-through as a
+        disabled collision pair, but its granular `sink_group` mode removes the
+        floor under forty grains at once, which is a scene edit rather than one
+        pair. A class-level flag would have sent that plan down the simulated
+        path to a stage() that does nothing, and the violation would simply not
+        have happened.
+        """
+        return self.simulated
+
+    def stage(self, spec, simulator, objs, plan: InterventionPlan):
+        """Apply the intervention to the live physics world at `t_event`.
+
+        Returns a list of per-step hooks (possibly empty). The world has already
+        been reset to the valid state at `plan.t_event`, and the caller runs
+        PyBullet forward afterwards, so anything set here is the *initial
+        condition* of the violation rather than a prescribed outcome.
+
+        The point of the seam. A family that stages itself gets real contacts:
+        a teleported body genuinely misses the wall it was moved past, two balls
+        genuinely touch before they exchange momentum, and a pass-through is a
+        disabled collision pair rather than a written-in overlap.
+        """
+        raise NotImplementedError
+
+    def unstage(self, spec, simulator, objs, plan: InterventionPlan) -> None:
+        """Undo whatever `stage` changed about the world.
+
+        **Not optional.** One scene serves every family and every severity in a
+        worker run, and a `changeDynamics` or a disabled collision pair persists
+        exactly the way a stray keyframe does. Three separate cross-family leaks
+        have already been traced to state nobody reset; this is the same hazard
+        one layer down.
+        """
+        return None
+
+    def post_simulate(self, spec, traj_valid: Trajectory,
+                      traj_invalid: Trajectory,
+                      plan: InterventionPlan) -> Trajectory:
+        """Non-physical channels, applied after the re-simulation.
+
+        PyBullet knows nothing about colour, opacity or a body's declared
+        presence, so a family whose violation has both a physical and a visual
+        part writes the visual part here. Most simulated families need nothing.
+        """
+        traj_invalid.meta = dict(traj_invalid.meta)
+        traj_invalid.meta["intervention"] = plan.to_dict()
+        traj_invalid.meta["label"] = "invalid"
+        return traj_invalid
+
     def _apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
         """Family-specific edit. Implemented by every subclass."""
         raise NotImplementedError

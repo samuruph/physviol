@@ -75,8 +75,19 @@ beyond `physviol/render/worker_smoke.py`.
    inference a model only has the invalid video. The cost is accepted and documented:
    `permanence` and `dissolve` get an all-zero severity map, with `reference_mask` carrying
    where the body should have been.
-4. **Injectors edit trajectories, never the sim rng.** Otherwise the twin diverges from
-   frame 0 and (1) breaks.
+4. **Injectors never touch the sim rng.** Otherwise the twin diverges from frame 0 and (1)
+   breaks. A family may take either of two paths after `t_event`:
+   - **staged** (`Injector.simulates(plan)`): the world is reset to the valid state at
+     `t_event`, the intervention is applied as something PyBullet honours — a velocity, a
+     mass, a disabled collision pair — and the simulator runs forward. Real contacts.
+     `stage()` must have a matching `unstage()`, because one scene serves every family in a
+     run and a `changeDynamics` persists exactly the way a stray keyframe does.
+   - **edited**: the finished trajectory is rewritten and re-integrated by `_rewrite_from`.
+     Approximate contacts, and the only option for families PyBullet cannot express —
+     `immutability` and `deformation`, whose collision shapes are fixed at creation.
+
+   Either way frames before `t_event` are the valid rollout verbatim, so (1) holds by
+   construction.
 5. **Look at the clips before scaling.** Overlay video with mask, severity and all three
    clocks burned in, every phase, before generating more.
 6. **Generated output never enters git.** `data/ renders/ out/ clips/ *.npz *.mp4` are

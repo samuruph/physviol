@@ -29,6 +29,7 @@ from kubric.simulator import PyBullet
 
 from physviol import injectors
 from physviol import scenarios
+from physviol.render import stepper
 from physviol.scenarios.base import SceneSpec, Tier
 from physviol.sim.trajectory import Contacts, Trajectory, prefix_identical
 
@@ -478,7 +479,27 @@ def main() -> int:
                 variants.append({"family": family, "severity": sev, "ok": False,
                                  "error": "injector produced no plan"})
                 continue
-            traj_invalid = inj.apply(spec, traj_valid, plan)
+            if inj.simulates(plan):
+                # Real physics from t_event: reset the world to the valid state,
+                # stage the intervention as something PyBullet honours, run
+                # forward, then undo the staging so the next variant starts
+                # clean. Frames before t_event come from the valid rollout
+                # verbatim, so prefix identity holds by construction.
+                try:
+                    stepper.reset_to(spec, objs, traj_valid, plan.t_event)
+                    hooks = inj.stage(spec, simulator, objs, plan) or ()
+                    tail = stepper.run_from(simulator, scene, spec, objs,
+                                            plan.t_event, spec.tier.num_frames - 1,
+                                            hooks)
+                    traj_invalid = stepper.splice(traj_valid, tail, plan.t_event)
+                finally:
+                    inj.unstage(spec, simulator, objs, plan)
+                    stepper.reset_to(spec, objs, traj_valid,
+                                     spec.tier.num_frames - 1)
+                traj_invalid = inj.post_simulate(spec, traj_valid, traj_invalid,
+                                                 plan)
+            else:
+                traj_invalid = inj.apply(spec, traj_valid, plan)
 
             ok, why = prefix_identical(traj_valid, traj_invalid, plan.t_event)
             if not ok:

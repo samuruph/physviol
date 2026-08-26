@@ -370,6 +370,53 @@ class Solidity(Injector):
         return out
 
     # ------------------------------------------------------------------ #
+    #: Only the two-body mode. `sink_group` removes the floor under ~40 grains
+    #: at once, which is a scene edit rather than one disabled pair, and it
+    #: stays on the trajectory path.
+    simulated = True
+
+    def simulates(self, plan) -> bool:
+        return (plan.params.get("mode") != "sink_group"
+                and len(plan.params.get("pair", ())) == 2)
+
+    def _stageable(self, plan) -> bool:
+        return self.simulates(plan)
+
+    def stage(self, spec, simulator, objs, plan):
+        """Turn the collision pair off and let the body go where it goes.
+
+        The violation is that two surfaces did not stop each other, so the
+        honest way to say it is to stop PyBullet from enforcing that pair --
+        not to write in an overlap and hope the re-integrator does not undo it.
+        You reported the window ending while the ball was still inside the wall;
+        with the pair disabled the ball travels through under its own momentum
+        and the geometry decides when it is out.
+        """
+        if not self._stageable(plan):
+            return ()
+        import pybullet as pb
+        from ..render import stepper
+
+        a, b = plan.params["pair"]
+        ia = stepper.pybullet_index(simulator, objs, spec, int(a))
+        ib = stepper.pybullet_index(simulator, objs, spec, int(b))
+        if ia is None or ib is None:
+            return ()
+        pb.setCollisionFilterPair(ia, ib, -1, -1, 0)
+        return ()
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        if not self._stageable(plan):
+            return
+        import pybullet as pb
+        from ..render import stepper
+
+        a, b = plan.params["pair"]
+        ia = stepper.pybullet_index(simulator, objs, spec, int(a))
+        ib = stepper.pybullet_index(simulator, objs, spec, int(b))
+        if ia is not None and ib is not None:
+            pb.setCollisionFilterPair(ia, ib, -1, -1, 1)
+
     def _apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:
         actor_id = int(plan.causal_body_ids[0])
         actor = next(b for b in spec.bodies

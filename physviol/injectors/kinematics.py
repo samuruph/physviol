@@ -313,6 +313,27 @@ class Continuity(Injector):
             notes={"radius": radius, "jump_radii": jump_r,
                    "surface_top": _geom.surface_top(spec, actor)})
 
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        """Move the body, keep its velocity, and let physics take over.
+
+        You reported the teleported ball bouncing off a barrier it had already
+        been moved past. It did: the trajectory was edited and then
+        re-integrated against the scene as *declared*, so the resolver kept the
+        wall in front of a body that was behind it. Staged into the simulator
+        there is nothing to bounce off, because PyBullet is looking at where the
+        body actually is.
+        """
+        delta = np.asarray(plan.params["delta_m"], np.float64)
+        for bid in plan.causal_body_ids:
+            body = next(b for b in spec.bodies
+                        if int(b.segmentation_id) == int(bid))
+            obj = objs[body.name]
+            obj.position = tuple(float(x) for x in
+                                 np.asarray(obj.position, np.float64) + delta)
+        return ()
+
     def _teleport(self, traj, actor, t0: int, delta) -> Trajectory:
         out = self._clone(traj)
         bi = traj.index_of(int(actor.segmentation_id))
@@ -487,6 +508,26 @@ class Newton1Inertia(Injector):
                    "surface_top": _geom.surface_top(spec, actor),
                    "removed_fraction": fraction,
                    "speed_at_event": float(speed[t0])})
+
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        """Take the body's speed away and leave it there.
+
+        Staged rather than written, so what happens next is real: a body halted
+        on a slope is held by friction if friction can hold it and slides if it
+        cannot, instead of being pinned in place by an injector that decided
+        the answer in advance.
+        """
+        keep = 1.0 - float(plan.notes["removed_fraction"])
+        for bid in plan.causal_body_ids:
+            body = next(b for b in spec.bodies
+                        if int(b.segmentation_id) == int(bid))
+            obj = objs[body.name]
+            obj.velocity = tuple(float(x) * keep for x in obj.velocity)
+            obj.angular_velocity = tuple(float(x) * keep
+                                         for x in obj.angular_velocity)
+        return ()
 
     def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
