@@ -73,6 +73,37 @@ def candidates_for(spec, family: str):
     return []
 
 
+def _riding_on(spec, traj, actor, latest: int):
+    """(frame, partner_id, True, normal) if the actor rests on a RAISED surface.
+
+    "Raised" meaning static, and not the ground: a ramp, a table, a plinth. The
+    body is on it from the start, so no impact will ever name it, yet it is the
+    only surface whose failure is worth showing.
+    """
+    floors = {int(b.segmentation_id) for b in spec.bodies
+              if b.static and getattr(b, "role", "") == "floor"}
+    statics = [b for b in spec.bodies
+               if b.static and int(b.segmentation_id) not in floors]
+    if not statics:
+        return None
+
+    t0 = _geom.default_event_frame(spec, traj.num_frames)
+    if t0 is None or not (1 <= t0 <= latest):
+        return None
+    bi = traj.index_of(int(actor.segmentation_id))
+    p = np.asarray(traj.pos[t0, bi], np.float64)
+    r = float(traj.radius[bi])
+
+    for body in statics:
+        centre = np.asarray(body.position, np.float64)
+        half = np.asarray(body.scale, np.float64)
+        gap = np.linalg.norm(np.maximum(np.abs(p - centre) - half, 0.0))
+        if gap <= r * 1.35:
+            return (int(t0), int(body.segmentation_id), True,
+                    np.array([0.0, 0.0, 1.0]))
+    return None
+
+
 def _contact_event(spec, traj, actor):
     """(frame, partner_id, partner_is_static, normal) for the first collision.
 
@@ -89,6 +120,19 @@ def _contact_event(spec, traj, actor):
     # falling -- long after the interesting moment, which is the top block
     # sinking into the one below while the stack is still standing.
     latest = traj.num_frames - 3
+
+    # A RAISED SURFACE the body is already riding on beats any later impact.
+    # `ramp_slide`'s block rests on its ramp from frame 0, so the ramp is never
+    # an "impact" and the first one is the block landing on the floor after it
+    # has left the ramp entirely -- which made the clip a lawful slide followed
+    # by a fall through the ground, rather than a block sinking through the
+    # ramp it was sliding on. The floor is excluded because sinking through the
+    # floor from the floor is the degenerate case `occluder_pass` was deferred
+    # for.
+    riding = _riding_on(spec, traj, actor, latest)
+    if riding is not None:
+        return riding
+
     impact = _geom.first_impact(traj, int(actor.segmentation_id), exclude=dormant)
     if impact is not None and 1 <= impact[0] <= latest:
         partner = next((b for b in spec.bodies

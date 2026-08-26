@@ -116,16 +116,29 @@ def test_released_clips_have_nonempty_masks_while_active(which):
             continue
         mask = np.load(os.path.join(cdir, "%s.npz" % which))["mask"]
         tl = np.load(os.path.join(cdir, "timelines.npz"))
-        active = np.asarray(tl["active"], bool)
+        # WHICH window the mask answers to depends on where the violation is
+        # detectable. An `event` family -- a colour that finishes changing, a
+        # body that finishes growing -- is only wrong ACROSS the change: a
+        # recoloured cube is a normal cube, and no frame afterwards contains
+        # the violation. A `state` family is wrong in every frame it lasts.
+        #
+        # Asserting against the union `active` failed on `colour_shift` for
+        # exactly that reason, and the mask was right.
+        from physviol.taxonomy import FAMILIES
+
+        fam = FAMILIES.get(meta.get("family"))
+        key = ("intervening" if fam is not None and fam.detectable == "event"
+               else "consequence")
+        scored = np.asarray(tl[key] if key in tl.files else tl["active"], bool)
         observable = np.asarray(tl["observable"], bool)
         per = mask.reshape(mask.shape[0], -1).any(axis=1)
-        # Non-empty exactly where the violation is both active and visible.
+        # Non-empty exactly where the violation is both scored and visible.
         # While the culprit is fully occluded the violation is active but has no
         # visible extent, so an empty mask is correct there -- that is the case
         # the observability lag describes.
-        assert not (active & observable & ~per).any(), (
-            "%s: empty mask on an active+observable frame" % cdir)
-        assert not (active & ~observable & per).any(), (
+        assert not (scored & observable & ~per).any(), (
+            "%s: empty mask on a scored+observable frame" % cdir)
+        assert not (scored & ~observable & per).any(), (
             "%s: mask has pixels while nothing is observable" % cdir)
         n += 1
     assert n > 0
