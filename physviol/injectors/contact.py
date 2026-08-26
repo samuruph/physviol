@@ -195,6 +195,19 @@ class Solidity(Injector):
         head_on = abs(float(normal[2])) < 0.6
         mode = "pass_through" if (head_on or not partner_static) else "sink"
 
+        # A SUPPORT contact needs everything beneath the body disabled, not just
+        # the surface it happened to touch first. On `ramp_slide` the block was
+        # let through the floor while the ramp still held it, so it slid down
+        # the ramp perfectly lawfully and only then fell.
+        #
+        # A HEAD-ON contact is the opposite case and must keep its floor: a ball
+        # sent through a wall should come out the other side, not drop out of
+        # the world. That is why this follows the contact normal rather than
+        # whether the partner is static.
+        extra_ids = ([int(b.segmentation_id) for b in spec.bodies
+                      if b.static and int(b.segmentation_id) != int(partner_id)]
+                     if (mode == "sink" and partner_static) else [])
+
         notes = {"radius": float(radius),
                  "surface_top": _top_of_partner(spec, traj, partner_id, t_contact),
                  "partner_id": int(partner_id),
@@ -205,6 +218,16 @@ class Solidity(Injector):
                  "partner_extent": _extent_along(spec, partner_id, normal),
                  "t_contact": int(t_contact),
                  "passes_through": bool(depth_r >= 1.0)}
+        if extra_ids:
+            # Every surface beneath the body is suppressed, so it falls out of
+            # the world rather than off the side of something. `support_bounds`
+            # exists to stop a mug knocked off a table reading as a solidity
+            # violation for the rest of the clip, and that is the right default
+            # -- but here the body really did go through, and bounding the
+            # depth to where it is still over the surface returned exactly 0.000
+            # on a clip where the block visibly sinks to z = -1.6.
+            notes["support_bounds"] = None
+            notes["surface_top"] = float(_geom.surface_top(spec, actor))
         if mode == "pass_through":
             # Against another moving body there is no surface to place the
             # actor a prescribed depth below. Suppressing the pair's response
@@ -226,6 +249,7 @@ class Solidity(Injector):
                     "pair": [int(actor.segmentation_id), int(partner_id)],
                     "frames_disabled": int(n_window),
                     "mode": mode,
+                    "also_disable": extra_ids,
                     "target_depth_radii": depth_r},
             magnitude=float(depth_r * radius),
             magnitude_unit="m_penetration_depth",
@@ -453,13 +477,25 @@ class Solidity(Injector):
         import pybullet as pb
         from ..render import stepper
 
+        for ia, ib in self._filter_pairs(spec, simulator, objs, plan):
+            pb.setCollisionFilterPair(ia, ib, -1, -1, 0)
+        return ()
+
+    def _filter_pairs(self, spec, simulator, objs, plan):
+        """Every (actor, surface) pair this violation suppresses."""
+        from ..render import stepper
+
         a, b = plan.params["pair"]
         ia = stepper.pybullet_index(simulator, objs, spec, int(a))
-        ib = stepper.pybullet_index(simulator, objs, spec, int(b))
-        if ia is None or ib is None:
-            return ()
-        pb.setCollisionFilterPair(ia, ib, -1, -1, 0)
-        return ()
+        if ia is None:
+            return []
+        others = [int(b)] + [int(x) for x in plan.params.get("also_disable", ())]
+        out = []
+        for other in others:
+            ib = stepper.pybullet_index(simulator, objs, spec, other)
+            if ib is not None:
+                out.append((ia, ib))
+        return out
 
     def unstage(self, spec, simulator, objs, plan) -> None:
         if not self._stageable(plan):
@@ -467,10 +503,7 @@ class Solidity(Injector):
         import pybullet as pb
         from ..render import stepper
 
-        a, b = plan.params["pair"]
-        ia = stepper.pybullet_index(simulator, objs, spec, int(a))
-        ib = stepper.pybullet_index(simulator, objs, spec, int(b))
-        if ia is not None and ib is not None:
+        for ia, ib in self._filter_pairs(spec, simulator, objs, plan):
             pb.setCollisionFilterPair(ia, ib, -1, -1, 1)
 
     def _apply(self, spec, traj: Trajectory, plan: InterventionPlan) -> Trajectory:

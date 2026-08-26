@@ -42,7 +42,14 @@ class Support(Injector):
         return float(self.CLEARANCE_RADII["strong"])
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
+        # WHOLE MEDIUM where the scene is made of interchangeable bodies. One
+        # grain of forty hovering is perfectly annotated and impossible to see,
+        # and it also breaks the residual: a lifted grain still has grains
+        # beneath it, so `support`'s clearance is taken against them and the law
+        # reads it as supported. Lifting the whole pour leaves nothing under any
+        # of them, which is both visible and measurable.
+        targets = self._group(spec)
+        actor = targets[0] if targets else self._primary(spec)
         if actor is None:
             return None
         T = traj.num_frames
@@ -60,12 +67,21 @@ class Support(Injector):
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],
-            causal_body_ids=[int(actor.segmentation_id)],
+            causal_body_ids=[int(b.segmentation_id) for b in targets] or
+                            [int(actor.segmentation_id)],
             params={"type": "hover", "clearance_radii": clearance_r,
                     "mode": mode},
             magnitude=float(clearance_r * radius),
             magnitude_unit="m_support_clearance", severity_bin=severity_bin,
-            notes={"radius": radius, "surface_top": float(top),
+            notes={"radius": radius,
+                   # With the WHOLE medium lifted there is nothing left beneath
+                   # any of it, so the clearance datum is the floor. Measured
+                   # against the pile -- which is what `support_under_any`
+                   # returns for a grain in a column -- a grain hovering at
+                   # z = 0.33 sat *below* its recorded support and the law read
+                   # clearance 0.000 on an obviously airborne pour.
+                   "surface_top": (float(_geom.surface_top(spec, actor))
+                                   if len(targets) > 1 else float(top)),
                    "clearance_radii": clearance_r, "mode": mode})
 
     #: Weightlessness is a force statement, so PyBullet can say it: cancel
@@ -181,7 +197,14 @@ class Friction(Injector):
         return 2.0
 
     def plan(self, spec, traj, rng, severity_bin) -> Optional[InterventionPlan]:
-        actor = self._primary(spec)
+        # WHOLE MEDIUM where the scene is made of interchangeable bodies. One
+        # grain of forty hovering is perfectly annotated and impossible to see,
+        # and it also breaks the residual: a lifted grain still has grains
+        # beneath it, so `support`'s clearance is taken against them and the law
+        # reads it as supported. Lifting the whole pour leaves nothing under any
+        # of them, which is both visible and measurable.
+        targets = self._group(spec)
+        actor = targets[0] if targets else self._primary(spec)
         if actor is None:
             return None
         T = traj.num_frames

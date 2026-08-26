@@ -371,21 +371,7 @@ NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
         "the only surface is the floor, so the violation sank the ball into the "
         "ground while it was hidden and read as a vanish -- which is what "
         "permanence does on the same scenario. `barrier_pass` stages it instead",
-    ("support", "pour"):
-        "MEASURED: visibly wrong and scored zero. A lifted grain still has "
-        "grains beneath it, so `support`'s clearance is taken against them "
-        "rather than against the floor and the law reads a hovering grain as "
-        "supported -- residual 0.000 on the invalid arm against 3.977 on the "
-        "valid one, with pixel evidence of 0.455. A clip that is plainly wrong "
-        "and labelled severity 0.000 trains a model that wrong is fine, which "
-        "is worse than not shipping the cell",
-    ("solidity", "ramp_slide"):
-        "MEASURED: visibly wrong and scored zero. The block passes through the "
-        "ramp and leaves the region `penetration` measures against, so the "
-        "residual reads 0.000 on the invalid arm against 1.263 on the valid "
-        "one, with pixel evidence of 0.192. `barrier_pass` stages a clean "
-        "pass-through instead",
-    ("time_slip", "collision"): TIME_SLIP_NEEDS_MOTION % "collision",
+            ("time_slip", "collision"): TIME_SLIP_NEEDS_MOTION % "collision",
     ("time_slip", "ramp_slide"): TIME_SLIP_NEEDS_MOTION % "ramp_slide",
     ("time_slip", "pour"):
         "forty grains in constant mutual contact: stalling one desynchronises "

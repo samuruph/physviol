@@ -127,7 +127,11 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     ctx["spec"] = spec
     surface_top = ctx.get("surface_top", spec.floor_level)
     ctx["surface_top"] = surface_top
-    if "support_bounds" not in ctx:
+    # An explicit None means "the plan says nothing bounds this" -- `solidity`
+    # sets it when every surface beneath the body has been suppressed.
+    if ctx.get("support_bounds", False) is None:
+        pass
+    elif "support_bounds" not in ctx:
         # A raised surface is finite, and the penetration law needs to know
         # that or a body knocked off a table reads as having sunk through it.
         from ..injectors import _geom as _g

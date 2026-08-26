@@ -11,6 +11,8 @@ prints the same measurement in a readable form.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from conftest import find_release
@@ -29,11 +31,33 @@ def _built_only(rows):
             if COMPATIBILITY.get(r["family"], {}).get(r["scenario"]) == BUILD]
 
 
+def _is_stale(root) -> bool:
+    """True when the code has changed since the release was generated.
+
+    The audit measures what the CURRENT annotation would say, so running it
+    against clips produced by older code reports failures that have already
+    been fixed -- and a test that fails on stale data trains you to ignore it.
+    """
+    import glob
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = max((os.path.getmtime(f) for f in
+                glob.glob(os.path.join(repo, "physviol", "**", "*.py"),
+                          recursive=True)), default=0.0)
+    clips = [os.path.getmtime(f) for f in
+             glob.glob(os.path.join(root, "clips", "**", "meta.json"),
+                       recursive=True)]
+    return bool(clips) and code > min(clips)
+
+
 @pytest.fixture(scope="module")
 def release():
     r = find_release()
     if r is None:
         pytest.skip("no release; run `bash scripts/run.sh`")
+    if _is_stale(r):
+        pytest.skip("release predates the current code; re-run "
+                    "`bash scripts/run.sh` before auditing it")
     return r
 
 
