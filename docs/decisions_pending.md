@@ -101,6 +101,29 @@ after emerging) and tier v1 (11), which are the tiers that ship. Fixing it prope
 either estimating emergence from the screen geometry rather than from `occluded_frames`, or
 giving `occluder_pass` more runway to the right of its screen.
 
+## 3b. `newton3_reaction` has no severity ladder, and probably should not
+
+Staged in the simulator it is `changeDynamics(mass=0)` -- the struck body becomes
+immovable, which is precisely what the family claims ("a body that refuses to move is a body
+of infinite mass"). But immovable has no degrees: weak, medium and strong all score 1.00,
+because they are the same violation rendered three times.
+
+That is not a scoring bug. A simulator conserves momentum by construction, so
+*non-conservation* -- the thing that distinguishes `newton3_reaction` from `newton2_mass` --
+can only be expressed by handing the momentum to the world, i.e. by making the body static.
+There is no partial version of that.
+
+Two honest options, for the user to pick:
+
+- **Declare it binary.** One bin, `strong`, and the taxonomy records that this family has no
+  magnitude axis. Saves two thirds of its render budget and stops the release claiming a
+  ladder it does not have.
+- **Grade it by mass instead**, `ratio` = 4 / 20 / 200. That gives a ladder — but a very
+  heavy body still recoils slightly and momentum *is* conserved, which makes it
+  `newton2_mass` with a bigger ratio rather than a different violation.
+
+Until this is decided, `--severity all` produces three identical `newton3_reaction` clips.
+
 ## 4. Release configuration
 
 Severity bins and variant count per cell. `configs/v0_release.yaml` currently proposes tier v0

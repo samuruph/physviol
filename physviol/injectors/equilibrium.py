@@ -179,6 +179,57 @@ class Friction(Injector):
                                    * rate[:, None].astype(np.float32))
         return out
 
+    #: NOT staged, though it easily could be. `changeDynamics(lateralFriction=)`
+    #: works and the code below is correct, but it is a regression in practice:
+    #: on `barrier_pass` the staged version scores 0.02 / 0.04 / 0.00 where the
+    #: trajectory path scores 1.00, because this family's residual measures the
+    #: *effective* coefficient recovered from the path, and a coefficient change
+    #: applied to a body that is already nearly at rest barely moves it.
+    #:
+    #: Fixing that means giving the scenarios more of their clip in motion --
+    #: docs/decisions_pending.md section 3 -- not switching paths. Left here
+    #: rather than deleted so the next attempt starts from a working stage().
+    simulated = False
+
+    def stage(self, spec, simulator, objs, plan):
+        """Scale the actor's friction coefficient and let it slide.
+
+        You reported a phantom bounce mixed into this family: the trajectory was
+        rewritten along a rescaled path and re-integrated, so a contact the
+        resolver invented ended up inside a clip that claims to be about
+        friction alone. Staged as a coefficient, the only thing that differs
+        from the valid twin is how much grip the surface has.
+        """
+        import pybullet as pb
+        from ..render import stepper
+
+        rate = float(plan.params["end_rate"])
+        for bid in plan.causal_body_ids:
+            body = next((b for b in spec.bodies
+                         if int(b.segmentation_id) == int(bid)), None)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is not None:
+                pb.changeDynamics(
+                    idx, -1,
+                    lateralFriction=float(getattr(body, "friction", 0.5)) * rate)
+        return ()
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        import pybullet as pb
+        from ..render import stepper
+
+        for bid in plan.causal_body_ids:
+            body = next((b for b in spec.bodies
+                         if int(b.segmentation_id) == int(bid)), None)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is not None:
+                pb.changeDynamics(idx, -1,
+                                  lateralFriction=float(getattr(body, "friction", 0.5)))
+
     def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))

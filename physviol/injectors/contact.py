@@ -7,7 +7,7 @@ rollout and pick its moment, and only then does `apply` edit anything.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -695,6 +695,71 @@ class SuperElastic(Injector):
                 merged.append((s, e))
         return merged
 
+    #: Expressed as a per-step velocity boost, not a restitution coefficient.
+    #: **PyBullet clamps restitution to 1.** Measured, not assumed: staged as
+    #: `changeDynamics(restitution=e*gain)` the clip came out with the valid
+    #: twin's energy to two decimals -- E_end 3.73 J against 3.73 J, an energy
+    #: gain of 0.00 and a severity of 0.000. A coefficient greater than one is
+    #: simply not something the solver will honour, so the extra speed has to
+    #: be handed to the body at the moment it separates.
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        """Give the body back more than it arrived with, at each bounce.
+
+        The hook watches for the frame where the actor is touching something and
+        its velocity along the contact normal has turned outward -- the instant
+        the bounce resolves -- and scales it. Re-arms when contact is lost, so a
+        `repeated` family fires once per bounce as it claims to.
+
+        The contact is real either way, which the prescribed version could not
+        promise: the body genuinely touches before it leaves.
+        """
+        import pybullet as pb
+        from ..render import stepper
+
+        gain = float(plan.params["speed_gain"])
+        actor_id = int(plan.causal_body_ids[0])
+        idx = stepper.pybullet_index(simulator, objs, spec, actor_id)
+        if idx is None:
+            return ()
+        state = {"ready": True, "approach": 0.0}
+
+        def boost(_client, _step, _frame):
+            v, w = pb.getBaseVelocity(idx)
+            v = np.asarray(v, np.float64)
+            points = pb.getContactPoints(bodyA=idx)
+            if not points:
+                state["ready"] = True
+                state["approach"] = float(np.linalg.norm(v))
+                return
+            if not state["ready"]:
+                return
+            # Outward normal, averaged over the contact manifold. `contact[7]`
+            # is contactNormalOnB, pointing from B towards A -- and we asked for
+            # bodyA=idx, so it points away from the surface the body is on.
+            n = np.mean([np.asarray(c[7], np.float64) for c in points], axis=0)
+            mag = float(np.linalg.norm(n))
+            if mag < 1e-9:
+                return
+            n /= mag
+            out_speed = float(v @ n)
+            if out_speed <= 1e-3:
+                return                      # still approaching, or resting
+            # The coefficient of restitution is outgoing over INCOMING, so the
+            # gain has to be applied to the speed the body arrived with -- not
+            # to whatever the solver left it with. Scaling the outgoing speed
+            # instead produced e = 0.46 from a gain of 2.6, because PyBullet's
+            # combined restitution against the floor is only 0.18: the bounce
+            # was merely less lossy, no energy was created, and the clip scored
+            # exactly zero.
+            target = float(state["approach"]) * gain
+            v = v + n * (target - out_speed)
+            pb.resetBaseVelocity(idx, v.tolist(), list(w))
+            state["ready"] = False
+
+        return (boost,)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)
         targets = self._targets(spec, actor, plan.notes["targets"][-1])
@@ -774,6 +839,39 @@ class _CollisionEdit(Injector):
                    "ratio": ratio, "actor_id": actor_id, "other_id": other_id,
                    "normal": [float(x) for x in normal],
                    "r_strong": float(r_strong), "lawful_dv": dv})
+
+    #: Both families are a mass statement, and PyBullet takes mass directly --
+    #: so the collision itself can be left to the simulator instead of having
+    #: its outcome written in. You reported the balls never touching; they do
+    #: now, because the contact is real and only the masses are a lie.
+    simulated = True
+
+    def _mass_of(self, spec, seg_id: int) -> float:
+        body = next(b for b in spec.bodies
+                    if int(b.segmentation_id) == int(seg_id))
+        return float(getattr(body, "mass", 1.0))
+
+    def stage(self, spec, simulator, objs, plan):
+        import pybullet as pb
+        from ..render import stepper
+
+        for seg_id, mass in self._staged_masses(spec, plan).items():
+            idx = stepper.pybullet_index(simulator, objs, spec, seg_id)
+            if idx is not None:
+                pb.changeDynamics(idx, -1, mass=mass)
+        return ()
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        import pybullet as pb
+        from ..render import stepper
+
+        for seg_id in self._staged_masses(spec, plan):
+            idx = stepper.pybullet_index(simulator, objs, spec, seg_id)
+            if idx is not None:
+                pb.changeDynamics(idx, -1, mass=self._mass_of(spec, seg_id))
+
+    def _staged_masses(self, spec, plan) -> Dict[int, float]:
+        raise NotImplementedError
 
     def _apply(self, spec, traj, plan) -> Trajectory:
         n = plan.notes
@@ -870,6 +968,15 @@ class Newton3Reaction(_CollisionEdit):
         return {other_id: self.FREEZE,
                 actor_id: v_in - (1.0 + e) * float(np.dot(v_in, n)) * n}
 
+    def _staged_masses(self, spec, plan) -> Dict[int, float]:
+        """The struck body becomes immovable, which PyBullet spells `mass=0`.
+
+        Exactly what the family already claims in prose -- "a body that refuses
+        to move is a body of infinite mass" -- said to the simulator instead of
+        written into the trajectory. The striker then rebounds off it for real,
+        so the two genuinely touch before they separate.
+        """
+        return {int(plan.notes["other_id"]): 0.0}
 
 class Newton2Mass(_CollisionEdit):
     """Two identical-looking bodies collide as though their masses differed.
@@ -950,7 +1057,20 @@ class Newton2Mass(_CollisionEdit):
                 other_id: tb + vb_new * normal}
 
 
+    def _staged_masses(self, spec, plan) -> Dict[int, float]:
+        """One body weighs `ratio` times what it looks like it weighs.
+
+        Momentum is still conserved -- PyBullet conserves it -- so the violation
+        is exactly what the family claims: two bodies that look identical
+        respond as though they are not.
+        """
+        other = int(plan.notes["other_id"])
+        ratio = float(plan.notes["ratio"])
+        return {other: self._mass_of(spec, other) * max(ratio, 1e-6)}
+
+
 register(Solidity())
 register(SuperElastic())
 register(Newton3Reaction())
 register(Newton2Mass())
+
