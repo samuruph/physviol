@@ -28,6 +28,7 @@ from kubric.renderer import Blender
 from kubric.simulator import PyBullet
 
 from physviol import injectors
+from physviol import taxonomy
 from physviol import scenarios
 from physviol.render import stepper
 from physviol.scenarios.base import SceneSpec, Tier
@@ -457,7 +458,13 @@ def main() -> int:
     for family in families:
         inj = injectors.get(family)
         inj.window_frames = a.window
-        for sev in severities:
+        # An ungraded family has no magnitude axis, so its three bins would be
+        # the same clip three times. Generate the strongest only.
+        meta = taxonomy.FAMILIES.get(family)
+        bins = severities
+        if meta is not None and not getattr(meta, "graded", True):
+            bins = [severities[-1]] if severities else []
+        for sev in bins:
             tag = "%s/%s" % (family, sev)
             # The rng is seeded per (family, severity), not per run, so adding
             # a family to the list cannot change the clips the others produce.

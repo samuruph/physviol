@@ -67,6 +67,14 @@ class Family(NamedTuple):
     #: compatibility matrix is *derived* from these against each scenario's
     #: `provides`, rather than written out cell by cell -- see CAPABILITIES.
     requires: Tuple[str, ...] = ()
+    #: Whether the family has a real magnitude axis. `newton3_reaction` does
+    #: not: staged honestly it is `mass = 0`, and immovable has no degrees --
+    #: all three bins came out at severity 1.00 because they are one violation
+    #: rendered three times. A simulator conserves momentum by construction, so
+    #: non-conservation can only be said by handing the momentum to the world,
+    #: and there is no partial version of that. Ungraded families generate their
+    #: `strong` bin only, which is honest and saves two thirds of their budget.
+    graded: bool = True
 
 
 # Category of violations
@@ -127,7 +135,7 @@ FAMILIES: Dict[str, Family] = {
     "newton3_reaction": Family(
         "contact", "in a collision only one body responds",
         "momentum_imbalance", "instant", "linear_momentum", None, None,
-        requires=('identical_pair',)),
+        requires=('identical_pair',), graded=False),
     # -- dynamics ----------------------------------------------------------
     "phantom_impulse": Family(
         "dynamics", "impulse applied with no contact",

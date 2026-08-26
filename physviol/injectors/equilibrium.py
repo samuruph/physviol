@@ -68,6 +68,55 @@ class Support(Injector):
             notes={"radius": radius, "surface_top": float(top),
                    "clearance_radii": clearance_r, "mode": mode})
 
+    #: Weightlessness is a force statement, so PyBullet can say it: cancel
+    #: gravity on the body and let it keep whatever motion it had.
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        """Lift the body clear and cancel gravity on it.
+
+        The two modes fall out of the physics rather than needing separate code.
+        A body at rest hovers where it stood, because nothing is pushing it. A
+        body that was sliding keeps sliding in a straight line, because nothing
+        is pulling it down -- which is exactly the "keeps moving, lifted clear"
+        shape the family wants, and it now happens because it must rather than
+        because it was written in.
+
+        It also keeps colliding with everything else while it hovers, which the
+        prescribed version could not promise.
+        """
+        import pybullet as pb
+        from ..render import stepper
+
+        clearance = float(plan.notes["clearance_radii"]) * float(
+            plan.notes["radius"])
+        g = np.asarray(spec.gravity, np.float64)
+        targets = []
+        for bid in plan.causal_body_ids:
+            body = next((b for b in spec.bodies
+                         if int(b.segmentation_id) == int(bid)), None)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is None:
+                continue
+            pos, quat = pb.getBasePositionAndOrientation(idx)
+            lifted = (pos[0], pos[1], pos[2] + clearance)
+            v, w = pb.getBaseVelocity(idx)
+            pb.resetBasePositionAndOrientation(idx, lifted, quat)
+            pb.resetBaseVelocity(idx, list(v), list(w))
+            targets.append((idx, float(getattr(body, "mass", 1.0))))
+        if not targets:
+            return ()
+
+        def weightless(_client, _step, _frame):
+            for idx, mass in targets:
+                pos, _ = pb.getBasePositionAndOrientation(idx)
+                pb.applyExternalForce(idx, -1, (-g * mass).tolist(), list(pos),
+                                      pb.WORLD_FRAME)
+
+        return (weightless,)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
         out = self._clone(traj)
         actor = self._primary(spec)

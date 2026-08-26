@@ -67,6 +67,50 @@ class _GravityScale(Injector):
     def _targets(self, spec):
         return self._all_actors(spec)
 
+    #: Per-body gravity is not a PyBullet setting -- there is one world gravity
+    #: and no per-object override -- so it is expressed as a counter-force
+    #: applied on every substep. That is what the stepper's hooks exist for.
+    simulated = True
+
+    def stage(self, spec, simulator, objs, plan):
+        """Bend gravity for the chosen bodies by applying `m*g*(alpha-1)`.
+
+        A body under an effective gravity of `alpha*g` needs `m*g*(alpha-1)` on
+        top of the world's `m*g`, and the force has to be re-applied every
+        substep because PyBullet clears accumulated external forces after each
+        step. Staged rather than integrated by hand, so a body that rises and
+        falls does it while still colliding with everything around it: the
+        trapezoid profile used to be written into the trajectory and then
+        re-integrated against approximations of the scene.
+        """
+        import pybullet as pb
+        from ..render import stepper
+
+        alpha = float(plan.params["alpha_peak"])
+        g = np.asarray(spec.gravity, np.float64)
+        t0, t1 = plan.windows[0]
+        targets = []
+        for bid in plan.causal_body_ids:
+            body = next((b for b in spec.bodies
+                         if int(b.segmentation_id) == int(bid)), None)
+            if body is None or body.static:
+                continue
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is not None:
+                targets.append((idx, float(getattr(body, "mass", 1.0))))
+        if not targets:
+            return ()
+
+        def bend(_client, _step, frame):
+            if not (t0 <= frame <= t1):
+                return
+            for idx, mass in targets:
+                force = (g * mass * (alpha - 1.0)).tolist()
+                pos, _ = pb.getBasePositionAndOrientation(idx)
+                pb.applyExternalForce(idx, -1, force, list(pos), pb.WORLD_FRAME)
+
+        return (bend,)
+
     def _choose(self, spec, traj):
         """Which bodies to bend, given the rollout. Overridden by `antigravity`."""
         return self._targets(spec)
