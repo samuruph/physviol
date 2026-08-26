@@ -47,7 +47,7 @@ the law, and the owner must actually move it.
 For those eight, a clip labelled X provably contains X and not the others. **The remaining
 twelve are separated by staging, not by residual**, and the distinction is worth
 understanding before you draw conclusions from them. `antigravity`, `phantom_impulse`,
-`newton1_inertia` and `newton3_reaction` all move `linear_momentum` or `free_fall`, because
+`newton1_inertia` all move `linear_momentum` or `free_fall`, because
 they must: bend a body's gravity and its momentum residual moves too. Physics is not
 separable there, and demanding that it be would be demanding the wrong thing. What separates
 them is the situation — is anything touching the body, is there one body or two, was it
@@ -124,7 +124,7 @@ the bins are not equally spaced in every family's physical units.
 2. **`violation_mask` is not `timelines.active`.** The mask answers *where can this be seen*
    and is empty while the culprit is hidden; `active` is the unhedged truth about when the
    law is broken. Use `active` for temporal metrics and the mask for spatial ones.
-3. **Under-powered families.** `shadow`, `shadow_shape`, `newton2_mass` and `newton3_reaction`
+3. **Under-powered families.** `shadow`, `shadow_shape`, `newton2_mass`
    have one build cell each, because each needs staging almost nothing else provides. Report
    them; do not read much into a single cell's score.
 4. **`stack_topple` is a control, not just a scenario.** Its *valid* clip contains a tower

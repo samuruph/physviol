@@ -172,7 +172,7 @@ one clip with three culprits and three different windows.
 over those records.** `plan.windows` is *defined* as the merged union, `t_event` as the min
 over culprits, `causal_body_ids` as the list of their ids. A third role, `participant`,
 covers a body that is in `causal_body_ids` but is not independently scored — the static floor
-a ball sinks through, the victim of `newton3_reaction`, the second half of a `fission`. It
+a ball sinks through, the victim of the second half of a `fission`. It
 inherits the primary's windows and score, **which is exactly what the pipeline does today**,
 so the first migration step is a no-op provable by byte-diffing a regenerated release.
 

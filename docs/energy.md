@@ -164,7 +164,7 @@ Peak anomaly as % of `E0`, worst scenario per family, from real rollouts:
 | friction | — | 14 | — |
 | angular_momentum | **14** | — | — |
 | newton1_inertia | — | 7 | — |
-| **colour_shift, continuity, deformation, newton3_reaction** | **at the valid floor** | | |
+| **colour_shift, continuity, deformation** | **at the valid floor** | | |
 
 Valid-clip floors, worst of all three channels: `occluder_pass` 0.000%, `barrier_pass`
 0.005%, `collision` 0.007%, `pendulum_swing` 0.31%, `drop` 1.7% (a hard impact strains the

@@ -514,6 +514,11 @@ def main() -> int:
                                  "error": "trajectory prefix differs: %s" % why})
                 continue
 
+            # Windows that can only be known from the finished trajectory --
+            # `solidity` ends when the bodies stop overlapping, not after a
+            # fixed number of frames. Runs before plan.json is written.
+            inj.refine_windows(spec, traj_valid, traj_invalid, plan)
+
             vdir = os.path.join(outdir, "variants", "%s_%s" % (family, sev))
             os.makedirs(vdir, exist_ok=True)
             traj_invalid.save(os.path.join(vdir, "traj_invalid.npz"))

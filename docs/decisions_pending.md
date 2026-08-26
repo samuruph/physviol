@@ -124,28 +124,24 @@ The workflow: run the audit on a fresh release, then for each flagged cell eithe
 something to act on. `friction` is the first candidate — but which scenarios it should be
 dropped from is an output of the audit, not a guess.
 
-## 3b. `newton3_reaction` has no severity ladder, and probably should not
+## 3b. `newton3_reaction` is retired
 
-Staged in the simulator it is `changeDynamics(mass=0)` -- the struck body becomes
-immovable, which is precisely what the family claims ("a body that refuses to move is a body
-of infinite mass"). But immovable has no degrees: weak, medium and strong all score 1.00,
-because they are the same violation rendered three times.
+**Decided with the user.** Staged honestly it was either the same clip as `newton2_mass` or
+an unreliable one, and neither is worth a family.
 
-That is not a scoring bug. A simulator conserves momentum by construction, so
-*non-conservation* -- the thing that distinguishes `newton3_reaction` from `newton2_mass` --
-can only be expressed by handing the momentum to the world, i.e. by making the body static.
-There is no partial version of that.
+As an immovable target (`mass = 0`) it is the *limit* of newton2's mass ratio as that ratio
+goes to infinity — and at newton2's strong bin of 25 the two rendered the same thing: struck
+ball barely moves, striker rebounds. It also had no severity ladder, since immovable has no
+degrees; all three bins scored exactly 1.00.
 
-Two honest options, for the user to pick:
+Rewritten to inject momentum into the striker — the one direction newton2 cannot imitate,
+and manifestly non-conservative — it fired on two severity bins out of three and could not be
+made reliable within the attempt. A family that sometimes depicts the same violation as its
+neighbour and sometimes depicts nothing is worse than no family.
 
-- **Declare it binary.** One bin, `strong`, and the taxonomy records that this family has no
-  magnitude axis. Saves two thirds of its render budget and stops the release claiming a
-  ladder it does not have.
-- **Grade it by mass instead**, `ratio` = 4 / 20 / 200. That gives a ladder — but a very
-  heavy body still recoils slightly and momentum *is* conserved, which makes it
-  `newton2_mass` with a bigger ratio rather than a different violation.
-
-Until this is decided, `--severity all` produces three identical `newton3_reaction` clips.
+`newton2_mass` covers "the collision came out wrong" with a working ladder (0.54 / 0.84 /
+1.00 on `collision`). The reason is recorded in `taxonomy.RETIRED` so the question is not
+reopened from scratch.
 
 ## 4. Release configuration
 

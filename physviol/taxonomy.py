@@ -67,6 +67,22 @@ class Family(NamedTuple):
     #: compatibility matrix is *derived* from these against each scenario's
     #: `provides`, rather than written out cell by cell -- see CAPABILITIES.
     requires: Tuple[str, ...] = ()
+    #: Where the violation is detectable, and therefore what the severity field
+    #: should be gated on.
+    #:
+    #:   "event"  only ACROSS the change. A recoloured cube is a perfectly
+    #:            normal cube; the violation is that it used to be another
+    #:            colour, which no single frame afterwards contains. Severity is
+    #:            gated on the intervention window.
+    #:   "state"  in ANY frame while it lasts. A hovering body is wrong whether
+    #:            or not you saw it rise, and two bodies sharing space are wrong
+    #:            on sight. Severity is gated on the consequence window.
+    #:
+    #: This is not a presentation detail. At inference a model has one video and
+    #: no counterfactual, so marking an event family as violating long after the
+    #: change asks it to report a violation from a frame that does not contain
+    #: one -- and rewards a model that guesses from context instead of looking.
+    detectable: str = "state"
     #: Whether the family has a real magnitude axis. `newton3_reaction` does
     #: not: staged honestly it is `mass = 0`, and immovable has no degrees --
     #: all three bins came out at severity 1.00 because they are one violation
@@ -83,30 +99,30 @@ FAMILIES: Dict[str, Family] = {
     "permanence": Family(
         "identity", "a body is simply gone between one frame and the next",
         "mass_ratio", "sustained", "mass_continuity", "permanence", "rigid_body",
-        requires=('actor',)),
+        requires=('actor',), detectable="event"),
     "dissolve": Family(
         "identity", "a body fades out of visibility over several frames",
         "opacity_lost", "sustained", "mass_dissolution", "permanence",
         "rigid_body",
-        requires=('actor',)),
+        requires=('actor',), detectable="event"),
     "immutability": Family(
         "identity", "the body grows or shrinks, ideally behind an occluder",
         "volume_ratio", "sustained", "shape_continuity", "immutability", "rigid_body",
-        requires=('actor',)),
+        requires=('actor',), detectable="event"),
     "fission": Family(
         "identity", "one body becomes two, which fly apart",
         "count_ratio", "sustained", "object_count", "permanence", "rigid_body",
-        requires=('actor', 'understudy')),
+        requires=('actor', 'understudy'), detectable="event"),
     "fusion": Family(
         "identity", "bodies converge and come out as one, same size",
         "count_ratio", "sustained", "object_count", "permanence", "rigid_body",
-        requires=('converging',)),
+        requires=('converging',), detectable="event"),
     # -- kinematics --------------------------------------------------------
     "continuity": Family(
         "kinematics", "discontinuous position set",
         "m_jump_distance", "instant", "position_continuity",
         "spatio_temporal_continuity", "rigid_body",
-        requires=('actor',)),
+        requires=('actor',), detectable="event"),
     "non_parabolic": Family(
         "kinematics", "replace the free-flight arc with a non-g curve",
         "m_rms_from_parabola", "sustained", "trajectory_shape", None, None,
@@ -118,11 +134,11 @@ FAMILIES: Dict[str, Family] = {
     "time_slip": Family(
         "kinematics", "a body stalls in place, then resumes where it left off",
         "slip_frames", "sustained", "phase_consistency", None, "rigid_body",
-        requires=('sliding',)),
+        requires=('sliding',), detectable="event"),
     "newton1_inertia": Family(
         "kinematics", "a moving body stops dead and stays stopped",
         "dv_over_g_dt", "sustained", "linear_momentum", None, None,
-        requires=('sliding',)),
+        requires=('sliding',), detectable="event"),
     # -- contact -----------------------------------------------------------
     "solidity": Family(
         "contact", "disable a collision pair for N frames",
@@ -131,24 +147,20 @@ FAMILIES: Dict[str, Family] = {
     "superelastic": Family(
         "contact", "restitution e > 1",
         "energy_gain_ratio", "repeated", "energy_at_contact", None, "rigid_body",
-        requires=('impact',)),
-    "newton3_reaction": Family(
-        "contact", "in a collision only one body responds",
-        "momentum_imbalance", "instant", "linear_momentum", None, None,
-        requires=('identical_pair',), graded=False),
+        requires=('impact',), detectable="event"),
     # -- dynamics ----------------------------------------------------------
     "phantom_impulse": Family(
         "dynamics", "impulse applied with no contact",
         "impulse_over_m_vtyp", "instant", "linear_momentum", None, "rigid_body",
-        requires=('actor',)),
+        requires=('actor',), detectable="event"),
     "newton2_mass": Family(
         "dynamics", "identical-looking bodies respond differently to equal impulse",
         "effective_mass_ratio", "instant", "linear_momentum", None, None,
-        requires=('identical_pair',)),
+        requires=('identical_pair',), detectable="event"),
     "angular_momentum": Family(
         "dynamics", "spin reverses, or torque appears with no contact",
         "angular_momentum_defect", "instant", "angular_momentum", None, None,
-        requires=('spin',)),
+        requires=('spin',), detectable="event"),
     # -- equilibrium -------------------------------------------------------
     "support": Family(
         "equilibrium", "an unsupported body hovers, or an unstable stack holds",
@@ -176,11 +188,11 @@ FAMILIES: Dict[str, Family] = {
     "colour_shift": Family(
         "appearance", "a body changes colour with nothing to explain it",
         "lab_distance", "sustained", "colour_continuity", "immutability", None,
-        requires=('actor',)),
+        requires=('actor',), detectable="event"),
     "deformation": Family(
         "appearance", "a rigid body squashes or stretches out of proportion",
         "aspect_ratio_change", "sustained", "shape_anisotropy", None, None,
-        requires=('actor',)),
+        requires=('actor',), detectable="event"),
     # -- global ------------------------------------------------------------
     "global_gravity": Family(
         "global", "the whole scene runs at alpha*g, internally consistent",
@@ -331,13 +343,30 @@ TIME_SLIP_NEEDS_MOTION = (
 #: cell, and `tests/test_visible_violation.py` fails the build if one that is
 #: still marked BUILD depicts nothing. Move a flagged cell here with its
 #: numbers, or fix the scenario so the family has something to act on.
+_NOT_MEANINGFUL_DOC = None
+
+
+#: Families that were built and then withdrawn, with the reason. Kept as a
+#: record so the question does not get reopened from scratch.
+RETIRED: Dict[str, str] = {
+    "newton3_reaction":
+        "indistinguishable from `newton2_mass` once both are staged honestly. "
+        "Expressed as an immovable target (`mass = 0`) it is the limit of "
+        "newton2's mass ratio as that ratio goes to infinity, and at newton2's "
+        "strong bin of 25 the two rendered the same clip: struck ball barely "
+        "moves, striker rebounds. Expressed instead as momentum injected into "
+        "the striker -- the one direction newton2 cannot imitate -- it fired "
+        "on two severity bins out of three and could not be made reliable. "
+        "`newton2_mass` covers 'the collision came out wrong' with a working "
+        "ladder; a second family that sometimes depicts the same thing and "
+        "sometimes depicts nothing is worse than no second family.",
+}
+
 NOT_MEANINGFUL: Dict[Tuple[str, str], str] = {
     ("newton2_mass", "pyramid_impact"):
         "the spheres are identical to each other but never strike one another "
         "-- they touch from frame 0 and settle, so there is no reaction to "
         "suppress; measured at severity 0.01",
-    ("newton3_reaction", "pyramid_impact"):
-        "same as newton2_mass: no real sphere-on-sphere impact to break",
     ("solidity", "occluder_pass"):
         "the only surface is the floor, so the violation sank the ball into the "
         "ground while it was hidden and read as a vanish -- which is what "

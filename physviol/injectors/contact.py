@@ -375,6 +375,62 @@ class Solidity(Injector):
     #: stays on the trajectory path.
     simulated = True
 
+    #: Extra frames kept after the bodies separate, so the clip does not cut
+    #: on the exact frame of last contact.
+    CLEAR_TAIL = 1
+
+    def refine_windows(self, spec, traj_valid, traj_invalid, plan) -> None:
+        """End the window when the bodies stop overlapping, not after N frames.
+
+        You reported the severity mask going to zero while the ball was still
+        inside the barrier. It was: the window length came from a per-bin frame
+        count, so it expired mid-pass and the mask -- which is gated on the
+        window -- went with it. Overlap is a geometric fact about the finished
+        trajectory, so it is measured here rather than guessed in `plan()`.
+        """
+        pair = plan.params.get("pair")
+        if not pair or len(pair) != 2:
+            return
+        a_id, b_id = int(pair[0]), int(pair[1])
+        try:
+            ia = traj_invalid.index_of(a_id)
+        except Exception:                                     # noqa: BLE001
+            return
+        body_b = next((b for b in spec.bodies
+                       if int(b.segmentation_id) == b_id), None)
+        if body_b is None:
+            return
+
+        T = traj_invalid.num_frames
+        t0 = plan.t_event
+        ra = float(traj_invalid.radius[ia])
+        pos_a = np.asarray(traj_invalid.pos[:, ia, :], np.float64)
+
+        if body_b.static:
+            centre = np.asarray(body_b.position, np.float64)
+            half = np.asarray(body_b.scale, np.float64)
+            delta = np.abs(pos_a - centre[None, :]) - half[None, :]
+            outside = np.linalg.norm(np.maximum(delta, 0.0), axis=1)
+            overlapping = outside < ra
+        else:
+            ib = traj_invalid.index_of(b_id)
+            rb = float(traj_invalid.radius[ib])
+            gap = np.linalg.norm(
+                pos_a - np.asarray(traj_invalid.pos[:, ib, :], np.float64),
+                axis=1)
+            overlapping = gap < (ra + rb)
+
+        frames = np.flatnonzero(overlapping)
+        frames = frames[frames >= t0]
+        if not frames.size:
+            return
+        t_end = int(min(T - 1, int(frames[-1]) + self.CLEAR_TAIL))
+        if t_end <= t0:
+            return
+        plan.windows = [(t0, t_end)]
+        plan.intervention_windows = [(t0, t_end)]
+        plan.consequence_windows = [(t0, t_end)]
+
     def simulates(self, plan) -> bool:
         return (plan.params.get("mode") != "sink_group"
                 and len(plan.params.get("pair", ())) == 2)
@@ -921,63 +977,6 @@ class _CollisionEdit(Injector):
         return vn, v - vn * normal
 
 
-class Newton3Reaction(_CollisionEdit):
-    """In a collision, only one body responds.
-
-    The striker rebounds exactly as it lawfully would, and the ball it hits
-    never moves. **Momentum is not conserved, and that is the whole claim.**
-
-    Staged against a target at rest, which is what keeps the clip about one
-    thing. Letting the struck body "carry on as though nothing hit it" sounds
-    more faithful and is worse in practice: a target that was already moving
-    keeps coming at the striker and the two end up sharing space, so the clip
-    depicts a solidity failure as well, and the striker's lawful rebound reads
-    as it having moved before being touched. A target that was at rest and
-    stays at rest has neither problem.
-    """
-
-    family = "newton3_reaction"
-    magnitude_unit = "momentum_imbalance"
-    RATIO_BY_BIN = {"weak": 4.0, "medium": 20.0, "strong": 200.0}
-
-    @staticmethod
-    def _params(ratio):
-        return {"type": "suppress_reaction", "response_fraction": 1.0 / ratio}
-
-    @staticmethod
-    def _causal_order(actor_id, other_id):
-        # The victim leads: it is the body whose behaviour is wrong, and
-        # `causal_body_ids[0]` is what the residual is measured on.
-        return [int(other_id), int(actor_id)]
-
-    def _outcome(self, traj, actor_id, other_id, t0, normal, ratio):
-        """The struck body never moves; the striker rebounds off it.
-
-        Leaving the striker on its lawful path is not enough, and the clips
-        showed why. Between equal masses at restitution 0.75 the striker keeps
-        only an eighth of its speed -- it nearly stops -- so with the target
-        frozen the two ended up a hair apart and motionless, which reads as
-        them having merged. Reflecting the striker off what is now effectively
-        an immovable object separates them visibly, and it is also the honest
-        outcome: a body that refuses to move is a body of infinite mass.
-        """
-        ai = traj.index_of(actor_id)
-        v_in = traj.lin_vel[t0 - 1, ai].astype(np.float64)
-        n = np.asarray(normal, np.float64)
-        e = float(np.clip(ratio / (ratio + 1.0), 0.55, 0.95))
-        return {other_id: self.FREEZE,
-                actor_id: v_in - (1.0 + e) * float(np.dot(v_in, n)) * n}
-
-    def _staged_masses(self, spec, plan) -> Dict[int, float]:
-        """The struck body becomes immovable, which PyBullet spells `mass=0`.
-
-        Exactly what the family already claims in prose -- "a body that refuses
-        to move is a body of infinite mass" -- said to the simulator instead of
-        written into the trajectory. The striker then rebounds off it for real,
-        so the two genuinely touch before they separate.
-        """
-        return {int(plan.notes["other_id"]): 0.0}
-
 class Newton2Mass(_CollisionEdit):
     """Two identical-looking bodies collide as though their masses differed.
 
@@ -1071,6 +1070,5 @@ class Newton2Mass(_CollisionEdit):
 
 register(Solidity())
 register(SuperElastic())
-register(Newton3Reaction())
 register(Newton2Mass())
 

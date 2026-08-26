@@ -61,7 +61,7 @@ there is nothing to type twice.
 |---|---|---|---|
 | **Spatio-temporal continuity** | continuity, non_parabolic | 21 | Temporal + Spatial Continuity |
 | **Conservation of mass** | permanence, dissolve, fission, fusion, immutability | 52 | Conservation of Mass |
-| **Conservation of momentum and energy** | phantom_impulse, newton1_inertia, newton2_mass, newton3_reaction, angular_momentum, superelastic | 35 | Conservation of Energy |
+| **Conservation of momentum and energy** | phantom_impulse, newton1_inertia, newton2_mass, angular_momentum, superelastic | 35 | Conservation of Energy |
 | **Gravitation** | antigravity, global_gravity | 13 | *(none — they file hovering under Material Response)* |
 | **Solidity and support** | solidity, support | 19 | Spatial Continuity "invisible wall" |
 | **Material response** | deformation, friction | 20 | Material Response |

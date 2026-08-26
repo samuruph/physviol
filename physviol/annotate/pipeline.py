@@ -221,7 +221,20 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     observable = win_mod.observable_frames(
         seg_v, seg_i, dynamic_ids or causal_ids,
         rgb_valid=pv["rgba"], rgb_invalid=pi["rgba"])
-    visible, s_visible = sev_mod.attribute_to_evidence(s_invalid, active, observable)
+    # WHICH window severity is gated on depends on where the violation can be
+    # seen. An `event` family is detectable only across the change -- a
+    # recoloured cube is a perfectly normal cube, and no frame after the ramp
+    # contains the violation -- so its severity lives in the intervention
+    # window. A `state` family is wrong in any frame while it lasts: a hovering
+    # body is wrong whether or not you saw it rise.
+    #
+    # Gating everything on the union marked `colour_shift` as violating to the
+    # end of the clip, which asks a model to report a violation from a frame
+    # that does not contain one.
+    scored = (intervening if FAMILIES[family].detectable == "event"
+              else consequence)
+    visible, s_visible = sev_mod.attribute_to_evidence(s_invalid, scored,
+                                                       observable)
 
     # ---- 3.3 masks (the union rule) --------------------------------------
     vmask = masks_mod.violation_mask(seg_v, seg_i, dynamic_ids, visible)

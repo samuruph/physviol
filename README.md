@@ -346,7 +346,7 @@ Four levels — `python -m physviol.cli taxonomy` prints the live version:
 ```
 DOMAIN     7   which physical law is at stake      identity, kinematics, contact,
                                                    dynamics, equilibrium, optical, global
-FAMILY    17   the specific way it breaks          solidity, fission, newton3_reaction, ...
+FAMILY    17   the specific way it breaks          solidity, fission, ...
 SCENARIO  14   the staged scene                    drop, occluder_pass, pour, ...
                (13 built; clutter_toss is deferred)
 INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
@@ -422,7 +422,7 @@ python -m pytest tests/test_orthogonality.py -q     # every cell, no docker, ~10
 
 **Where the guarantee stops.** Families with an exclusive tripwire are provably clean. The
 rest are separated by *staging*, not by residual: `antigravity`, `phantom_impulse`,
-`newton1_inertia` and `newton3_reaction` all move `linear_momentum`, because they must —
+`newton1_inertia` all move `linear_momentum`, because they must —
 bend a body's gravity and its momentum residual moves with it. Physics is not separable there
 and pretending otherwise would be the wrong fix. What separates them is the situation, which a
 model has to read from the image. [docs/evaluation.md](docs/evaluation.md) says which is

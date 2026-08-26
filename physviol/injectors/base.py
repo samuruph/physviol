@@ -189,6 +189,22 @@ class Injector:
         """
         return None
 
+    def refine_windows(self, spec, traj_valid: Trajectory,
+                       traj_invalid: Trajectory,
+                       plan: InterventionPlan) -> None:
+        """Correct the plan's windows once the trajectory actually exists.
+
+        `plan()` has to guess durations, because it runs before anything has
+        happened. For most families a fraction of the clip is the right guess.
+        For a family whose window has a *geometric* end -- `solidity` is over
+        when the bodies stop overlapping, not after N frames -- the honest
+        length can only be measured afterwards, and the worker writes plan.json
+        after this runs.
+
+        Mutates `plan` in place; default does nothing.
+        """
+        return None
+
     def post_simulate(self, spec, traj_valid: Trajectory,
                       traj_invalid: Trajectory,
                       plan: InterventionPlan) -> Trajectory:

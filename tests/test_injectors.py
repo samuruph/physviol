@@ -201,52 +201,20 @@ def _dv_along(traj, invalid, body_id, t0, normal):
           - traj.lin_vel[t0 - 1, bi].astype(float))
     return abs(float(np.dot(dv, normal)))
 
+def test_newton3_reaction_is_retired():
+    """It was withdrawn, and the reason is recorded rather than forgotten.
 
-def test_newton2_and_newton3_break_different_things():
-    """The property that makes both families worth having.
-
-    They shipped looking identical because both simply suppressed one body's
-    response. They are now distinguished by *how many bodies react*:
-
-    * `newton3_reaction` -- the struck body does not react at all while its
-      partner rebounds normally, so the pair's momentum changes with no
-      external force.
-    * `newton2_mass` -- both react, in the fixed ratio a lawful collision
-      between masses `k*m` and `m` would give. Internally consistent; a
-      violation only because the bodies look identical.
+    Staged honestly it was either the same clip as `newton2_mass` -- an
+    immovable target is the limit of a mass ratio -- or, rewritten to inject
+    momentum, unreliable across severity bins. `taxonomy.RETIRED` keeps the
+    reasoning so the question is not reopened from scratch.
     """
-    spec, traj = _collision_traj()
-    ids = [b.segmentation_id for b in spec.bodies if b.role == "actor"]
+    from physviol import injectors, taxonomy
 
-    inj = injectors.get("newton3_reaction")
-    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
-    assert plan is not None
-    invalid = inj.apply(spec, traj, plan)
-    t0 = int(plan.params["collision_frame"])
-    n = np.asarray(plan.notes["normal"], float)
-    victim = int(plan.notes["other_id"])
-    partner = int(plan.notes["actor_id"])
-    dv_victim = _dv_along(traj, invalid, victim, t0, n)
-    dv_partner = _dv_along(traj, invalid, partner, t0, n)
-    assert dv_victim < 0.2 * dv_partner, (
-        "newton3's victim must barely react: %.3f vs %.3f"
-        % (dv_victim, dv_partner))
-
-    inj = injectors.get("newton2_mass")
-    plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
-    assert plan is not None
-    invalid = inj.apply(spec, traj, plan)
-    t0 = int(plan.params["collision_frame"])
-    n = np.asarray(plan.notes["normal"], float)
-    ratio = float(plan.notes["ratio"])
-    heavy = _dv_along(traj, invalid, int(plan.notes["actor_id"]), t0, n)
-    light = _dv_along(traj, invalid, int(plan.notes["other_id"]), t0, n)
-    assert heavy > 1e-3 and light > 1e-3, "both bodies must react"
-    # dv_heavy / dv_light == m_light / m_heavy == 1 / ratio
-    assert abs(heavy / light - 1.0 / ratio) < 0.25 / ratio + 0.05, (
-        "responses should be in the implied mass ratio: %.3f vs 1/%.0f"
-        % (heavy / light, ratio))
-
+    assert "newton3_reaction" not in taxonomy.FAMILIES
+    assert "newton3_reaction" not in injectors.available()
+    assert "newton3_reaction" in taxonomy.RETIRED
+    assert len(taxonomy.RETIRED["newton3_reaction"]) > 80
 
 def test_newton2_needs_visually_identical_bodies():
     """The scenario has to hold up its end: same radius, same colour."""

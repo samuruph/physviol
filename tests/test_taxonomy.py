@@ -18,7 +18,7 @@ def test_build_cells_are_all_compatible():
 
 
 def test_novelty_claims_match_prior_art_doc():
-    """docs/prior_art.md claims a specific breakdown of the 24 families:
+    """docs/prior_art.md claims a specific breakdown of the 23 families:
     12 map cleanly onto prior art, 3 exist there only as discrete flags where we
     make them continuous, and 9 are genuinely new. A null cross-reference is a
     novelty claim, so the counts must keep agreeing with that table."""
@@ -36,10 +36,10 @@ def test_novelty_claims_match_prior_art_doc():
     # +time_slip, whose principle LikePhys covers as Temporal Continuity though
     # it stages it as frame shuffling rather than as physics.
     assert len(any_prior) == 15, sorted(any_prior)
-    assert len(fully_new) == 9, sorted(fully_new)
+    assert len(fully_new) == 8, sorted(fully_new)
     assert len(intphys) + 4 == 12         # "12 map cleanly"
     assert len(any_prior) - len(intphys) - 4 == 3   # "3 discrete-only"
-    assert len(t.FAMILIES) == 24
+    assert len(t.FAMILIES) == 23
 
 
 def test_declared_kind_matches_what_injectors_emit():
