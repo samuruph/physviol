@@ -265,6 +265,18 @@ class Injector:
         carrying on with whatever it was lawfully doing -- which, for a ball
         waiting to be hit, is nothing at all.
         """
+        # A family that changes no POSE and removes no BODY cannot have made
+        # anything else move without cause. `colour_shift` and `deformation`
+        # edit colour, opacity and scale and leave every trajectory untouched --
+        # yet the guard was re-settling the ball their culprit lawfully struck,
+        # displacing it by 0.44 m in a clip whose only claim is that a ball
+        # changed colour.
+        #
+        # `dissolve` and `permanence` DO belong here even though they move
+        # nothing, because a body that stops existing stops striking things.
+        if not self._changes_dynamics(traj, out, plan):
+            return out
+
         culprits = {int(b) for b in plan.causal_body_ids}
         # Scripted bodies are driven by a constraint the seam does not model --
         # a pendulum bob accelerates every frame with nothing touching it, which
@@ -297,6 +309,29 @@ class Injector:
                                obstacles=_geom.Obstacles(spec, out,
                                                          exclude_ids=[bid]))
         return out
+
+    @staticmethod
+    def _changes_dynamics(traj: Trajectory, out: Trajectory,
+                          plan: InterventionPlan) -> bool:
+        """Did the intervention change a culprit's motion, or remove it?
+
+        Pose, orientation, both velocities -- and `present`, because a body that
+        ceases to exist stops striking whatever it was about to strike, which is
+        every bit as much a dynamics change as moving it.
+        """
+        for bid in plan.causal_body_ids:
+            try:
+                j = traj.index_of(int(bid))
+            except Exception:                                 # noqa: BLE001
+                continue
+            for attr in ("pos", "quat", "lin_vel", "ang_vel"):
+                a = np.asarray(getattr(traj, attr)[:, j], np.float64)
+                b = np.asarray(getattr(out, attr)[:, j], np.float64)
+                if a.shape == b.shape and float(np.abs(a - b).max()) > 1e-9:
+                    return True
+            if not np.array_equal(traj.present[:, j], out.present[:, j]):
+                return True
+        return False
 
     @staticmethod
     def _uncaused_frames(traj: Trajectory, spec, contacts, body_id: int,

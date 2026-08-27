@@ -250,7 +250,15 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # a culprit itself. That turns "affected" from a hand-maintained list into a
     # comparison, and it is the same comparison the bystander guard runs.
     affected = list(static_ids) + _disturbed_bodies(traj_v, traj_i, causal_ids)
-    cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, affected, visible)
+    # CONSEQUENCES, so gated on the consequence window rather than the scored
+    # one. For an event family the scored window is the handful of frames the
+    # change takes, and the causal mask was disappearing with it -- but "what
+    # did this violation affect" outlives the moment of intervention. A
+    # phantom impulse is delivered in two frames and the ball it launched is a
+    # consequence for the rest of the clip.
+    causal_gate = consequence & observable
+    cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, affected,
+                                  causal_gate, static_ids=static_ids)
     dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
 
     # ---- 3.4 steps 4-5: paint, then the temporal profile ------------------

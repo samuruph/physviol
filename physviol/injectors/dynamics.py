@@ -64,9 +64,13 @@ class PhantomImpulse(Injector):
         dv = float(np.linalg.norm(push))
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         n_win = self._window_len(2, t0, T)
+        # The shove lasts two frames; the ball it launched is a consequence for
+        # the rest of the clip, and `causal_mask` is gated on that window.
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0,
-            windows=[(t0, min(T - 1, t0 + n_win - 1))],
+            windows=[(t0, T - 1)],
+            intervention_windows=[(t0, min(T - 1, t0 + n_win - 1))],
+            consequence_windows=[(t0, T - 1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "impulse", "delta_v": push.tolist(),
                     "frame_fit_scale": scale},

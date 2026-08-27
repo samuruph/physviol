@@ -191,7 +191,22 @@ class Friction(Injector):
 
     family = "friction"
     persistent = True
-    RATE_BY_BIN = {"weak": 0.35, "medium": 0.0, "strong": -0.6}
+    #: Multiplier on the body's friction coefficient. Strictly in (0, 1): LESS
+    #: grip than declared, so the body fails to slow as it should.
+    #:
+    #: It used to be a rate at which the body was walked along its own lawful
+    #: path, with `strong = -0.6` -- a NEGATIVE rate, which retraced the path
+    #: backwards. The clip showed a ball decelerating from +1.22 m/s, reversing,
+    #: and then travelling backwards at a constant 0.73 m/s forever. Friction
+    #: opposes motion; it can bring a body to rest and it stops acting there. It
+    #: cannot reverse anything, and a body that reverses and then holds a
+    #: constant speed is not depicting friction at all.
+    #:
+    #: The other direction -- more grip, stopping sooner -- is not available
+    #: either: at its limit it is a body stopping dead, which is
+    #: `newton1_inertia`. Too little friction is the half of the axis this
+    #: family can own.
+    RATE_BY_BIN = {"weak": 0.5, "medium": 0.15, "strong": 0.02}
 
     def strong_residual_reference(self, spec) -> float:
         return 2.0
@@ -251,17 +266,12 @@ class Friction(Injector):
                                    * rate[:, None].astype(np.float32))
         return out
 
-    #: NOT staged, though it easily could be. `changeDynamics(lateralFriction=)`
-    #: works and the code below is correct, but it is a regression in practice:
-    #: on `barrier_pass` the staged version scores 0.02 / 0.04 / 0.00 where the
-    #: trajectory path scores 1.00, because this family's residual measures the
-    #: *effective* coefficient recovered from the path, and a coefficient change
-    #: applied to a body that is already nearly at rest barely moves it.
-    #:
-    #: Fixing that means giving the scenarios more of their clip in motion --
-    #: docs/decisions_pending.md section 3 -- not switching paths. Left here
-    #: rather than deleted so the next attempt starts from a working stage().
-    simulated = False
+    #: STAGED. `changeDynamics(lateralFriction=)` is what friction *is*, and a
+    #: coefficient cannot produce the reversal the trajectory path did. It
+    #: scores lower -- a body already near rest barely responds to a grip change
+    #: -- and that is the honest number for a clip that now depicts what it
+    #: claims, rather than a high score for one that did not.
+    simulated = True
 
     def stage(self, spec, simulator, objs, plan):
         """Scale the actor's friction coefficient and let it slide.

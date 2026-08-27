@@ -64,7 +64,8 @@ def test_static_participant_does_not_flood_the_mask():
     si[:, 1, 1] = 2
     m = masks.violation_mask(sv, si, [2], np.ones(3, bool))
     assert m.sum() == 3, "only the dynamic body should contribute"
-    c = masks.causal_mask(sv, si, [2], [1], np.ones(3, bool), neighbourhood=1)
+    c = masks.causal_mask(sv, si, [2], [1], np.ones(3, bool), neighbourhood=1,
+                          static_ids=[1])
     assert (c == 1).sum() == 3
     assert (c == 2).sum() > 0, "the floor should appear near the culprit"
     assert (c == 2).sum() < sv.size, "but not everywhere"
@@ -87,7 +88,8 @@ def test_causal_and_invalid_masks_are_invalid_side_only():
     assert masks.violation_mask(sv, si, [2], active).sum() == 3
     assert masks.reference_mask(sv, [2]).sum() == 3
     assert masks.invalid_mask(si, [2], active).sum() == 0
-    assert masks.causal_mask(sv, si, [2], [1], active).sum() == 0
+    assert masks.causal_mask(sv, si, [2], [1], active,
+                             static_ids=[1]).sum() == 0
 
 
 def test_invalid_mask_is_a_subset_of_the_union():

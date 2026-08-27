@@ -70,7 +70,8 @@ def invalid_mask(seg_invalid: np.ndarray, dynamic_causal_ids: Sequence[int],
 
 def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
                 primary_ids: Sequence[int], secondary_ids: Sequence[int],
-                active: np.ndarray, neighbourhood: int = 3) -> np.ndarray:
+                active: np.ndarray, neighbourhood: int = 3,
+                static_ids: Sequence[int] = ()) -> np.ndarray:
     """uint8 [T,H,W]: 0 = nothing, 1 = the culprit, 2 = a body it disturbed.
 
     **Invalid side only.** The question this array answers is "who did it, and
@@ -88,11 +89,30 @@ def causal_mask(seg_valid: np.ndarray, seg_invalid: np.ndarray,
     out = np.zeros(prim.shape, np.uint8)
     out[prim] = 1
     if len(secondary_ids):
-        near = _dilate(prim, neighbourhood)
-        sec = footprint(seg_invalid, secondary_ids)
-        sec = sec & near & np.asarray(active, bool)[:, None, None] & ~prim
-        out[sec] = 2
+        gate = np.asarray(active, bool)[:, None, None]
+        static_near, moving = _split_participants(secondary_ids, static_ids)
+        sec = np.zeros(prim.shape, bool)
+        if static_near:
+            # A surface only counts where the culprit is passing through it:
+            # otherwise "the floor" becomes the whole plane.
+            sec |= (footprint(seg_invalid, static_near)
+                    & _dilate(prim, neighbourhood))
+        if moving:
+            # A body that was knocked away is a consequence *wherever it went*.
+            # Restricting it to a neighbourhood of the culprit deleted it
+            # exactly when it mattered -- the further a struck ball travels, the
+            # more clearly it is an effect, and the more certainly it fell
+            # outside the box.
+            sec |= footprint(seg_invalid, moving)
+        out[sec & gate & ~prim] = 2
     return out
+
+
+def _split_participants(secondary_ids, static_ids):
+    st = {int(i) for i in (static_ids or ())}
+    near = [int(i) for i in secondary_ids if int(i) in st]
+    moving = [int(i) for i in secondary_ids if int(i) not in st]
+    return near, moving
 
 
 def reference_mask(seg_valid: np.ndarray,

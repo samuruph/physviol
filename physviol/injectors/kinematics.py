@@ -347,7 +347,10 @@ class Continuity(Injector):
             lambda k: self._teleport(traj, actor, t0, strongest * k))
         delta = nominal * scale
         return InterventionPlan(
-            family=self.family, kind="instant", t_event=t0, windows=[(t0, t0)],
+            family=self.family, kind="instant", t_event=t0,
+            windows=[(t0, traj.num_frames - 1)],
+            intervention_windows=[(t0, t0)],
+            consequence_windows=[(t0, traj.num_frames - 1)],
             causal_body_ids=[int(actor.segmentation_id)],
             params={"type": "position_set", "delta_m": delta.tolist(),
                     "frame_fit_scale": scale},

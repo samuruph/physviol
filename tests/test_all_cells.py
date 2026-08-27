@@ -161,6 +161,15 @@ def test_no_body_moves_without_being_touched(scenario, family):
     spec, traj, inj, plan = _prepare(scenario, family)
     assert plan is not None
     invalid = inj.apply(spec, traj, plan)
+
+    # An appearance-only family cannot have made anything move without cause,
+    # because it made nothing move at all. Checking them exercises only the
+    # detector's own false-positive rate against `mockroll`'s crude contacts --
+    # which is what the bystander guard used to "fix", displacing a lawfully
+    # struck ball by 0.44 m in a clip whose only claim was a colour change.
+    if not Injector._changes_dynamics(traj, invalid, plan):
+        pytest.skip("%s changes no dynamics" % family)
+
     culprits = {int(i) for i in plan.causal_body_ids}
     contacts = _geom.geometric_contacts(spec, invalid)
 
