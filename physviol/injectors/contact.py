@@ -527,110 +527,41 @@ class Solidity(Injector):
         return self.simulates(plan)
 
     def stage(self, spec, simulator, objs, plan):
-        """Give back more than arrived, at each bounce.
+        """Turn the collision pair off and let the body go where it goes.
 
-        Two shapes, because a bounce against a wall and a bounce between two
-        balls are different quantities.
-
-        Against a STATIC partner the coefficient of restitution is the body's
-        outgoing speed over its incoming speed, so the hook records the approach
-        while the body is free and sets the outgoing normal speed to `gain`
-        times it.
-
-        Against a MOVING partner it is the pair's *relative* separation speed
-        over their relative approach speed, and the correction is split between
-        them so momentum stays conserved -- the violation is that the collision
-        returned more energy than it took, not that momentum appeared. Scaling
-        only the striker does not work at all here: between equal masses the
-        striker barely rebounds, it merely slows, so it never separates and a
-        hook waiting for separation never fires. `collision` scored 0.000 with
-        the right contact identified and never acted on.
+        The violation is that two surfaces did not stop each other, so the
+        honest way to say it is to stop PyBullet from enforcing that pair --
+        not to write in an overlap and hope the re-integrator does not undo it.
+        Every surface beneath a body it was RESTING on goes too, so a block on a
+        ramp sinks through the ramp rather than sliding down it and only then
+        falling through the floor.
         """
+        if not self._stageable(plan):
+            return ()
         import pybullet as pb
+
+        for ia, ib in self._filter_pairs(spec, simulator, objs, plan):
+            pb.setCollisionFilterPair(ia, ib, -1, -1, 0)
+        return ()
+
+    def _filter_pairs(self, spec, simulator, objs, plan):
+        """Every (actor, surface) pair this violation suppresses."""
         from ..render import stepper
 
-        gain = float(plan.params["speed_gain"])
-        actor_id = int(plan.causal_body_ids[0])
-        idx = stepper.pybullet_index(simulator, objs, spec, actor_id)
-        if idx is None:
-            return ()
-        partner_seg = plan.notes.get("partner_id")
-        partner_body = next((b for b in spec.bodies
-                             if int(b.segmentation_id) == int(partner_seg or -1)),
-                            None)
-        partner = (stepper.pybullet_index(simulator, objs, spec,
-                                          int(partner_seg))
-                   if partner_seg is not None else None)
-        moving_partner = bool(partner is not None and partner_body is not None
-                              and not partner_body.static)
-        state = {"ready": True, "touching": False,
-                 "approach": float(plan.notes.get("approach_speed", 0.0))}
-
-        def _points():
-            pts = pb.getContactPoints(bodyA=idx)
-            if partner is None:
-                return pts
-            return [c for c in pts if partner in (c[1], c[2])]
-
-        def _normal(points):
-            n = np.mean([np.asarray(c[7], np.float64) for c in points], axis=0)
-            mag = float(np.linalg.norm(n))
-            return (n / mag) if mag > 1e-9 else None
-
-        def boost(_client, _step, _frame):
-            points = _points()
-            va = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
-
-            if moving_partner:
-                vb = np.asarray(pb.getBaseVelocity(partner)[0], np.float64)
-                rel = va - vb
-                if points:
-                    if not state["touching"]:
-                        state["touching"] = True
-                    return
-                if not state["touching"]:
-                    state["approach"] = float(np.linalg.norm(rel))
-                    return
-                # Contact has ENDED, so the impulse is fully resolved.
-                state["touching"] = False
-                if not state["ready"] or state["approach"] <= 1e-6:
-                    return
-                mag = float(np.linalg.norm(rel))
-                if mag < 1e-6:
-                    return
-                n = rel / mag
-                extra = state["approach"] * gain - mag
-                if extra <= 0.0:
-                    return
-                # Split evenly: equal and opposite, so momentum is untouched
-                # and only the energy of separation grows.
-                wa = pb.getBaseVelocity(idx)[1]
-                wb = pb.getBaseVelocity(partner)[1]
-                pb.resetBaseVelocity(idx, (va + n * extra * 0.5).tolist(), list(wa))
-                pb.resetBaseVelocity(partner, (vb - n * extra * 0.5).tolist(),
-                                     list(wb))
-                state["ready"] = False
-                return
-
-            w = pb.getBaseVelocity(idx)[1]
-            if not points:
-                state["ready"] = True
-                state["approach"] = float(np.linalg.norm(va))
-                return
-            if not state["ready"]:
-                return
-            n = _normal(points)
-            if n is None:
-                return
-            out_speed = float(va @ n)
-            if out_speed <= 1e-3:
-                return
-            target = float(state["approach"]) * gain
-            pb.resetBaseVelocity(idx, (va + n * (target - out_speed)).tolist(),
-                                 list(w))
-            state["ready"] = False
-
-        return (boost,)
+        pair = plan.params.get("pair")
+        if not pair or len(pair) != 2:
+            return []
+        a, b = pair
+        ia = stepper.pybullet_index(simulator, objs, spec, int(a))
+        if ia is None:
+            return []
+        others = [int(b)] + [int(x) for x in plan.params.get("also_disable", ())]
+        out = []
+        for other in others:
+            ib = stepper.pybullet_index(simulator, objs, spec, other)
+            if ib is not None:
+                out.append((ia, ib))
+        return out
 
     def unstage(self, spec, simulator, objs, plan) -> None:
         if not self._stageable(plan):
@@ -901,6 +832,10 @@ class SuperElastic(Injector):
             magnitude_unit="energy_gain_ratio", severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "partner_id": int(partner_id),
+                   # Both participants, so `energy_at_contact` can score the
+                   # pair rather than one body. A moving partner carries away
+                   # part of the gain and neither half shows it alone.
+                   "pair_ids": [int(actor.segmentation_id), int(partner_id)],
                    # The approach speed, measured from the VALID rollout rather
                    # than observed at run time. The world is reset to t_event,
                    # and at t_event the bodies are already touching -- so a hook
@@ -959,17 +894,28 @@ class SuperElastic(Injector):
     simulated = True
 
     def stage(self, spec, simulator, objs, plan):
-        """Give the body back more than it arrived with, at each bounce.
+        """Return the collision's energy instead of absorbing it.
 
-        The hook watches for the frame where the actor is touching something and
-        its velocity along the contact normal has turned outward -- the instant
-        the bounce resolves -- and scales it. Re-arms when contact is lost, so a
-        `repeated` family fires once per bounce as it claims to.
+        Superelastic means the coefficient of restitution exceeds one: the pair
+        separates faster than it met, so the contact gives back more than it
+        took. Two shapes, because the quantity differs:
 
-        The contact is real either way, which the prescribed version could not
-        promise: the body genuinely touches before it leaves.
+        * against a STATIC partner it is the body's outgoing speed over its
+          incoming speed;
+        * against a MOVING partner it is the pair's RELATIVE separation speed
+          over their relative approach speed, and the correction is split evenly
+          so momentum stays conserved. The violation is that the collision
+          returned more energy than it took, not that momentum appeared.
+
+        The contact lasts a single substep -- measured with
+        `probe_superelastic.py`: the balls approach at 1.292 m/s, and by the one
+        step where PyBullet reports a contact the solver has already resolved it
+        to 0.727. So the boost cannot be applied "during" the collision; it is
+        applied on the step after contact ends, against the approach speed
+        recorded while the bodies were still free.
         """
         import pybullet as pb
+
         from ..render import stepper
 
         gain = float(plan.params["speed_gain"])
@@ -977,16 +923,18 @@ class SuperElastic(Injector):
         idx = stepper.pybullet_index(simulator, objs, spec, actor_id)
         if idx is None:
             return ()
-        # Only the contact this plan is about. Watching every contact meant a
-        # ball rolling on the floor was permanently "touching", so the hook
-        # never re-armed, never recorded an approach speed, and boosted to
-        # zero -- `collision` scored 0.000 with the ball-ball impact correctly
-        # identified and never acted on.
-        partner = stepper.pybullet_index(
-            simulator, objs, spec, int(plan.notes.get("partner_id", -1))) \
-            if plan.notes.get("partner_id") is not None else None
-        state = {"ready": True, "approach": 0.0}
 
+        partner_seg = plan.notes.get("partner_id")
+        partner_body = next((b for b in spec.bodies
+                             if int(b.segmentation_id) == int(partner_seg)),
+                            None) if partner_seg is not None else None
+        partner = (stepper.pybullet_index(simulator, objs, spec,
+                                          int(partner_seg))
+                   if partner_seg is not None else None)
+        moving = bool(partner is not None and partner_body is not None
+                      and not partner_body.static)
+        state = {"ready": True, "touching": False,
+                 "approach": float(plan.notes.get("approach_speed", 0.0))}
         def _points():
             pts = pb.getContactPoints(bodyA=idx)
             if partner is None:
@@ -994,36 +942,52 @@ class SuperElastic(Injector):
             return [c for c in pts if partner in (c[1], c[2])]
 
         def boost(_client, _step, _frame):
-            v, w = pb.getBaseVelocity(idx)
-            v = np.asarray(v, np.float64)
             points = _points()
+            va = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
+            wa = pb.getBaseVelocity(idx)[1]
+
+            if moving:
+                vb = np.asarray(pb.getBaseVelocity(partner)[0], np.float64)
+                wb = pb.getBaseVelocity(partner)[1]
+                rel = va - vb
+                if points:
+                    state["touching"] = True
+                    return
+                if not state["touching"]:
+                    state["approach"] = float(np.linalg.norm(rel))
+                    return
+                state["touching"] = False
+                mag = float(np.linalg.norm(rel))
+                extra = state["approach"] * gain - mag
+                if not state["ready"]:
+                    return
+                if mag < 1e-6 or extra <= 0.0:
+                    return
+                n = rel / mag
+                pb.resetBaseVelocity(idx, (va + n * extra * 0.5).tolist(),
+                                     list(wa))
+                pb.resetBaseVelocity(partner, (vb - n * extra * 0.5).tolist(),
+                                     list(wb))
+                state["ready"] = False
+                return
+
             if not points:
                 state["ready"] = True
-                state["approach"] = float(np.linalg.norm(v))
+                state["approach"] = float(np.linalg.norm(va))
                 return
             if not state["ready"]:
                 return
-            # Outward normal, averaged over the contact manifold. `contact[7]`
-            # is contactNormalOnB, pointing from B towards A -- and we asked for
-            # bodyA=idx, so it points away from the surface the body is on.
             n = np.mean([np.asarray(c[7], np.float64) for c in points], axis=0)
             mag = float(np.linalg.norm(n))
             if mag < 1e-9:
                 return
             n /= mag
-            out_speed = float(v @ n)
+            out_speed = float(va @ n)
             if out_speed <= 1e-3:
-                return                      # still approaching, or resting
-            # The coefficient of restitution is outgoing over INCOMING, so the
-            # gain has to be applied to the speed the body arrived with -- not
-            # to whatever the solver left it with. Scaling the outgoing speed
-            # instead produced e = 0.46 from a gain of 2.6, because PyBullet's
-            # combined restitution against the floor is only 0.18: the bounce
-            # was merely less lossy, no energy was created, and the clip scored
-            # exactly zero.
-            target = float(state["approach"]) * gain
-            v = v + n * (target - out_speed)
-            pb.resetBaseVelocity(idx, v.tolist(), list(w))
+                return
+            pb.resetBaseVelocity(
+                idx, (va + n * (state["approach"] * gain - out_speed)).tolist(),
+                list(wa))
             state["ready"] = False
 
         return (boost,)

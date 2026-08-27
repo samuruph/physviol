@@ -206,13 +206,33 @@ def energy_at_contact(traj: Trajectory, b: int, ctx: Ctx) -> np.ndarray:
     arriving from nowhere shows up. No contact gate is needed -- the law is now
     true on every frame, which is what a conservation law should be.
     """
-    m = float(traj.mass[b])
     g = float(np.linalg.norm(traj.gravity))
     datum = float(ctx.get("surface_top", 0.0))
+
+    # THE PAIR, when the collision has two moving participants. A ball-ball
+    # bounce that returns more than it took shows up in neither body alone: the
+    # striker still LOSES energy, just less of it, and the target's larger gain
+    # looks like an ordinary transfer. Only their sum rises. Scored on the
+    # striker this read exactly 0.000 on a clip whose total mechanical energy
+    # went from 6.32 J to 7.42 J.
+    ids = [int(x) for x in (ctx.get("pair_ids") or ())]
+    members = []
+    for seg in ids:
+        try:
+            members.append(traj.index_of(seg))
+        except Exception:                                     # noqa: BLE001
+            continue
+    if len(members) < 2:
+        members = [b]
+
+    m = float(traj.mass[b])
     r = max(float(traj.radius[b]), 1e-9)
-    v = traj.lin_vel[:, b, :].astype(np.float64)
-    h = traj.pos[:, b, 2].astype(np.float64) - datum
-    e = 0.5 * m * np.sum(v * v, axis=1) + m * g * h
+    e = np.zeros((traj.num_frames,), np.float64)
+    for j in members:
+        mj = float(traj.mass[j])
+        vj = traj.lin_vel[:, j, :].astype(np.float64)
+        hj = traj.pos[:, j, 2].astype(np.float64) - datum
+        e += 0.5 * mj * np.sum(vj * vj, axis=1) + mj * g * hj
 
     out = np.zeros_like(e)
     if e.shape[0] < 2:
