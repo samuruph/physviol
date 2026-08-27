@@ -401,8 +401,15 @@ class Fusion(Injector):
 
         draw_in = max(self.DRAW_IN_MIN,
                       int(round(self.DRAW_IN_FRACTION * traj.num_frames)))
+        # `draw_in + 1`, because the absorbed body is removed on the frame AFTER
+        # the draw-in completes -- that removal is the moment the object count
+        # actually changes, and it is what `object_count` measures. With the
+        # window ending one frame earlier the residual rose to 0.5 exactly one
+        # frame outside the window it was scored on, and every fusion cell
+        # reported severity 0.000 with a perfectly correct residual sitting
+        # beside it.
         union, applied, after = self._split_windows(
-            t0, traj.num_frames, draw_in)
+            t0, traj.num_frames, draw_in + 1)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=union, intervention_windows=applied,

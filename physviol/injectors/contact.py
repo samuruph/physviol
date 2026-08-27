@@ -219,7 +219,17 @@ class Solidity(Injector):
     family = "solidity"
 
     DEPTH_BY_BIN = {"weak": 0.30, "medium": 0.80, "strong": 2.50}
-    FRAMES_BY_BIN = {"weak": 2, "medium": 3, "strong": 4}
+    #: How long the collision pair stays suppressed, in frames. This IS the
+    #: severity axis once the violation is staged: the pair is either enforced
+    #: or it is not, so "how deep" is not a dial the simulator has -- but "for
+    #: how long" is, and it produces exactly the qualitative ladder the depth
+    #: bins were describing. Two frames and the body dips in and is pushed back
+    #: out when contact resumes; long enough and it is out the far side before
+    #: anything can stop it, which is what `strong` has always meant.
+    #:
+    #: Left as a whole-clip suppression, every bin passed completely through and
+    #: all three scored 1.00 -- three renders of one violation.
+    FRAMES_BY_BIN = {"weak": 2, "medium": 4, "strong": 10}
 
     def strong_residual_reference(self, spec) -> float:
         # The penetration law reports depth in radii, which is exactly the unit
@@ -540,9 +550,24 @@ class Solidity(Injector):
             return ()
         import pybullet as pb
 
-        for ia, ib in self._filter_pairs(spec, simulator, objs, plan):
+        pairs = self._filter_pairs(spec, simulator, objs, plan)
+        for ia, ib in pairs:
             pb.setCollisionFilterPair(ia, ib, -1, -1, 0)
-        return ()
+
+        # Restore the pair once the window closes, so the bins differ. Without
+        # this the suppression lasted the whole clip and weak, medium and strong
+        # were the same clip three times.
+        t_end = plan.t_event + int(plan.params.get("frames_disabled", 4))
+        state = {"restored": False}
+
+        def restore(_client, _step, frame):
+            if state["restored"] or frame < t_end:
+                return
+            for ia, ib in pairs:
+                pb.setCollisionFilterPair(ia, ib, -1, -1, 1)
+            state["restored"] = True
+
+        return (restore,)
 
     def _filter_pairs(self, spec, simulator, objs, plan):
         """Every (actor, surface) pair this violation suppresses."""

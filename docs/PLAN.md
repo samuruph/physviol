@@ -369,12 +369,14 @@ There is no "severity mask". There are two distinct arrays: **`violation_mask`**
 ## Part 2 — Taxonomy: how the dataset is organised
 
 Four levels. Every clip is uniquely addressed by the bottom one, and every level above is a
-grouping key that a consumer can aggregate or split on.
+grouping key that a consumer can aggregate or split on. Counts below are read straight off
+`physviol/taxonomy.py` — run `python -m physviol.cli taxonomy` for the live version, which is
+the authority if this table and the code ever disagree.
 
 ```
-Level 1  DOMAIN     ── which physical law is at stake        (7 domains)
-Level 2  FAMILY     ── the specific way it breaks            (17 families)
-Level 3  SCENARIO   ── the staged scene it happens in        (14 scenarios)
+Level 1  DOMAIN     ── which physical law is at stake        (8 domains)
+Level 2  FAMILY     ── the specific way it breaks            (23 families)
+Level 3  SCENARIO   ── the staged scene it happens in        (15 scenarios, 14 built)
 Level 4  INSTANCE   ── scenario × family × seed × severity   (the clip pair)
 ```
 
@@ -382,52 +384,74 @@ The top level is organised **by physical law**, not by cognitive principle, beca
 is a law residual (Part 1.2) — so the domain determines the residual, which determines the
 severity unit. IntPhys 2 principles and LikePhys domains are retained as *cross-reference
 fields* (`intphys2_category`, `likephys_domain`) for head-to-head comparability, mapped in
-[prior_art.md](prior_art.md).
+[prior_art.md](prior_art.md). A separate proposal to replace `domain` with a law-derived
+`principle` axis is written up in [taxonomy_v2.md](taxonomy_v2.md) — **not built**, and this
+Part 2 still describes what ships today.
 
 ### Level 1 + 2 — Domains and families
 
 | # | domain | the question it tests | families | residual |
 |---|---|---|---|---|
-| 1 | **`identity`** | does the object persist and stay itself? | `permanence`, `immutability`, `fission` | mass / volume / object-count discontinuity |
-| 2 | **`kinematics`** | is unsupported motion consistent with `g`? | `continuity`, `non_parabolic`, `antigravity`, `newton1_inertia` | `‖a−g‖/‖g‖`, parabola RMS, jump distance |
-| 3 | **`contact`** | do bodies interact legally when they touch? | `solidity`, `superelastic`, `newton3_reaction` | penetration depth, energy gain ratio, momentum imbalance |
+| 1 | **`identity`** | does the object persist and stay itself? | `permanence`, `dissolve`, `immutability`, `fission`, `fusion` | mass / opacity / volume / object-count discontinuity |
+| 2 | **`kinematics`** | is unsupported motion consistent with `g`? | `continuity`, `non_parabolic`, `antigravity`, `time_slip`, `newton1_inertia` | jump distance, parabola RMS, `‖a−g‖/‖g‖`, stall frames, `‖Δv‖/(‖g‖·Δt)` |
+| 3 | **`contact`** | do bodies interact legally when they touch? | `solidity`, `superelastic` | penetration depth, energy gain ratio |
 | 4 | **`dynamics`** | do forces and masses behave? | `phantom_impulse`, `newton2_mass`, `angular_momentum` | `J/(m·v_typ)`, effective-mass ratio, `L` defect |
 | 5 | **`equilibrium`** | do resting and supported bodies behave? | `support`, `friction` | clearance above the supporting surface, effective µ vs declared µ |
-| 6 | **`optical`** | is light consistent with geometry? | `shadow` | shadow–caster geometric mismatch |
-| 7 | **`global`** | are the scene's constants physical? | `global_gravity` | `\|α − 1\|` on scene gravity |
+| 6 | **`optical`** | is light consistent with geometry? | `shadow`, `shadow_inverted`, `shadow_shape` | shadow–caster offset (px or m), shadow–caster aspect mismatch |
+| 7 | **`appearance`** | does the object look like itself from frame to frame? | `colour_shift`, `deformation` | Lab colour distance, aspect-ratio change |
+| 8 | **`global`** | are the scene's constants physical? | `global_gravity` | `\|α − 1\|` on scene gravity |
 
-**The 17 families in full:**
+**The 23 families in full:**
 
 | family | domain | injection | severity unit | kind |
 |---|---|---|---|---|
-| `permanence` | identity | remove / duplicate body, ideally while occluded | occlusion lag (frames), Δmass | instant |
-| `immutability` | identity | the body grows or shrinks, ideally behind an occluder | volume ratio | sustained |
-| `fission` | identity | one body becomes two, each half the volume | object-count ratio | sustained |
-| `continuity` | kinematics | discontinuous position set | jump distance (m) | instant |
-| `non_parabolic` | kinematics | replace free-flight arc with a non-`g` curve | RMS deviation from fitted parabola (m) | sustained |
-| `antigravity` | kinematics | per-body gravity scale `g → αg`, `α ∈ [−1, 0.5]` | `‖a−g‖/‖g‖` | sustained |
-| `newton1_inertia` | kinematics | resting body accelerates; sliding body stops on frictionless surface | `‖Δv‖/(‖g‖·Δt)` | instant / sustained |
-| `solidity` | contact | disable collision pair for N frames | penetration depth (m) | sustained |
-| `superelastic` | contact | restitution `e > 1` | energy gain ratio | **repeated** |
-| `newton3_reaction` | contact | in a collision only one body responds | momentum imbalance | instant |
-| `phantom_impulse` | dynamics | impulse with no contact | `J/(m·v_typ)` | instant |
-| `newton2_mass` | dynamics | identical-looking bodies respond differently to equal impulse | effective-mass ratio | instant |
-| `angular_momentum` | dynamics | spin reverses; torque with no contact | `L` defect | instant / sustained |
-| `support` | equilibrium | unsupported body hovers; unstable stack does not topple | CoM-to-polygon distance (m) | sustained |
-| `friction` | equilibrium | body accelerates against its motion, or slides forever | effective µ vs declared µ | sustained |
-| `shadow` | optical | shadow detaches, inverts, vanishes, or mismatches its caster | shadow–caster offset (px or m) | sustained |
-| `global_gravity` | global | whole scene runs at `αg` — internally consistent | `\|α − 1\|` | sustained (whole clip) |
+| `permanence` | identity | a body is simply gone between one frame and the next | `mass_ratio` | sustained |
+| `dissolve` | identity | a body fades out of visibility over several frames | `opacity_lost` | sustained |
+| `immutability` | identity | the body grows or shrinks, ideally behind an occluder | `volume_ratio` | sustained |
+| `fission` | identity | one body becomes two, which fly apart | `count_ratio` | sustained |
+| `fusion` | identity | bodies converge and come out as one, same size | `count_ratio` | sustained |
+| `continuity` | kinematics | discontinuous position set | `m_jump_distance` | instant |
+| `non_parabolic` | kinematics | replace the free-flight arc with a non-`g` curve | `m_rms_from_parabola` | sustained |
+| `antigravity` | kinematics | per-body gravity scale `g → αg` | `gravity_scale_deviation` | sustained |
+| `time_slip` | kinematics | a body stalls in place, then resumes where it left off | `slip_frames` | sustained |
+| `newton1_inertia` | kinematics | a moving body stops dead and stays stopped | `dv_over_g_dt` | sustained |
+| `solidity` | contact | disable a collision pair for N frames | `m_penetration_depth` | sustained |
+| `superelastic` | contact | restitution `e > 1` | `energy_gain_ratio` | **repeated** |
+| `phantom_impulse` | dynamics | impulse applied with no contact | `impulse_over_m_vtyp` | instant |
+| `newton2_mass` | dynamics | identical-looking bodies respond differently to equal impulse | `effective_mass_ratio` | instant |
+| `angular_momentum` | dynamics | spin reverses, or torque appears with no contact | `angular_momentum_defect` | instant |
+| `support` | equilibrium | an unsupported body hovers, or an unstable stack holds | `m_support_clearance` | sustained |
+| `friction` | equilibrium | a body accelerates against its motion, or slides forever | `effective_mu_ratio` | sustained |
+| `shadow` | optical | the shadow detaches from its caster and slides away | `shadow_caster_offset_radii` | sustained |
+| `shadow_inverted` | optical | the shadow sits on the lit side of its caster, all clip | `shadow_caster_offset_radii` | sustained |
+| `shadow_shape` | optical | the shadow stays put but stops matching the caster's shape | `shadow_aspect_ratio` | sustained |
+| `colour_shift` | appearance | a body changes colour with nothing to explain it | `lab_distance` | sustained |
+| `deformation` | appearance | a rigid body squashes or stretches out of proportion | `aspect_ratio_change` | sustained |
+| `global_gravity` | global | the whole scene runs at `αg` — internally consistent | `gravity_scale_deviation` | sustained (whole clip) |
 
-Three families deserve their reason-for-existing stated, because they are what makes the
+`newton3_reaction` is not in this table: it shipped, then was **retired** — see
+`taxonomy.RETIRED` for the measurement that killed it. Staged honestly (an immovable target,
+`mass = 0`) it converged on the same clip `newton2_mass` already produces at its `strong` bin;
+staged the other way (momentum injected into the striker) it only fired reliably on two of
+three severity bins. A family that sometimes depicts what another family already covers, and
+sometimes depicts nothing, is worse than no second family.
+
+Four families deserve their reason-for-existing stated, because they are what makes the
 "where" annotation non-trivial:
 
 - **`non_parabolic`** is the **clean control**. No occluder, so `t_event ≈ t_observable`,
   which is the baseline against which every occluded family's latency is measured. It is also
   the most smoothly dialable severity axis we have.
-- **`shadow`** is the **shortcut probe**. The annotated region is **not on the object**. A
-  model that scores well by running object detection and calling it localisation fails here.
+- **The `shadow` family** (`shadow`, `shadow_inverted`, `shadow_shape`) is the **shortcut
+  probe**. The annotated region is **not on the object**. A model that scores well by running
+  object detection and calling it localisation fails here.
 - **`global_gravity`** is the **no-culprit case**. The mask is the entire frame. It tests
   whether a model can flag a violation when "where" is legitimately "everywhere".
+- **`time_slip`** is the one family whose compatibility is *time-limited rather than
+  physical*: it needs a body that is still moving late enough in the clip to have motion left
+  to resume into, so it is deferred on `collision`, `ramp_slide` and (for a different reason)
+  `pour` until the tier's timing is tuned — see `taxonomy.TIME_SLIP_NEEDS_MOTION` and
+  [docs/decisions_pending.md](decisions_pending.md) §3.
 
 ### On fluid and deformables — measured, and deferred
 
@@ -504,79 +528,94 @@ violation stays legible. L0 remains available and is faster, since it needs no n
 ### Level 3 — Scenarios (the staged scenes)
 
 A scenario is a seeded scene sampler: assets, camera, lighting, initial state, and a
-guaranteed physical *event structure* (a flight, a collision, a rest). Thirteen for v0,
-chosen so that between them they cover every family and every LikePhys rigid-body scenario,
-plus a granular stand-in for the fluid domain.
+guaranteed physical *event structure* (a flight, a collision, a rest). **Fifteen are
+declared, fourteen are built** — chosen so that between them they cover every family and
+every LikePhys rigid-body scenario, plus a granular stand-in for the fluid domain.
+`clutter_toss` is declared in the taxonomy so the compatibility matrix can reserve its cells,
+but has no scenario file yet (`taxonomy.UNBUILT`).
 
 | scenario | the scene | event structure it guarantees | occluder? | grounded in |
 |---|---|---|---|---|
-| `drop` | sphere falls to a floor and bounces | free fall → contact → rebound | optional | LikePhys *Ball Drop* |
+| `drop` | sphere or cube falls to a floor and bounces | free fall → contact → rebound | no | LikePhys *Ball Drop* |
 | `collision` | two spheres roll toward each other | approach → collision → separation | no | LikePhys *Ball Collision* |
 | `ramp_slide` | block slides down an incline | sustained contact + friction | no | LikePhys *Block Slide* |
 | `toss` | body thrown on a ballistic arc | pure free flight, no contact | no | new — parabola control |
 | `tumble` | cube tumbling in the air, thrown with heavy spin | free flight with visible rotation | no | new — a uniformly coloured sphere cannot show spin |
 | `occluder_pass` | body travels behind a screen and re-emerges | occlusion interval of known length | **yes** | IntPhys 2 occlusion |
+| `barrier_pass` | ball rolls into a solid wall and bounces back | approach → rebound off a static barrier | no | new — a second, walled `solidity` host |
 | `stack_topple` | stacked bodies, marginally stable | static equilibrium → topple | no | IntPhys 2 / LikePhys |
 | `pyramid_impact` | cube dropped onto a sphere pyramid | multi-body contact chain | no | LikePhys *Pyramid Impact* |
-| `pendulum_swing` | bob on a rigid rod | constrained periodic arc | optional | LikePhys *Pendulum* |
-| `resting_table` | several bodies at rest on a surface | sustained static equilibrium | optional | IntPhys 2 permanence |
+| `pendulum_swing` | bob on a rigid rod, swung from a pivot (scripted, not solved) | constrained periodic arc | no | LikePhys *Pendulum* |
+| `resting_table` | several bodies at rest on a surface | sustained static equilibrium | no | IntPhys 2 permanence |
 | `rolling_ramp` | cube tumbles down a raised ramp and off its lip | rolling contact, then a short free flight | no | new |
 | `shadow_track` | object translates under a fixed light | a clean, trackable cast shadow | no | LikePhys *Moving Shadow* |
-| `clutter_toss` | MOVi-style multi-object toss | dense collisions, heavy occlusion | implicit | MOVi baseline |
 | `pour` | a loose column of grains falls into an open box (40 at the debug tier, 96 above) | streaming flow, accumulation, break-up | no | LikePhys *Faucet Flow* (as **granular**, not fluid) |
+| `clutter_toss` *(unbuilt)* | MOVi-style multi-object toss | dense collisions, heavy occlusion | yes | MOVi baseline |
 
 ### Which families can be injected into which scenarios
 
-Not every combination is meaningful — `newton3_reaction` needs a collision, `shadow` needs a
-clean cast shadow, `support` needs something at rest. This matrix is the generator's job
-list; **`●` = build it in v0**, `○` = valid but deferred, blank = not meaningful.
+Not every combination is meaningful — `newton2_mass` needs two indistinguishable dynamic
+bodies, `shadow` needs a clean cast shadow, `support` needs something at rest. This matrix is
+the generator's job list; **`●` = build it in v0**, `○` = valid but deferred (with a reason
+in `taxonomy.NOT_MEANINGFUL` or `taxonomy.TIME_SLIP_NEEDS_MOTION`), blank = ruled out by
+`CAPABILITIES` (the scenario has nothing the family needs). It is **derived**, not
+hand-maintained — see "How much code this actually takes" below.
 
-| | drop | coll | ramp | toss | spin | occl | stack | pyr | pend | rest | roll | shad | clut | gran |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `permanence` | ● | ○ |   | ○ |   | ● | ○ |   | ○ | ● |   |   | ○ | ○ |
-| `immutability` | ● | ○ |   | ● | ○ | ● |   |   |   | ● |   |   | ○ |   |
-| `fission` | ● | ○ |   | ● | ○ | ● |   |   |   |   |   |   | ○ |   |
-| `continuity` | ● | ○ | ○ | ● |   | ● |   |   | ○ | ○ | ○ |   | ○ | ○ |
-| `non_parabolic` | ● |   |   | ● | ● | ○ |   |   |   |   |   |   |   |   |
-| `antigravity` | ● |   | ○ | ● |   | ○ |   |   |   | ○ |   |   | ○ | ● |
-| `newton1_inertia` |   | ○ | ● |   |   |   |   |   |   | ● | ● |   |   |   |
-| `solidity` | ● | ● | ○ |   |   | ● | ○ | ● |   |   | ○ |   | ○ | ○ |
-| `superelastic` | ● | ● |   |   |   |   |   | ● |   |   |   |   | ○ | ○ |
-| `newton3_reaction` |   | ● |   |   |   |   |   | ● |   |   |   |   | ○ |   |
-| `phantom_impulse` | ○ | ● | ○ | ● | ● | ○ | ○ |   | ○ | ● | ○ |   | ○ | ○ |
-| `newton2_mass` | ○ | ● | ○ |   |   |   |   | ● |   |   |   |   |   |   |
-| `angular_momentum` |   | ○ | ○ | ○ | ● |   |   |   | ● |   | ● |   |   |   |
-| `support` |   |   |   |   |   |   | ● | ○ |   | ● |   |   |   |   |
-| `friction` |   |   | ● |   |   |   |   |   |   | ○ | ● |   |   | ○ |
-| `shadow` | ○ |   |   | ○ |   |   |   |   |   | ○ |   | ● |   |   |
-| `global_gravity` | ● | ○ | ○ | ● |   | ○ | ○ | ○ | ○ | ○ | ○ |   | ○ | ● |
+| | drop | coll | ramp | toss | spin | occl | barr | stack | pyr | pend | rest | roll | shad | clut | gran |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `permanence` | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ○ | ● |
+| `dissolve` | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ○ | ● |
+| `immutability` | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ○ | ● |
+| `fission` | ● | ● | ○ | ● | ● | ● | ● |   |   |   | ● | ● |   |   |   |
+| `fusion` |   | ● |   |   |   |   |   |   |   |   |   |   |   |   | ● |
+| `continuity` | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ○ | ● |
+| `non_parabolic` | ● |   |   | ● | ● |   |   | ● | ● |   |   | ● |   | ○ | ● |
+| `antigravity` | ● |   |   | ● | ● |   |   | ● | ● |   |   | ● |   | ○ | ● |
+| `time_slip` |   | ○ | ○ |   |   | ● | ● |   |   |   |   | ● |   |   | ○ |
+| `newton1_inertia` |   | ● | ● |   |   | ● | ● |   |   |   |   | ● |   |   | ● |
+| `solidity` | ● | ● | ● |   |   | ○ | ● | ● | ● |   | ● | ● |   | ○ | ● |
+| `superelastic` | ● | ● |   |   |   |   | ● | ● | ● |   |   |   |   | ○ | ● |
+| `phantom_impulse` | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ○ | ● |
+| `newton2_mass` |   | ● |   |   |   |   |   |   |   |   |   |   |   |   | ● |
+| `angular_momentum` | ● |   |   | ● | ● |   |   |   |   | ● |   | ● |   |   |   |
+| `support` | ● | ● | ● |   |   | ● | ● | ● | ● |   | ● | ● |   | ○ | ● |
+| `friction` |   | ● | ● |   |   | ● | ● |   |   |   |   | ● |   |   | ● |
+| `shadow` |   |   |   |   |   |   |   |   |   |   |   |   | ● |   |   |
+| `shadow_inverted` |   |   |   |   |   |   |   |   |   |   |   |   | ● |   |   |
+| `shadow_shape` |   |   |   |   |   |   |   |   |   |   |   |   | ● |   |   |
+| `colour_shift` | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ○ | ● |
+| `deformation` | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ● | ○ | ● |
+| `global_gravity` |   | ● |   |   |   |   |   | ● | ● | ● | ● |   |   | ○ | ● |
 
-That is **48 `●` combinations** across 13 buildable scenarios (`clutter_toss` is deferred;
-the authoritative list is `taxonomy.build_cells()`). At ~6 randomisations each — different
-sizes, speeds, colours, camera, environment map and, where physically neutral, actor shape —
-that is ~288 pairs / 576 clips, the Phase 2 target, arrived at from the matrix rather than
-picked as a round number.
-`pour` contributes the two cells (`antigravity`, `global_gravity`) that read most
-like LikePhys's fluid violations while staying inside exact rigid-body physics.
+That is **178 `●` combinations** across 14 buildable scenarios and 23 families, plus **18**
+more that are compatible but deliberately deferred (`○`) — the authoritative list is always
+`taxonomy.build_cells()`. Price an actual release from this — clips scale with severity bins
+and `--variants` on top of the 178 — with `python -m physviol.cli taxonomy --config
+<release>`, which reads the same config `generate` would and never needs to be hand-computed
+(see [README.md](../README.md) §2).
+`pour` contributes the cells (`antigravity`, `global_gravity`, `newton2_mass`, `fusion`, …)
+that read most like LikePhys's fluid violations while staying inside exact rigid-body
+physics.
 
 ### How much code this actually takes
 
-A natural worry with 14 scenarios × 17 families is that it means 238 generators. It does
+A natural worry with 15 scenarios × 23 families is that it means 345 generators. It does
 not. **Scenarios and injectors are orthogonal and compose through the seam**, because an
 injector edits `traj.npz` — per-body poses and velocities — which knows nothing about which
 scene produced it.
 
 | | count | what each one is |
 |---|---|---|
-| scenario files | **13** | a staged scene: assets, camera, initial state (~60 lines; generic parts live in `scenarios/_common.py`) |
-| injector files | **6** | one per *domain*, holding all its families, plus a shared `_geom.py` |
-| per-combination files | **0** | the compatibility matrix selects the 48 meaningful cells |
+| scenario files | **14** | a staged scene: assets, camera, initial state (~60 lines; generic parts live in `scenarios/_common.py`) |
+| injector files | **7** | one per domain that owns a family (`identity`, `kinematics`, `contact`, `dynamics`, `equilibrium`, `optical`, `appearance`) — `global` has no file of its own because `global_gravity` shares its machinery with `antigravity` in `kinematics.py` |
+| shared geometry helper | **1** | `injectors/_geom.py`, the vocabulary every injector asks its questions in |
+| per-combination files | **0** | the compatibility matrix selects the 178 meaningful cells |
 
-**19 files, not 238.** `antigravity` written once runs on `drop`, `toss` and
-`occluder_pass` unchanged; `permanence` written once works anywhere there is an actor. Adding
-a scenario makes every compatible family available in it for free, and vice versa — which is
-the practical payoff of decoupling dynamics from rendering, beyond the twin-identity property
-it was chosen for.
+**22 files, not 345.** `antigravity` written once runs on `drop`, `toss` and `occluder_pass`
+unchanged; `permanence` written once works anywhere there is an actor. Adding a scenario
+makes every compatible family available in it for free, and vice versa — which is the
+practical payoff of decoupling dynamics from rendering, beyond the twin-identity property it
+was chosen for.
 
 ### Level 4 — Instances, and the two control arms
 

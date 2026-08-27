@@ -4,8 +4,8 @@
 physical law ships with *where in the frame*, *exactly when*, *for how long*, and *how badly*
 — all derived from the simulator, not from human annotation.
 
-> **Status: every build cell generates, annotates and validates.** 15 scenarios × 24
-> violation families compose through the trajectory seam, and `physviol generate` walks the
+> **Status: every build cell generates, annotates and validates.** 15 scenarios (14 built) ×
+> 23 violation families compose through the trajectory seam, and `physviol generate` walks the
 > whole matrix in one command. Each clip depicts *one* violation — that is asserted, not
 > hoped for; see [§7](#7-orthogonality-what-the-labels-guarantee).
 > Design doc: [docs/PLAN.md](docs/PLAN.md) · Evaluating: [docs/evaluation.md](docs/evaluation.md)
@@ -207,7 +207,7 @@ Every subcommand takes `--config NAME`.
 | `config-path` | print the outdir a config resolves to |
 
 ```bash
-# Taxonomy: 5 media, 24 families, 15 scenarios, 180 build cells
+# Taxonomy: 5 media, 23 families, 15 scenarios, 178 build cells
 python -m physviol.cli taxonomy
 python -m physviol.cli taxonomy -v                    # + every cell
 python -m physviol.cli taxonomy --config v0_release   # + hours and clip counts
@@ -224,7 +224,7 @@ python -m physviol.cli coverage out/release
 python -m physviol.cli validate out/release
 
 python -m pytest tests/ -q                    # 1012 tests, no docker needed
-python -m pytest tests/test_all_cells.py -q   # plans and applies all 180 cells
+python -m pytest tests/test_all_cells.py -q   # plans and applies all 178 cells
 ```
 
 ### `generate` flags
@@ -349,14 +349,16 @@ Field reference: [docs/schema.md](docs/schema.md).
 
 ## 6. How it is organised
 
-Four levels — `python -m physviol.cli taxonomy` prints the live version:
+Four levels — `python -m physviol.cli taxonomy` prints the live version, which is the
+authority if this ever drifts from the counts below:
 
 ```
-DOMAIN     7   which physical law is at stake      identity, kinematics, contact,
-                                                   dynamics, equilibrium, optical, global
-FAMILY    17   the specific way it breaks          solidity, fission, ...
-SCENARIO  14   the staged scene                    drop, occluder_pass, pour, ...
-               (13 built; clutter_toss is deferred)
+DOMAIN     8   which physical law is at stake      identity, kinematics, contact, dynamics,
+                                                   equilibrium, optical, appearance, global
+FAMILY    23   the specific way it breaks          solidity, fission, colour_shift, ...
+SCENARIO  15   the staged scene                    drop, occluder_pass, pour, ...
+               (14 built; clutter_toss is deferred)
+CELLS    178   scenario x family combinations actually built (+18 more valid but deferred)
 INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 ```
 
@@ -367,6 +369,7 @@ INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 | `toss` | ballistic arc, no contact | the clean control: `t_event == t_observable` |
 | `tumble` | cube tumbling in free flight | a sphere cannot show rotation |
 | `occluder_pass` | body passes behind a screen | the only source of observability lag |
+| `barrier_pass` | ball rolls into a solid wall, rebounds | a second, walled `solidity` host — `occluder_pass`'s only surface is the floor, so a disabled collision there reads as a vanish, not a pass-through |
 | `ramp_slide` | block slides down an incline | sustained contact + friction |
 | `rolling_ramp` | cube tumbles off a raised ramp | contact, then a short free flight |
 | `stack_topple` | marginally stable stack | *surprising but lawful* — the control for false positives |
@@ -375,6 +378,7 @@ INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 | `resting_table` | bodies at rest on a table | static equilibrium; any motion is the violation |
 | `shadow_track` | object translating under a key light | the only violation whose mask is not on the object |
 | `pour` | 40 grains falling into an open box | **granular, never "fluid"** — see below |
+| `clutter_toss` *(deferred)* | MOVi-style multi-object toss | declared in the taxonomy for its compatibility cells; no scenario file yet |
 
 Two orthogonal augmentation axes:
 
@@ -387,12 +391,13 @@ Two orthogonal augmentation axes:
   degrading. GSO (1033 objects) and HDRI Haven (509 environments) are verified reachable from
   the pinned container, so those levels need scenario code only.
 
-**Why 19 files and not 238.** Scenarios and injectors are orthogonal and compose through the
+**Why 22 files and not 345.** Scenarios and injectors are orthogonal and compose through the
 trajectory seam — an injector edits `traj.npz`, per-body poses and velocities, which knows
-nothing about the scene that produced it. So the project needs 13 scenario files + 6 injector
-files (one per domain) + one shared geometry helper, not one file per scenario × family pair.
-`antigravity` written once runs on every airborne scenario; adding a scenario makes every
-compatible family available in it for free.
+nothing about the scene that produced it. So the project needs 14 scenario files + 7 injector
+files (one per domain that owns a family — `global` shares its machinery with `kinematics`,
+since `global_gravity` is `antigravity` turned up to the whole scene) + one shared geometry
+helper, not one file per scenario × family pair. `antigravity` written once runs on every
+airborne scenario; adding a scenario makes every compatible family available in it for free.
 
 The corollary is that injectors must never branch on a scenario's *name*. They branch on
 **state** — is this body moving, is it in contact, is it hidden — or on a **constraint the

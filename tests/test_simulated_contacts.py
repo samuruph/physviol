@@ -122,7 +122,15 @@ def test_a_prevented_collision_leaves_no_contact(work):
         vdir = os.path.dirname(pj)
         root = vdir.split(os.sep + "variants" + os.sep)[0]
         blob = json.load(open(pj))["plan"]
-        if blob["family"] not in ("continuity", "solidity"):
+        family = blob["family"]
+        if family not in ("continuity", "solidity"):
+            continue
+        # `solidity` suppresses the pair for a bounded number of frames, and
+        # that duration IS its severity axis: at `weak` the body dips in and is
+        # pushed back out when contact resumes, which is the violation that bin
+        # claims. Only `strong` is guaranteed to be clear of the surface for
+        # good, so only `strong` can promise the contact is gone.
+        if family == "solidity" and blob["intervention"]["severity_bin"] != "strong":
             continue
         tv = os.path.join(root, "traj_valid.npz")
         ti = os.path.join(vdir, "traj_invalid.npz")
@@ -150,7 +158,7 @@ def test_a_prevented_collision_leaves_no_contact(work):
         assert lost & obstacle, (
             "%s: the invalid clip kept every obstacle contact the valid one had "
             "(%s) -- the body it was moved past or through is still stopping it"
-            % (blob["family"], sorted(obstacle)))
+            % (family, sorted(obstacle)))
         checked += 1
     if not checked:
         pytest.skip("no simulated continuity/solidity variants present")
