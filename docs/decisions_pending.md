@@ -143,6 +143,33 @@ neighbour and sometimes depicts nothing is worse than no family.
 1.00 on `collision`). The reason is recorded in `taxonomy.RETIRED` so the question is not
 reopened from scratch.
 
+## 3c. `superelastic` on `collision` targets the right contact but does not fire
+
+**Half fixed, and the half that is missing is written down rather than left as a surprise.**
+
+It used to boost the ball's landing on the floor, so the ball shot straight up and out of
+frame -- neither what the scenario is built around nor something a viewer can follow. It now
+picks the ball-ball impact (`t_event` 11, was the floor bounce), using the same
+`first_dynamic_pair_contact` preference `_CollisionEdit` uses.
+
+The boost itself does not take effect there, and `collision × superelastic` scores 0.000
+while `drop × superelastic` scores 0.20 / 0.63 / 1.00. Four things were tried and ruled out
+by measurement:
+
+1. `changeDynamics(restitution = e·gain)` — PyBullet clamps restitution to 1.
+2. Scaling the striker's *outgoing* speed — between equal masses the striker merely slows, it
+   never separates along the normal, so a hook waiting for separation never fires.
+3. Firing when contact *ends* rather than during it — fires, but by zero.
+4. Seeding the approach speed from the valid rollout rather than observing it, since the
+   world is reset to `t_event` when the bodies are already touching — still zero.
+
+The energy trace confirms it: `E_end` 6.32 J on both arms, against a valid twin of 6.32 J.
+Something is undoing the velocity write between the hook and the frame boundary, and finding
+it needs a container-side trace rather than another guess.
+
+Until then the cell ships visibly-changed-but-unscored, which `physviol audit` flags as the
+dangerous class. Either finish it or defer `("superelastic", "collision")`.
+
 ## 4. Release configuration
 
 Severity bins and variant count per cell. `configs/v0_release.yaml` currently proposes tier v0

@@ -104,6 +104,26 @@ def _riding_on(spec, traj, actor, latest: int):
     return None
 
 
+def _approach_speed(traj, actor_id: int, partner_id: int, t0: int) -> float:
+    """Closing speed just before contact, from the lawful rollout.
+
+    Relative for two moving bodies, absolute against a static one -- the
+    coefficient of restitution is defined on whichever of those the collision
+    actually has.
+    """
+    f = max(0, int(t0) - 1)
+    ia = traj.index_of(int(actor_id))
+    va = np.asarray(traj.lin_vel[f, ia], np.float64)
+    try:
+        ib = traj.index_of(int(partner_id))
+    except Exception:                                         # noqa: BLE001
+        return float(np.linalg.norm(va))
+    vb = np.asarray(traj.lin_vel[f, ib], np.float64)
+    if float(np.linalg.norm(vb)) < 1e-9:
+        return float(np.linalg.norm(va))
+    return float(np.linalg.norm(va - vb))
+
+
 def _contact_event(spec, traj, actor):
     """(frame, partner_id, partner_is_static, normal) for the first collision.
 
@@ -507,39 +527,110 @@ class Solidity(Injector):
         return self.simulates(plan)
 
     def stage(self, spec, simulator, objs, plan):
-        """Turn the collision pair off and let the body go where it goes.
+        """Give back more than arrived, at each bounce.
 
-        The violation is that two surfaces did not stop each other, so the
-        honest way to say it is to stop PyBullet from enforcing that pair --
-        not to write in an overlap and hope the re-integrator does not undo it.
-        You reported the window ending while the ball was still inside the wall;
-        with the pair disabled the ball travels through under its own momentum
-        and the geometry decides when it is out.
+        Two shapes, because a bounce against a wall and a bounce between two
+        balls are different quantities.
+
+        Against a STATIC partner the coefficient of restitution is the body's
+        outgoing speed over its incoming speed, so the hook records the approach
+        while the body is free and sets the outgoing normal speed to `gain`
+        times it.
+
+        Against a MOVING partner it is the pair's *relative* separation speed
+        over their relative approach speed, and the correction is split between
+        them so momentum stays conserved -- the violation is that the collision
+        returned more energy than it took, not that momentum appeared. Scaling
+        only the striker does not work at all here: between equal masses the
+        striker barely rebounds, it merely slows, so it never separates and a
+        hook waiting for separation never fires. `collision` scored 0.000 with
+        the right contact identified and never acted on.
         """
-        if not self._stageable(plan):
-            return ()
         import pybullet as pb
         from ..render import stepper
 
-        for ia, ib in self._filter_pairs(spec, simulator, objs, plan):
-            pb.setCollisionFilterPair(ia, ib, -1, -1, 0)
-        return ()
+        gain = float(plan.params["speed_gain"])
+        actor_id = int(plan.causal_body_ids[0])
+        idx = stepper.pybullet_index(simulator, objs, spec, actor_id)
+        if idx is None:
+            return ()
+        partner_seg = plan.notes.get("partner_id")
+        partner_body = next((b for b in spec.bodies
+                             if int(b.segmentation_id) == int(partner_seg or -1)),
+                            None)
+        partner = (stepper.pybullet_index(simulator, objs, spec,
+                                          int(partner_seg))
+                   if partner_seg is not None else None)
+        moving_partner = bool(partner is not None and partner_body is not None
+                              and not partner_body.static)
+        state = {"ready": True, "touching": False,
+                 "approach": float(plan.notes.get("approach_speed", 0.0))}
 
-    def _filter_pairs(self, spec, simulator, objs, plan):
-        """Every (actor, surface) pair this violation suppresses."""
-        from ..render import stepper
+        def _points():
+            pts = pb.getContactPoints(bodyA=idx)
+            if partner is None:
+                return pts
+            return [c for c in pts if partner in (c[1], c[2])]
 
-        a, b = plan.params["pair"]
-        ia = stepper.pybullet_index(simulator, objs, spec, int(a))
-        if ia is None:
-            return []
-        others = [int(b)] + [int(x) for x in plan.params.get("also_disable", ())]
-        out = []
-        for other in others:
-            ib = stepper.pybullet_index(simulator, objs, spec, other)
-            if ib is not None:
-                out.append((ia, ib))
-        return out
+        def _normal(points):
+            n = np.mean([np.asarray(c[7], np.float64) for c in points], axis=0)
+            mag = float(np.linalg.norm(n))
+            return (n / mag) if mag > 1e-9 else None
+
+        def boost(_client, _step, _frame):
+            points = _points()
+            va = np.asarray(pb.getBaseVelocity(idx)[0], np.float64)
+
+            if moving_partner:
+                vb = np.asarray(pb.getBaseVelocity(partner)[0], np.float64)
+                rel = va - vb
+                if points:
+                    if not state["touching"]:
+                        state["touching"] = True
+                    return
+                if not state["touching"]:
+                    state["approach"] = float(np.linalg.norm(rel))
+                    return
+                # Contact has ENDED, so the impulse is fully resolved.
+                state["touching"] = False
+                if not state["ready"] or state["approach"] <= 1e-6:
+                    return
+                mag = float(np.linalg.norm(rel))
+                if mag < 1e-6:
+                    return
+                n = rel / mag
+                extra = state["approach"] * gain - mag
+                if extra <= 0.0:
+                    return
+                # Split evenly: equal and opposite, so momentum is untouched
+                # and only the energy of separation grows.
+                wa = pb.getBaseVelocity(idx)[1]
+                wb = pb.getBaseVelocity(partner)[1]
+                pb.resetBaseVelocity(idx, (va + n * extra * 0.5).tolist(), list(wa))
+                pb.resetBaseVelocity(partner, (vb - n * extra * 0.5).tolist(),
+                                     list(wb))
+                state["ready"] = False
+                return
+
+            w = pb.getBaseVelocity(idx)[1]
+            if not points:
+                state["ready"] = True
+                state["approach"] = float(np.linalg.norm(va))
+                return
+            if not state["ready"]:
+                return
+            n = _normal(points)
+            if n is None:
+                return
+            out_speed = float(va @ n)
+            if out_speed <= 1e-3:
+                return
+            target = float(state["approach"]) * gain
+            pb.resetBaseVelocity(idx, (va + n * (target - out_speed)).tolist(),
+                                 list(w))
+            state["ready"] = False
+
+        return (boost,)
 
     def unstage(self, spec, simulator, objs, plan) -> None:
         if not self._stageable(plan):
@@ -748,8 +839,30 @@ class SuperElastic(Injector):
         # rolling ball's velocity along the floor changes nothing, and the clip
         # would ship claiming a super-elastic bounce that never happened.
         dormant = tuple(int(b.segmentation_id) for b in spec.bodies if b.dormant)
-        impact = _geom.first_impact(traj, int(actor.segmentation_id),
-                                    exclude=dormant)
+
+        # A BALL-BALL impact beats a floor bounce where the scene has one. On
+        # `collision` the family was boosting the landing instead of the meeting
+        # -- the ball shot straight up and out of frame, which is neither what
+        # the scenario is built around nor something a viewer can follow. The
+        # same preference `_CollisionEdit` uses, for the same reason.
+        pair = _geom.first_dynamic_pair_contact(
+            spec, traj, prefer=int(actor.segmentation_id))
+        impact = None
+        if pair is not None:
+            t_pair, id_a, id_b = pair
+            if 1 <= t_pair < traj.num_frames - 2:
+                mine = int(actor.segmentation_id)
+                other = id_b if mine == id_a else id_a
+                if mine in (id_a, id_b):
+                    d = (traj.pos[t_pair, traj.index_of(int(other))]
+                         - traj.pos[t_pair, traj.index_of(mine)])
+                    mag = float(np.linalg.norm(d))
+                    if mag > 1e-6:
+                        impact = (int(t_pair), int(other),
+                                  np.asarray(d, np.float64) / mag)
+        if impact is None:
+            impact = _geom.first_impact(traj, int(actor.segmentation_id),
+                                        exclude=dormant)
         if impact is None:
             return None
         t0, partner_id, normal = impact
@@ -787,6 +900,14 @@ class SuperElastic(Injector):
             magnitude=float(gain ** 2 - 1.0),
             magnitude_unit="energy_gain_ratio", severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
+                   "partner_id": int(partner_id),
+                   # The approach speed, measured from the VALID rollout rather
+                   # than observed at run time. The world is reset to t_event,
+                   # and at t_event the bodies are already touching -- so a hook
+                   # that waits to see a free frame before contact never sees
+                   # one, records an approach of zero, and boosts by nothing.
+                   "approach_speed": float(_approach_speed(
+                       traj, int(actor.segmentation_id), int(partner_id), t0)),
                    "surface_top": top,
                    "speed_gain": gain, "n_bounces": len(windows),
                    "r_strong": float(r_strong),
@@ -856,12 +977,26 @@ class SuperElastic(Injector):
         idx = stepper.pybullet_index(simulator, objs, spec, actor_id)
         if idx is None:
             return ()
+        # Only the contact this plan is about. Watching every contact meant a
+        # ball rolling on the floor was permanently "touching", so the hook
+        # never re-armed, never recorded an approach speed, and boosted to
+        # zero -- `collision` scored 0.000 with the ball-ball impact correctly
+        # identified and never acted on.
+        partner = stepper.pybullet_index(
+            simulator, objs, spec, int(plan.notes.get("partner_id", -1))) \
+            if plan.notes.get("partner_id") is not None else None
         state = {"ready": True, "approach": 0.0}
+
+        def _points():
+            pts = pb.getContactPoints(bodyA=idx)
+            if partner is None:
+                return pts
+            return [c for c in pts if partner in (c[1], c[2])]
 
         def boost(_client, _step, _frame):
             v, w = pb.getBaseVelocity(idx)
             v = np.asarray(v, np.float64)
-            points = pb.getContactPoints(bodyA=idx)
+            points = _points()
             if not points:
                 state["ready"] = True
                 state["approach"] = float(np.linalg.norm(v))

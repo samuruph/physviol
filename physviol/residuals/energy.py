@@ -17,6 +17,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from ..injectors import _geom
+
 #: Frames on either side of a reported contact that still count as "at contact".
 #: A step's energy change is attributable to a contact at either of its ends, and
 #: PyBullet reports the frame it *noticed* a contact, which can lag the touch.
@@ -34,15 +36,23 @@ class EnergyTrace:
     by_body: np.ndarray               # [T, B]
     body_ids: np.ndarray              # [B]
     dissipated: np.ndarray            # [T]  cumulative E0 - E(t), >= 0 lawfully
+    in_frame: np.ndarray              # [T, B] bool -- body inside the frustum
+    energy_in_frame: np.ndarray       # [T]  the total over visible bodies only
     free_anomaly: np.ndarray          # [T]  |dE| on contact-free frames, / E0
     contact_anomaly: np.ndarray       # [T]  energy GAINED at a contact, / E0
     excess_loss: np.ndarray           # [T]  energy lost beyond the dissipation
                                       #      budget, / E0
 
     def to_npz(self) -> Dict[str, np.ndarray]:
-        return {k: np.asarray(v, np.float32) if k != "body_ids"
-                else np.asarray(v, np.int32)
-                for k, v in self.__dict__.items()}
+        out = {}
+        for k, v in self.__dict__.items():
+            if k == "body_ids":
+                out[k] = np.asarray(v, np.int32)
+            elif k == "in_frame":
+                out[k] = np.asarray(v, bool)
+            else:
+                out[k] = np.asarray(v, np.float32)
+        return out
 
     def summary(self) -> Dict[str, float]:
         e0 = float(self.total[0])
@@ -54,6 +64,8 @@ class EnergyTrace:
             "peak_free_anomaly": float(self.free_anomaly.max()),
             "peak_contact_anomaly": float(self.contact_anomaly.max()),
             "peak_excess_loss": float(self.excess_loss.max()),
+            "E_end_in_frame": float(self.energy_in_frame[-1]),
+            "frames_all_bodies_in_frame": int(self.in_frame.all(axis=1).sum()),
         }
 
 
@@ -172,6 +184,24 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
         present[:, j] = here > 0
 
     total = ke_t + ke_r + pe
+
+    # WHERE THE EVIDENCE IS. Energy is computed from the trajectory, not from
+    # the pixels, so a body that has left the view still has a real energy and a
+    # superelastic bounce really does add that much -- the jump is physically
+    # correct. What was missing is any way to tell that the evidence has gone
+    # off screen. `energy_in_frame` sums only the bodies a camera can see, so a
+    # consumer can score what is visible while `total` stays consistent with the
+    # trajectory a consumer could recompute it from.
+    visible = np.zeros((T, B), bool)
+    for j in range(B):
+        try:
+            visible[:, j] = _geom.in_frame(
+                spec, np.asarray(traj.pos[:, j, :], np.float64))
+        except Exception:                                     # noqa: BLE001
+            visible[:, j] = True
+    visible &= np.asarray(traj.present, bool)
+    energy_visible = (by_body * visible).sum(axis=1)
+
     denom = max(abs(float(total[0])), 1e-9)
     dE = np.diff(total, prepend=total[0])
     free = ~contact_frames(traj)
@@ -233,6 +263,7 @@ def compute(traj, spec, floor_level: Optional[float] = None) -> EnergyTrace:
         potential=pe, by_body=by_body,
         body_ids=np.asarray(traj.body_ids, np.int32),
         dissipated=total[0] - total,
+        in_frame=visible, energy_in_frame=energy_visible,
         free_anomaly=free_anom, contact_anomaly=contact_anom,
         excess_loss=excess)
 
