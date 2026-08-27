@@ -258,6 +258,14 @@ Nine views, in the same order everywhere — `rgb`, `energy`, `seg`, `depth`, `f
 The order runs **evidence first** (what the renderer saw) then the **annotation** derived
 from it.
 
+Three timeline bars, keyed in every video that draws them:
+
+| colour | window | meaning |
+|---|---|---|
+| **blue** | `intervening` | we are actively changing something |
+| **red** | `consequence` | the scene is still wrong as a result |
+| **amber** | `observable` | a viewer could tell |
+
 A `sheet` column is the single-clip overlay turned on its side, so reading across a row
 compares the same annotation over every violation at the same instant. `coverage` is a fixed
 scenario × family lattice rather than a reflowed block, so a missing cell is a black square

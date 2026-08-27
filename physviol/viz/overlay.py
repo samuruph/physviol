@@ -354,17 +354,32 @@ def _timeline(f, W, H, T, t, vwin, owin, t_event, t_obs, t_end, sev_t, peak, v,
     # ran to frame 24 -- the bar being shown was the union, which does.
     iwin = iwin if iwin else vwin
     cwin = cwin if cwin else vwin
-    rows = [("intervening", iwin, C_INTERVENE),
-            ("consequence", cwin, C_MASK),
-            ("observable", owin, C_OBS)]
-    lx = x0
-    for label, _wins, colour in rows:
-        _text(f, label, (lx, y0 + 10), colour, 0.40, 1)
-        lx += _w(label, 0.40) + 14
+    rows = [("intervening", "being changed", iwin, C_INTERVENE),
+            ("consequence", "still wrong", cwin, C_MASK),
+            ("observable", "a viewer could tell", owin, C_OBS)]
 
-    for row, (_label, wins, color) in enumerate(rows):
+    # A filled swatch in the bar's own colour, then the name in white. Colouring
+    # the text instead left the reader matching a thin coloured glyph against a
+    # thick coloured bar, which is exactly the guessing this legend exists to
+    # remove -- and the three colours have no conventional meaning to fall back
+    # on. The gloss says what the window means, not just what it is called.
+    lx = x0
+    for label, gloss, _wins, colour in rows:
+        cv2.rectangle(f, (lx, y0 + 3), (lx + 10, y0 + 12), colour, -1)
+        cv2.rectangle(f, (lx, y0 + 3), (lx + 10, y0 + 12), (20, 20, 26), 1)
+        lx += 14
+        _text(f, label, (lx, y0 + 11), C_TEXT, 0.40, 1)
+        lx += _w(label, 0.40) + 4
+        gl = "(%s)" % gloss
+        _text(f, gl, (lx, y0 + 11), C_DIM, 0.34, 1)
+        lx += _w(gl, 0.34) + 16
+
+    for row, (_label, _gloss, wins, color) in enumerate(rows):
         ry = y0 + 16 + row * 9
         cv2.rectangle(f, (x0, ry), (x1, ry + 7), (40, 40, 48), -1)
+        # The row's own colour repeated at the left edge, so a bar that happens
+        # to start late is still identifiable without counting rows.
+        cv2.rectangle(f, (x0 - 1, ry), (x0 + 1, ry + 7), color, -1)
         for s, e in wins:
             cv2.rectangle(f, (fx(s), ry), (max(fx(e + 1) - 1, fx(s) + 2), ry + 7),
                           color, -1)

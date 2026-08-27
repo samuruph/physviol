@@ -45,7 +45,7 @@ CELL = 224
 PAD = 4
 HEADER = 30
 COLHEAD = 20
-BAR = 26
+BAR = 40
 #: Left-hand gutter for row labels. Labelling rows in the gutter rather than
 #: inside the panels keeps the imagery unobstructed -- the panels are the thing
 #: being judged, and text drawn over a mask is text drawn over the evidence.
@@ -145,6 +145,11 @@ def build(pair_dir: str, family: Optional[str] = None,
 
             by = H - BAR + 4
             _window_bar(f, c, t, T, GUTTER + PAD, by, W - GUTTER - 2 * PAD)
+
+        # The same legend the single-clip overlay carries, and for the same
+        # reason: three coloured bars with no key is a puzzle, and none of the
+        # three colours means anything by convention.
+        _window_legend(f, PAD + 2, H - 5)
         out[t] = f
 
     out_path = out_path or os.path.join(pair_dir, "grid_%s.mp4" % (fam or "all"))
@@ -307,6 +312,24 @@ def _draw_cell(f, c, kind, need, t, x, y, cell, compact: bool = False) -> None:
                      0.35, 1)
         else:
             ov._sev_scale(f, x, y, cell, sv)
+
+
+def _window_legend(f, x: int, y: int) -> None:
+    """Swatch + name + what the window actually means."""
+    import cv2
+
+    for label, gloss, colour in (
+            ("intervening", "being changed", ov.C_INTERVENE),
+            ("consequence", "still wrong", ov.C_MASK),
+            ("observable", "a viewer could tell", ov.C_OBS)):
+        cv2.rectangle(f, (x, y - 8), (x + 9, y), colour, -1)
+        cv2.rectangle(f, (x, y - 8), (x + 9, y), (20, 20, 26), 1)
+        x += 13
+        ov._text(f, label, (x, y), ov.C_TEXT, 0.36, 1)
+        x += ov._w(label, 0.36) + 4
+        gl = "(%s)" % gloss
+        ov._text(f, gl, (x, y), ov.C_DIM, 0.31, 1)
+        x += ov._w(gl, 0.31) + 14
 
 
 def _window_bar(f, c, t, T, x, by, width) -> None:
