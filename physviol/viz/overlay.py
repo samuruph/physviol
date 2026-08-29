@@ -178,18 +178,32 @@ DEPTH_SENTINEL = 1e6
 
 _FLOW_SCALE_CACHE: Dict[int, float] = {}
 
+#: Below this, a flow vector is render-pass jitter on the static background,
+#: not real motion -- observed noise floor is ~1e-5 px/frame, observed real
+#: motion (including antialiased silhouette edges) starts ~0.05, so this sits
+#: in the gap with margin either side. Below it we zero the vector outright,
+#: both so it can't skew the scale in _flow_scale and so it can't paint the
+#: background with speckled colour at display time.
+FLOW_NOISE_FLOOR = 0.02
+
 
 def _flow_scale(flow) -> float:
     """One magnitude scale for the whole clip, from a high percentile.
 
     The 99th rather than the max, so a couple of edge pixels at a silhouette --
     where flow is undefined and can be enormous -- do not black out the body
-    they belong to.
+    they belong to. Computed over moving pixels only: the background is the
+    overwhelming majority of pixel-frames, so pooling everything drags the
+    99th percentile down into the noise floor instead of the real motion
+    scale, which is what was blowing up background jitter into visible
+    colour in the panel.
     """
     key = id(flow)
     if key not in _FLOW_SCALE_CACHE:
         mag = np.linalg.norm(np.asarray(flow, np.float32), axis=-1)
-        _FLOW_SCALE_CACHE[key] = max(float(np.percentile(mag, 99.0)), 1e-6)
+        moving = mag[mag > FLOW_NOISE_FLOOR]
+        pool = moving if moving.size else mag
+        _FLOW_SCALE_CACHE[key] = max(float(np.percentile(pool, 99.0)), 1e-6)
     return _FLOW_SCALE_CACHE[key]
 
 
@@ -262,11 +276,13 @@ def _panel(kind, t, rgb, mask, sev, causal, diverg, size, ref=None, energy=None,
         fl = np.asarray(flow[t], np.float32)
         mag = np.linalg.norm(fl, axis=-1)
         scale = _flow_scale(flow)
+        still = mag <= FLOW_NOISE_FLOOR
         ang = np.arctan2(fl[..., 1], fl[..., 0])
         hsv = np.zeros(base.shape, np.uint8)
         hsv[..., 0] = ((ang + np.pi) / (2 * np.pi) * 179).astype(np.uint8)
         hsv[..., 1] = 255
         hsv[..., 2] = np.clip(mag / scale * 255, 0, 255).astype(np.uint8)
+        hsv[still, 2] = 0
         img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB).astype(np.float32)
         img = img * 0.9 + base * 0.1
     elif kind == "normals":
