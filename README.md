@@ -353,11 +353,9 @@ Four levels — `python -m physviol.cli taxonomy` prints the live version, which
 authority if this ever drifts from the counts below:
 
 ```
-DOMAIN     8   which physical law is at stake      identity, kinematics, contact, dynamics,
-                                                   equilibrium, optical, appearance, global
+DOMAIN     8   which physical law is at stake      identity, kinematics, contact, dynamics, equilibrium, optical, appearance, global
 FAMILY    23   the specific way it breaks          solidity, fission, colour_shift, ...
-SCENARIO  15   the staged scene                    drop, occluder_pass, pour, ...
-               (14 built; clutter_toss is deferred)
+SCENARIO  15   the staged scene                    drop, occluder_pass, pour, ... (14 built; clutter_toss is deferred)
 CELLS    178   scenario x family combinations actually built (+18 more valid but deferred)
 INSTANCE       scenario x family x seed x severity -> one valid/invalid pair
 ```
