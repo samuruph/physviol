@@ -8,6 +8,7 @@ py3.9-compatible: imported inside the container.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -308,6 +309,13 @@ class SceneSpec:
     complexity: str = DEFAULT_COMPLEXITY
     hdri_id: Optional[str] = None
     notes: Dict[str, Any] = field(default_factory=dict)
+    #: (azimuth, elevation) degrees the camera may swing around its hand-framed
+    #: position -- see `_vary`. The default suits a grounded scenario, where the
+    #: frustum has slack; flight scenarios override it tighter, because
+    #: `camera.frame_flight` already spends most of that slack fitting a tall,
+    #: thin arc from one specific side-on angle (see its docstring for the
+    #: `toss`/`tumble` regression a wide swing would reintroduce).
+    camera_jitter_deg: Tuple[float, float] = (35.0, 12.0)
 
     @property
     def actors(self) -> List[BodySpec]:
@@ -335,11 +343,13 @@ class SceneSpec:
             "physics_medium": self.physics_medium,
             "complexity": COMPLEXITY[self.complexity].to_dict(),
             "hdri_id": self.hdri_id,
+            "camera_position": list(self.camera_position),
+            "camera_look_at": list(self.camera_look_at),
             "bodies": [{"name": b.name, "kind": b.kind, "role": b.role,
                         "segmentation_id": b.segmentation_id, "mass": b.mass,
                         "restitution": b.restitution, "friction": b.friction,
                         "static": b.static, "scripted": b.scripted,
-                        "dormant": b.dormant,
+                        "dormant": b.dormant, "color": list(b.color),
                         "render_scale": list(b.draw_scale),
                         "scale": list(b.scale)} for b in self.bodies],
             "notes": self.notes,
@@ -354,16 +364,34 @@ def _vary(spec: SceneSpec, seed: int) -> SceneSpec:
     physics from -- otherwise every existing clip would resample the moment
     this function grew a line.
 
-    Deliberately small. The camera must still frame the event: a viewpoint that
-    loses the actor produces an empty mask, which is a worse annotation than a
-    boring one. Bigger appearance changes belong on the complexity axis, where
-    they are labelled and can be reported against.
+    The camera swings around `camera_look_at` at fixed *distance* -- an azimuth
+    and elevation rotation, not an xyz nudge -- so `camera.frame_extent()`
+    (which depends only on that distance) cannot drift and accidentally shrink
+    or blow out the frustum: only the viewing angle changes, which is the
+    point. The swing is still bounded by `spec.camera_jitter_deg`: the camera
+    must keep framing the event, and every scenario's position was hand-derived
+    for one side-on angle -- see that field's docstring.
     """
     rng = np.random.RandomState((seed * 2654435761 + 0x5EED) % (2 ** 31 - 1))
-    swing = rng.uniform(-1.0, 1.0, size=3) * np.array([0.55, 0.45, 0.28])
+
+    eye = np.asarray(spec.camera_position, np.float64)
+    target = np.asarray(spec.camera_look_at, np.float64)
+    v = eye - target
+    radius = float(np.linalg.norm(v))
+    if radius > 1e-9:
+        az0 = math.atan2(v[1], v[0])
+        el0 = math.asin(float(np.clip(v[2] / radius, -1.0, 1.0)))
+        az_max, el_max = spec.camera_jitter_deg
+        az = az0 + math.radians(float(rng.uniform(-az_max, az_max)))
+        el = el0 + math.radians(float(rng.uniform(-el_max, el_max)))
+        el = float(np.clip(el, math.radians(-85.0), math.radians(85.0)))
+        v = radius * np.array([math.cos(el) * math.cos(az),
+                               math.cos(el) * math.sin(az),
+                               math.sin(el)])
+        eye = target + v
+    spec.camera_position = tuple(float(x) for x in eye)
+
     aim = rng.uniform(-1.0, 1.0, size=3) * 0.10
-    spec.camera_position = tuple(float(a + b) for a, b in
-                                 zip(spec.camera_position, swing))
     spec.camera_look_at = tuple(float(a + b) for a, b in
                                 zip(spec.camera_look_at, aim))
     for light in spec.lights:

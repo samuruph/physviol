@@ -57,13 +57,18 @@ class BarrierPass(Scenario):
         gap = speed * 0.45 * flight
         x0 = wall_x - thickness - radius - gap
 
+        # Rolling without slipping only reads correctly on a sphere -- see
+        # `collision`, which shares this exact reasoning. A cube slides instead
+        # (`ramp_slide`'s regime), no spin.
+        kind = "sphere" if rng.rand() < 0.6 else "cube"
+        spin = (0.0, speed / radius, 0.0) if kind == "sphere" else (0.0, 0.0, 0.0)
         ball = BodySpec(
-            name="ball", kind="sphere", position=(x0, 0.0, radius),
+            name="ball", kind=kind, position=(x0, 0.0, radius),
             scale=(radius,) * 3, velocity=(speed, 0.0, 0.0),
-            # Rolling rather than sliding, and elastic enough that the lawful
-            # rebound is unmistakable -- a ball that hits a wall and stops dead
-            # makes a pass-through look like the more sensible of the two.
-            angular_velocity=(0.0, speed / radius, 0.0),
+            # Elastic enough that the lawful rebound is unmistakable -- a ball
+            # that hits a wall and stops dead makes a pass-through look like
+            # the more sensible of the two.
+            angular_velocity=spin,
             mass=1.0, friction=0.05, restitution=0.78,
             color=C.hue_rgb(float(rng.uniform(0, 1))),
             segmentation_id=self.SEG_BALL, role="actor")
@@ -83,7 +88,7 @@ class BarrierPass(Scenario):
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"radius": radius, "speed": speed, "wall_x": wall_x,
-                   "wall_id": self.SEG_WALL,
+                   "wall_id": self.SEG_WALL, "actor_kind": kind,
                    "family_targets": {"solidity": [self.SEG_BALL]}})
 
 

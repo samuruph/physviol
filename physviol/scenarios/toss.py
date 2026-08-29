@@ -59,6 +59,7 @@ class Toss(Scenario):
                             scale=f.scene_scale),
             camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
+            camera_jitter_deg=(15.0, 8.0),
             notes={"radius": radius, "v0": [vx, 0.0, f.vz],
                    "flight_seconds": flight, "actor_kind": kind,
                    "apex": f.apex, "scene_scale": f.scene_scale,

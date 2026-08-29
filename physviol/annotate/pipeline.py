@@ -20,6 +20,7 @@ from ..residuals import laws
 from ..scenarios import TIERS
 from ..scenarios.base import Tier
 from ..residuals import energy as energy_mod
+from ..prompts import compose_prompt
 from ..sim.trajectory import Trajectory
 from ..taxonomy import FAMILIES, SCENARIOS, domain_of
 from . import grids as grids_mod
@@ -468,6 +469,7 @@ def _instance_table(spec_d, plan_d, seg) -> List[Dict[str, object]]:
             "track_id": bid,          # ids are stable, so id == track
             "name": b["name"],
             "category": b.get("kind", "unknown"),
+            "color": b.get("color"),
             "role": b.get("role", "unknown"),
             "static": bool(b.get("static", False)),
             "dormant": bool(b.get("dormant", False)),
@@ -508,7 +510,11 @@ def _build_meta(release, uid, pair_uid, label, spec_d, plan_d, tier, tinfo,
         "intphys2_category": fam.intphys2, "likephys_domain": fam.likephys,
         "fps": tier.fps, "num_frames": tier.num_frames,
         "resolution": [tier.resolution, tier.resolution],
-        "camera": {"motion": "static", "intrinsics": [], "extrinsics_per_frame": []},
+        "prompt": compose_prompt(scenario, spec_d),
+        "camera": {"motion": "static", "intrinsics": [],
+                   "position": spec_d.get("camera_position"),
+                   "look_at": spec_d.get("camera_look_at"),
+                   "extrinsics_per_frame": []},
         "controls": {"is_surprising_but_valid": False, "is_artifact_probe": False},
         "assets": [{"name": b["name"], "source": "kubric_primitive",
                     "license": "Apache-2.0",

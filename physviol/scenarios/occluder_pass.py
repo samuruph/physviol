@@ -11,6 +11,7 @@ rendered segmentation first.
 """
 from __future__ import annotations
 
+import math
 from typing import List, Tuple
 
 import numpy as np
@@ -52,8 +53,9 @@ class OccluderPass(Scenario):
         eye = CAMERA
 
         x0 = -speed * (tier.num_frames / float(tier.fps)) * 0.5
+        kind = "sphere" if rng.rand() < 0.6 else "cube"
         ball = BodySpec(
-            name="ball", kind="sphere", position=(x0, y_path, radius),
+            name="ball", kind=kind, position=(x0, y_path, radius),
             scale=(radius,) * 3, velocity=(speed, 0.0, 0.0), mass=1.0,
             friction=0.02, restitution=0.2,
             color=C.hue_rgb(float(rng.uniform(0, 1))),
@@ -64,7 +66,16 @@ class OccluderPass(Scenario):
             color=(0.22, 0.24, 0.30), segmentation_id=self.SEG_SCREEN,
             role="occluder")
 
-        occ = _occluded_frames(eye, ball, screen, tier, radius, y_path)
+        # "Occluded" means fully occluded (CLAUDE.md) -- the silhouette margin
+        # below is the actor's *projected* radius, and a sphere's is `radius`
+        # from every angle. A cube's is not: a corner can swing out to
+        # `radius * sqrt(3)` (half its space diagonal) depending on how it is
+        # tumbling, so use that conservative bound for a cube rather than
+        # silently under-covering the true silhouette and marking a frame
+        # "occluded" while a corner still pokes out past the screen's edge.
+        silhouette_radius = radius * (math.sqrt(3.0) if kind == "cube" else 1.0)
+        occ = _occluded_frames(eye, ball, screen, tier, radius, y_path,
+                               silhouette_radius)
         hdri_id = pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None
 
         return SceneSpec(
@@ -75,11 +86,12 @@ class OccluderPass(Scenario):
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity, hdri_id=hdri_id,
             notes={"radius": radius, "speed": speed,
-                   "occluded_frames": occ,
+                   "occluded_frames": occ, "actor_kind": kind,
                    "occluder_id": self.SEG_SCREEN})
 
 
-def _occluded_frames(cam, ball, screen, tier, radius, y_path) -> List[int]:
+def _occluded_frames(cam, ball, screen, tier, radius, y_path,
+                     silhouette_radius=None) -> List[int]:
     """Frames where the ball is **fully** hidden behind the screen box.
 
     Intersect the camera->ball ray with the screen's y plane and test the
@@ -88,7 +100,17 @@ def _occluded_frames(cam, ball, screen, tier, radius, y_path) -> List[int]:
     is what matters: an injector firing on a frame where even a few pixels of
     the actor still show makes the violation instantly observable, which
     collapses the observability lag this scenario exists to produce.
+
+    `radius` is the body's true half-extent -- it fixes where its centre
+    actually sits (`bz`), and must stay exact. `silhouette_radius` is a
+    separate, possibly larger bound used only for the occlusion margin: a
+    sphere's silhouette is `radius` from every angle, but a cube's is not (a
+    corner can swing out to `radius * sqrt(3)`), so the caller passes the
+    conservative bound for whatever shape this is. Defaults to `radius` for a
+    sphere, where the two coincide.
     """
+    if silhouette_radius is None:
+        silhouette_radius = radius
     cx, cy, cz = cam
     sx, sy, sz = screen.position
     hw, _, hh = screen.scale
@@ -102,7 +124,7 @@ def _occluded_frames(cam, ball, screen, tier, radius, y_path) -> List[int]:
         s = (sy - cy) / (by - cy)          # ray parameter at the screen plane
         ix = cx + s * (bx - cx)
         iz = cz + s * (bz - cz)
-        r_proj = radius * s                # the ball's silhouette at that plane
+        r_proj = silhouette_radius * s     # the ball's silhouette at that plane
         if (abs(ix - sx) <= hw - r_proj
                 and (sz - hh) + r_proj <= iz <= (sz + hh) - r_proj):
             out.append(f)

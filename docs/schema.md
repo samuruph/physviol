@@ -19,7 +19,9 @@ the bottom. The annotation *design* — why each field exists — is [PLAN.md](P
   "domain": "contact", "family": "solidity", "scenario": "collision", "seed": 91731,
   "intphys2_category": "solidity", "likephys_domain": "rigid_body",
   "fps": 12, "num_frames": 25, "resolution": [256, 256],
-  "camera": {"intrinsics": [], "extrinsics_per_frame": [], "motion": "orbit"},
+  "prompt": "two red cubes rolling toward each other and colliding head-on",
+  "camera": {"intrinsics": [], "extrinsics_per_frame": [], "motion": "static",
+             "position": [0.3, -6.0, 1.7], "look_at": [0.1, 0.0, 0.35]},
   "violation": {
     "kind": "sustained",
     "t_event_frame": 9, "t_observable_frame": 13, "observability_lag_frames": 4,
@@ -79,7 +81,17 @@ Novelty claims (a `null` cross-reference) must be justified in [prior_art.md](pr
 ### Clip properties
 
 `fps` (int), `num_frames` (int), `resolution` (`[H, W]`), and `camera` with `intrinsics`,
-`extrinsics_per_frame` (length `num_frames`) and `motion` (`static` | `orbit` | `linear`).
+`extrinsics_per_frame` (length `num_frames`), `motion` (always `"static"` in v0 -- the camera
+does not move during a clip; `orbit`/`linear` are declared on `Complexity.camera_motion` for a
+later complexity tier and are not yet built), and the actual sampled `position`/`look_at` the
+scenario framed the shot from (world-space, metres -- see `physviol/camera.py`).
+
+`prompt` (str) is a textual caption of the clip's *valid* physics, composed per clip from a
+per-scenario template plus whatever shape and color that instance actually sampled --
+`physviol/prompts.py::compose_prompt`. E.g. `"a red cube dropping and colliding with the
+ground, in an empty background"`. Describes the lawful scene only; it says nothing about
+`family`/`violation` even on an invalid clip; see `physviol/prompts.py`'s docstring for why
+invalid captions are not composed the same way.
 
 ### `violation` — null on valid clips
 

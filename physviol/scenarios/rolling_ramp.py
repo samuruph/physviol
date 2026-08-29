@@ -98,6 +98,7 @@ class RollingRamp(Scenario):
             camera_position=camera_position, camera_look_at=camera_look_at,
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            camera_jitter_deg=(15.0, 8.0),
             notes={"tilt_rad": tilt, "mu": mu, "lip": list(lip),
                    "block_friction": block_mu, "ramp_friction": ramp_mu,
                    "x_land": x_land, "run_out": run_out,

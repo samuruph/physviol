@@ -99,6 +99,7 @@ class ShadowTrack(Scenario):
             camera_position=CAMERA, camera_look_at=LOOK_AT,
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            camera_jitter_deg=(15.0, 8.0),
             notes={"radius": r, "height": height, "speed": speed,
                    "light_dir": [float(x) for x in light_dir],
                    "caster_id": self.SEG_ACTOR, "shadow_id": self.SEG_SHADOW,

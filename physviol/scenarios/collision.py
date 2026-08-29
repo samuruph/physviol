@@ -39,6 +39,10 @@ class Collision(Scenario):
         radius = float(rng.uniform(0.28, 0.36))
         r_a = r_b = radius
         hue = float(rng.uniform(0, 1))
+        # One shared draw, not one each -- see the IDENTICAL comment above:
+        # a striker and target that differ in shape are exactly the same
+        # confound as differing in size, just spelled a different way.
+        kind = "sphere" if rng.rand() < 0.6 else "cube"
         flight = tier.num_frames / float(tier.fps)
         # Derived from the frame, not picked: the balls are all but frictionless
         # (0.05, so they roll rather than scrub) and therefore travel `v*T`
@@ -59,17 +63,20 @@ class Collision(Scenario):
         gap = speed * 0.45 * flight
         striker_x = target_x - r_a - r_b - gap
 
+        # Rolling without slipping only reads correctly on a sphere -- a cube
+        # given the same omega_y = vx/r would spin at a rate tuned for a round
+        # silhouette and visibly skid. `ramp_slide`'s cube slides with no spin
+        # at all; do the same here rather than fake a rolling cube.
+        striker_spin = (0.0, speed / r_a, 0.0) if kind == "sphere" else (0.0, 0.0, 0.0)
         striker = BodySpec(
-            name="ball_a", kind="sphere",
+            name="ball_a", kind=kind,
             position=(striker_x, 0.0, r_a), scale=(r_a,) * 3,
             velocity=(speed, 0.0, 0.0),
-            # Rolling without slipping, so the approach looks like rolling
-            # rather than sliding: omega_y = vx / r.
-            angular_velocity=(0.0, speed / r_a, 0.0),
+            angular_velocity=striker_spin,
             mass=1.0, friction=0.05, restitution=0.75,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_A, role="actor")
         target = BodySpec(
-            name="ball_b", kind="sphere",
+            name="ball_b", kind=kind,
             position=(target_x, 0.0, r_b), scale=(r_b,) * 3,
             mass=1.0, friction=0.05, restitution=0.75,
             color=C.hue_rgb(hue), segmentation_id=self.SEG_B, role="actor")
@@ -84,7 +91,8 @@ class Collision(Scenario):
             hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
             notes={"radius_a": r_a, "radius_b": r_b, "speed": speed,
                    "identical_actors": True, "target_at_rest": True,
-                   "striker_id": self.SEG_A, "target_id": self.SEG_B})
+                   "striker_id": self.SEG_A, "target_id": self.SEG_B,
+                   "actor_kind": kind})
 
 
 register(Collision())

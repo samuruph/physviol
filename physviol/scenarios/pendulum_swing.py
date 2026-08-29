@@ -54,7 +54,11 @@ class PendulumSwing(Scenario):
                        scale=(0.035, 0.035, arm / 2.0), mass=1.0, static=False,
                        scripted=True, color=(0.55, 0.55, 0.60),
                        segmentation_id=self.SEG_ROD, role="actor")
-        bob = BodySpec(name="bob", kind="sphere", position=(0.0, 0.0, pivot[2] - arm),
+        # Scripted, not simulated -- the bob's pose comes from `_place` on every
+        # frame regardless of shape, so unlike a free body there is no rolling
+        # or contact assumption tied to "sphere" to worry about here.
+        bob_kind = "sphere" if rng.rand() < 0.6 else "cube"
+        bob = BodySpec(name="bob", kind=bob_kind, position=(0.0, 0.0, pivot[2] - arm),
                        scale=(r_bob,) * 3, mass=1.0, static=False, scripted=True,
                        color=C.hue_rgb(float(rng.uniform(0, 1))),
                        segmentation_id=self.SEG_BOB, role="actor")
@@ -70,10 +74,11 @@ class PendulumSwing(Scenario):
             camera_position=(0.2, -6.8, 1.9), camera_look_at=(0.0, 0.0, 1.5),
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
+            camera_jitter_deg=(15.0, 8.0),
             notes={"constraint": "pivot", "pivot": list(pivot), "arm": arm,
                    "theta0": theta0, "omega": omega,
                    "omega_ref": abs(theta0) * omega,
-                   "bob_radius": r_bob})
+                   "bob_radius": r_bob, "bob_kind": bob_kind})
 
     # ------------------------------------------------------------------ #
     def script(self, spec, traj) -> None:

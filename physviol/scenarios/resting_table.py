@@ -45,7 +45,8 @@ class RestingTable(Scenario):
         xs = [-0.85, 0.0, 0.85]
         rng.shuffle(xs)
         r0 = float(rng.uniform(0.20, 0.26))
-        actor = BodySpec(name="mug", kind="sphere",
+        actor_kind = "sphere" if rng.rand() < 0.6 else "cube"
+        actor = BodySpec(name="mug", kind=actor_kind,
                          position=(xs[0], float(rng.uniform(-0.2, 0.2)), top_z + r0),
                          scale=(r0,) * 3, mass=0.9, friction=0.7, restitution=0.05,
                          color=C.hue_rgb(hue), segmentation_id=self.SEG_ACTOR,
@@ -69,7 +70,8 @@ class RestingTable(Scenario):
             camera_position=(2.6, -4.2, 1.85), camera_look_at=(0.0, 0.0, 0.85),
             floor_level=0.0, complexity=complexity,
             hdri_id=pick_hdri(C.appearance_rng(seed)) if cx.background == "hdri" else None,
-            notes={"table_top": top_z, "actor_radius": r0})
+            notes={"table_top": top_z, "actor_radius": r0,
+                   "actor_kind": actor_kind})
 
 
 register(RestingTable())
