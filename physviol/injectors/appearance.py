@@ -33,7 +33,12 @@ class _Squash(Injector):
 
     persistent = True
     ASPECT_BY_BIN = {"weak": 1.35, "medium": 1.9, "strong": 2.8}
-    RAMP_FRAMES = 5
+    #: In SECONDS, not frames. The tiers differ by more than a factor of two in
+    #: frame rate, so a constant expressed in frames is a different-looking
+    #: violation at each of them -- a five-frame ramp is 0.42 s at the debug
+    #: tier and 0.17 s at v0, which is the difference between a body visibly
+    #: distorting and a body changing between two frames.
+    RAMP_SECONDS = 0.4
 
     def strong_residual_reference(self, spec) -> float:
         k = self.ASPECT_BY_BIN["strong"]
@@ -62,13 +67,21 @@ class _Squash(Injector):
         # *and* an energy violation while claiming one. That is the same trap
         # the volume-preserving scaling avoids on the mass axis: this family's
         # whole job is to move the aspect ratio and nothing else.
+        #
+        # Among the horizontal axes the choice is the CAMERA's, not the dice's.
+        # Stretching along the viewing direction is nearly invisible, and on
+        # `occluder_pass` it was worse than invisible: the actor's new bulk
+        # pushed out of the front face of the screen it was hidden behind, so
+        # the clip read as the body appearing in front of the occluder.
         rng = self._instance_rng(spec)
         top = _geom.surface_top(spec, targets[0])
         radius = float(targets[0].bounding_radius)
         resting = bool(traj.pos[t0, traj.index_of(
             int(targets[0].segmentation_id)), 2] - radius <= top + 1e-2)
-        axis = int(rng.randint(2)) if resting else int(rng.randint(3))
-        ramp = max(2, min(self.RAMP_FRAMES, T - t0))
+        lateral = _geom.lateral_axis(spec)
+        axis = lateral if (resting or rng.rand() < 0.5) else 2
+        ramp = self._frames_for(spec, self.RAMP_SECONDS, minimum=2)
+        ramp = max(2, min(ramp, T - t0))
         union, applied, after = self._split_windows(t0, T, ramp)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
@@ -84,31 +97,144 @@ class _Squash(Injector):
                    "resting": resting,
                    "r_strong": self.strong_residual_reference(spec)})
 
-    def _apply(self, spec, traj, plan) -> Trajectory:
-        out = self._clone(traj)
-        t0 = plan.t_event
+    def _profile(self, plan, n: int) -> np.ndarray:
+        """[n,3] per-axis scale from `t_event`: one axis grows, two shrink.
+
+        Shared by the staged hook and by `_apply`, so the collision shape the
+        simulator is handed and the scale the renderer draws are one number
+        rather than two implementations of the same intention.
+        """
         k = float(plan.notes["aspect"])
         axis = int(plan.notes["axis"])
-        ramp = int(plan.notes["ramp_frames"])
-        n = traj.num_frames - t0
-
+        ramp = max(1, int(plan.notes["ramp_frames"]))
         u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
-        ease = u * u * (3.0 - 2.0 * u)
-        grow = 1.0 + (k - 1.0) * ease
-        shrink = 1.0 / np.sqrt(grow)          # volume-preserving
+        grow = 1.0 + (k - 1.0) * (u * u * (3.0 - 2.0 * u))
+        factor = np.tile((1.0 / np.sqrt(grow))[:, None], (1, 3))  # volume-preserving
+        factor[:, axis] = grow
+        return factor
 
+    #: STAGED, through `stepper.ShapeSwap` -- see `Immutability`, which shares
+    #: the mechanism and the reason for it. A squashed body is an *ellipsoid*,
+    #: which PyBullet has no primitive for, so the proxy is built as a convex
+    #: hull of a per-axis-scaled unit sphere; a cube gets exact half-extents.
+    #: Before this the cube in `barrier_pass`, `collision`, `drop` and
+    #: `occluder_pass` alike stopped touching the floor the moment it squashed,
+    #: because the render shortened it and the physics never heard.
+    #:
+    #: One consequence worth being explicit about, because it changes what this
+    #: family claims: a shape change the physics honours **cannot** leave the
+    #: path untouched. A rolling ball stretched to 2.8x along one axis is an
+    #: ellipsoid, and an ellipsoid tumbles rather than rolls. The old docstring
+    #: promised a perfectly lawful trajectory, and it could only promise that by
+    #: not telling the simulator anything had happened -- which is exactly the
+    #: bug you found. The law scored here is still `shape_continuity`, so the
+    #: severity measures the deformation and not its consequences.
+    simulated = True
+    #: How many times within a frame the collision shape is rebuilt.
+    SWAPS_PER_FRAME = 4
+
+    def _target_bodies(self, spec, plan):
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
+        out = []
+        for bid in plan.causal_body_ids:
+            body = by_id.get(int(bid))
+            # A SCRIPTED body is animated rather than solved -- `shadow_shape`'s
+            # target is a flattened disc lying on the floor -- so there is
+            # nothing in the simulator to resize and nothing holding it up.
+            if body is not None and not body.scripted and body.role != "shadow":
+                out.append(body)
+        return out
+
+    def stage(self, spec, simulator, objs, plan):
+        from ..render import stepper
+
+        self._swaps = []
+        bodies = self._target_bodies(spec, plan)
+        if not bodies:
+            return ()
+        swaps = [stepper.ShapeSwap(simulator, objs, spec, b) for b in bodies]
+        swaps = [s for s in swaps if s.ok]
+        if not swaps:
+            return ()
+        self._swaps = swaps
+        t0 = plan.t_event
+        profile = self._profile(plan, spec.tier.num_frames - t0)
+        spf = stepper.substeps_of(simulator)
+        every = max(1, spf // self.SWAPS_PER_FRAME)
+        state = {"step": -1}
+        grid = np.arange(profile.shape[0])
+
+        def reshape(_client, step, frame):
+            # Several times a frame -- see `Immutability.stage`. A shape that
+            # changes in one jump per frame arrives inside the floor and is
+            # pushed back out, which is a bounce this family does not claim.
+            if frame < t0 or step <= state["step"] or step % every:
+                return
+            state["step"] = step
+            k = min(step / float(spf), profile.shape[0] - 1.0)
+            f = [float(np.interp(k, grid, profile[:, a])) for a in range(3)]
+            for swap in swaps:
+                swap.set_scale(f)
+
+        return (reshape,)
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        for swap in getattr(self, "_swaps", ()) or ():
+            swap.restore()
+        self._swaps = []
+
+    def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
+        """The visual half: PyBullet carries the shape, Blender has to be told."""
+        t0 = plan.t_event
+        factor = self._profile(plan, traj_valid.num_frames - t0)
+        traj_invalid.scale_mul = np.asarray(traj_invalid.scale_mul).copy()
+        for bid in plan.causal_body_ids:
+            bi = traj_valid.index_of(int(bid))
+            traj_invalid.scale_mul[t0:, bi, :] = factor.astype(np.float32)
+        return super().post_simulate(spec, traj_valid, traj_invalid, plan)
+
+    def _apply(self, spec, traj, plan) -> Trajectory:
+        """The host-side approximation, for the mock rollout the tests run on.
+
+        The container takes the staged path above. This one reproduces the same
+        geometry by hand so every downstream annotation can be exercised without
+        a docker round trip: the body's clearance to its support is preserved
+        rather than its centre height, and a body that grew sideways is pushed
+        out of whatever it now overlaps.
+        """
+        out = self._clone(traj)
+        t0 = plan.t_event
+        n = traj.num_frames - t0
+        factor_t = self._profile(plan, n)
+
+        by_id = {int(b.segmentation_id): b for b in spec.bodies}
         for bid in plan.causal_body_ids:
             bi = traj.index_of(int(bid))
-            factor = np.tile(shrink[:, None], (1, 3))
-            factor[:, axis] = grow
+            body = by_id.get(int(bid))
+            factor = factor_t
             out.scale_mul[t0:, bi, :] = factor.astype(np.float32)
-            if axis == 2:
-                # Growing downward would push the body into whatever it rests
-                # on, which is a solidity violation this family never claimed.
-                top = float(plan.notes["surface_top"])
-                r_t = float(traj.radius[bi]) * grow
-                out.pos[t0:, bi, 2] = np.maximum(out.pos[t0:, bi, 2], top + r_t)
-                self._sync_velocity(traj, out, bi, t0)
+            # A SCRIPTED body is not held up by anything -- `shadow_shape`'s
+            # target is a flattened disc lying on the floor whose declared
+            # radius has nothing to do with how tall it is drawn -- so seating
+            # it against a surface would lift it off the ground it *is*.
+            if body is None or body.scripted or body.role == "shadow":
+                continue
+            # The body's FOOTPRINT moved, so its pose has to move with it. A
+            # volume-preserving stretch shortens two axes, and the vertical one
+            # is usually among them: leaving the centre where it was lifted a
+            # resting cube clear of the ground by the difference, which is what
+            # you saw on `barrier_pass`, `collision`, `drop` and
+            # `occluder_pass` alike. `reseat` preserves the *clearance* the
+            # lawful rollout had rather than the centre height, so a seated body
+            # stays seated and an airborne one still lands when it lawfully
+            # landed.
+            r0 = float(traj.radius[bi])
+            _geom.reseat(spec, traj, out, body, bi, t0, r0 * factor[:, 2])
+            # And a body that grew sideways must not grow into the barrier it
+            # was rolling towards.
+            _geom.push_out(spec, traj, out, body, bi, t0,
+                           r0 * np.maximum(factor[:, 0], factor[:, 1]))
+            self._sync_velocity(traj, out, bi, t0)
 
         out.meta = dict(traj.meta)
         out.meta["intervention"] = plan.to_dict()
@@ -138,6 +264,13 @@ class ShadowShape(_Squash):
 
     family = "shadow_shape"
     magnitude_unit = "shadow_aspect_ratio"
+    #: NOT staged, unlike `deformation`. The thing changing shape here is a
+    #: scripted body -- a flattened disc the scenario animates, pinned in the
+    #: simulator so it neither falls nor collides -- so there is no collision
+    #: shape to swap and nothing for PyBullet to do. It keeps the trajectory
+    #: path, which is the right one for a body whose motion is written rather
+    #: than solved.
+    simulated = False
 
     def _targets(self, spec):
         shade = [b for b in spec.bodies if b.role == "shadow"]

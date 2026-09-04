@@ -121,6 +121,21 @@ class Injector:
     persistent: bool = False
 
     @staticmethod
+    def _frames_for(spec, seconds: float, minimum: int = 2) -> int:
+        """A duration written in SECONDS, converted to this tier's frames.
+
+        The tiers differ by 2.5x in frame rate, so any constant expressed in
+        frames describes a different violation at each of them: a five-frame
+        ramp is 0.42 s of visible distortion at the debug tier and 0.17 s at
+        v0, and a ten-frame pass-through is 0.83 s against 0.33 s -- which is
+        the difference between a ball that clears a wall and a ball that gets
+        ejected back out of it. Anything a viewer perceives as a duration
+        belongs in seconds; only counts that are genuinely about frames (a
+        single-frame teleport) stay in frames.
+        """
+        return int(max(minimum, round(float(seconds) * float(spec.tier.fps))))
+
+    @staticmethod
     def _split_windows(t0: int, T: int, applied_frames: int):
         """(union, intervention, consequence) for "change for N frames, then it
         stays changed".
@@ -600,9 +615,18 @@ class Injector:
         frac = np.where(counted > 0, seen / np.maximum(counted, 1), 1.0)
         return int((frac < visible_fraction).sum())
 
+    #: Fractions of the nominal intervention to try, strongest first.
+    #:
+    #: Finer than the 1.0 / 0.72 / 0.52 / 0.36 / 0.24 it started as, and that
+    #: coarseness was costing real strength: a clip whose geometry could host
+    #: 0.70 of the nominal shove was offered 0.72, failed it by one frame, and
+    #: got 0.52 -- a quarter of the violation thrown away to a rounding of the
+    #: search grid. You reported `phantom_impulse` as barely visible at its
+    #: strongest bin, which is what that looks like from the outside.
+    FIT_LADDER = (1.0, 0.90, 0.80, 0.71, 0.63, 0.55, 0.48, 0.41, 0.34, 0.28)
+
     def _fit_to_frame(self, spec, traj: Trajectory, bodies, t0: int, knob,
-                      build, tolerance: int = 1,
-                      ladder=(1.0, 0.72, 0.52, 0.36, 0.24)):
+                      build, tolerance: int = 1, ladder=None):
         """Weaken `knob` until the culprit stays on screen, and return what stuck.
 
         The severity bins are chosen for visual legibility on a typical clip,
@@ -628,6 +652,7 @@ class Injector:
         # already lets the actor drift out of shot, weakening the intervention
         # cannot fix that, and clamping to the floor of the ladder would turn a
         # framing problem into a violation nobody can see.
+        ladder = self.FIT_LADDER if ladder is None else ladder
         budget = self._offscreen_frames(spec, traj, bodies, t0) + tolerance
         candidate = None
         for scale in ladder:

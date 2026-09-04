@@ -153,3 +153,22 @@ user asked to settle this together before the run.
 
 `docs/taxonomy_v2.md` — replacing `domain` with a derived `principle`. Agreed in outline,
 not implemented. Re-labelling only, no re-rendering.
+
+## Resolved 2026-09-04 — `friction` owns the *excess grip* half of its axis
+
+The family used to claim the other half: less grip than declared, so a body fails to
+slow. That half is not available in the scenarios that host the family. `barrier_pass`,
+`collision` and `occluder_pass` all give their actor a coefficient of 0.02–0.05 so it
+rolls freely, and there is no headroom below a number that is already almost zero:
+measured in the pinned image, taking a ball from µ = 0.05 to µ = 0.001 moves it by 0.11 m
+over three seconds. All three cells shipped a violation nobody could see.
+
+Excess grip has plenty of headroom and is not `newton1_inertia`. That family removes a
+body's velocity *between two frames* with nothing touching it; this one decelerates it
+over half a second while in continuous contact, which is the signature the `friction` law
+measures. Nothing in the image justifies the grip — a ball rolls onto ordinary floor and
+stops as though it had rolled onto carpet.
+
+Staged as **both** coefficients. Lateral friction alone barely touches a rolling sphere,
+because a rolling contact is not a sliding one; with `rollingFriction` the same ball goes
+from 2.51 m of travel to 0.80 m and arrives at rest.

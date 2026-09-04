@@ -108,12 +108,16 @@ class Immutability(Injector):
     #: Linear scale factor. Below 1.0 shrinks, above grows; the seed picks a
     #: direction so a release is not all balloons.
     SCALE_BY_BIN = {"weak": 1.30, "medium": 1.75, "strong": 2.30}
-    #: Frames the resize eases over. A body that snaps to a new size between two
-    #: frames reads as a cut; one that swells reads as physics going wrong.
-    RAMP_FRAMES = 5
+    #: How long the resize eases over, in SECONDS -- see `Injector._frames_for`.
+    #: A body that snaps to a new size between two frames reads as a cut; one
+    #: that swells reads as physics going wrong.
+    RAMP_SECONDS = 0.4
     #: Floor on the shrink factor, so a shrinking body stays big enough to have
     #: a mask worth annotating at 128 squared.
     SHRINK_TO = 0.42
+    #: How many times within a frame the collision shape is rebuilt during the
+    #: ramp. See the note in `stage`.
+    SWAPS_PER_FRAME = 4
 
     def _factor(self, severity_bin: str, grow: bool) -> float:
         k = self.SCALE_BY_BIN[severity_bin]
@@ -140,7 +144,7 @@ class Immutability(Injector):
         # strong shrinks, which makes the three bins three different violations.
         grow = bool(self._instance_rng(spec).rand() < 0.55)
         k = self._factor(severity_bin, grow)
-        ramp = max(2, min(self.RAMP_FRAMES, T - t0))
+        ramp = max(2, min(self._frames_for(spec, self.RAMP_SECONDS), T - t0))
         occ = spec.notes.get("occluded_frames") or []
         union, applied, after = self._split_windows(t0, T, ramp)
         return InterventionPlan(
@@ -161,29 +165,108 @@ class Immutability(Injector):
                    "r_strong": abs(self._factor("strong", grow) ** 3 - 1.0),
                    "occluded_at_event": bool(t0 in occ)})
 
+    #: STAGED, through `stepper.ShapeSwap`. PyBullet cannot rescale a collision
+    #: shape in place, which is why this family and `deformation` were the last
+    #: two that could only edit a finished trajectory -- and it showed exactly
+    #: where you would expect: the render knew the ball had swollen and the
+    #: physics did not, so it grew half-way into the barrier beside it and a
+    #: shrunken cube stopped touching the floor it stood on.
+    #:
+    #: What PyBullet *can* do is replace a body mid-run, carrying the pose and
+    #: both velocities across. So the size change is real from `t_event` on: the
+    #: actor rests at the height its new size dictates, and a wall stops it
+    #: where its new surface meets the wall's.
+    simulated = True
+
+    def _profile(self, plan, n: int) -> np.ndarray:
+        """Scale factor per frame from `t_event`: smoothstep to `k`, then hold.
+
+        Shared by the staged hook and by `_apply`, so the collision shape the
+        simulator is given and the scale the renderer draws are the same number
+        rather than two implementations of the same intention.
+        """
+        k = float(plan.notes["scale_factor"])
+        ramp = max(1, int(plan.notes["ramp_frames"]))
+        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
+        return 1.0 + (k - 1.0) * (u * u * (3.0 - 2.0 * u))
+
+    def stage(self, spec, simulator, objs, plan):
+        from ..render import stepper
+
+        actor = next((b for b in spec.bodies
+                      if int(b.segmentation_id) == int(plan.causal_body_ids[0])),
+                     None)
+        if actor is None:
+            return ()
+        self._swap = None
+        swap = stepper.ShapeSwap(simulator, objs, spec, actor)
+        if not swap.ok:
+            return ()
+        self._swap = swap
+        t0 = plan.t_event
+        profile = self._profile(plan, spec.tier.num_frames - t0)
+        spf = stepper.substeps_of(simulator)
+        every = max(1, spf // self.SWAPS_PER_FRAME)
+        state = {"step": -1}
+
+        def resize(_client, step, frame):
+            # Several times a frame, not once. A body that grows in one step per
+            # frame arrives inside whatever it is resting on or standing next
+            # to, and the solver spends the next frame pushing it back out --
+            # measured at the debug tier, a ball swelling to 2.3x buried itself
+            # 0.11 m in the floor before recovering. Sub-frame steps make each
+            # jump a quarter the size; every step would rebuild the body twenty
+            # times a frame for no visible gain.
+            if frame < t0 or step <= state["step"] or step % every:
+                return
+            state["step"] = step
+            # `run_from` starts at `t_event`, so the substep counter IS the
+            # elapsed time in frames -- no need to reconcile it against `frame`.
+            k = min(step / float(spf), profile.shape[0] - 1.0)
+            f = float(np.interp(k, np.arange(profile.shape[0]), profile))
+            swap.set_scale((f, f, f))
+
+        return (resize,)
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        swap = getattr(self, "_swap", None)
+        if swap is not None:
+            swap.restore()
+        self._swap = None
+
+    def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
+        """The visual half. PyBullet carries the size, Blender has to be told.
+
+        `splice` copies every non-pose channel from the valid rollout, so
+        without this the actor would collide at its new size and render at its
+        old one.
+        """
+        bi = traj_valid.index_of(int(plan.causal_body_ids[0]))
+        t0 = plan.t_event
+        factor = self._profile(plan, traj_valid.num_frames - t0)
+        traj_invalid.scale_mul = np.asarray(traj_invalid.scale_mul).copy()
+        traj_invalid.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
+        return super().post_simulate(spec, traj_valid, traj_invalid, plan)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
+        """The host-side approximation, for the mock rollout the tests run on.
+
+        The container takes the staged path above; this one exists so every
+        `plan()` and every downstream annotation can be exercised without a
+        docker round trip. It reproduces the same geometry by hand: the body's
+        clearance to its support is preserved rather than its centre height, and
+        a body that grew is pushed out of whatever it now overlaps.
+        """
         out = self._clone(traj)
         actor = self._primary(spec)
         bi = traj.index_of(int(actor.segmentation_id))
         t0 = plan.t_event
-        k = float(plan.notes["scale_factor"])
-        ramp = int(plan.notes["ramp_frames"])
-        T = traj.num_frames
-
-        # Ease in over `ramp` frames, then hold. Smoothstep rather than linear
-        # so the change has no visible corner at either end.
-        n = T - t0
-        u = np.clip((np.arange(n, dtype=np.float64) + 1.0) / ramp, 0.0, 1.0)
-        factor = 1.0 + (k - 1.0) * (u * u * (3.0 - 2.0 * u))
+        factor = self._profile(plan, traj.num_frames - t0)
         out.scale_mul[t0:, bi, :] = factor[:, None].astype(np.float32)
 
-        # A body that grows while resting on a surface would grow *into* it.
-        # Lifting it keeps the clip to one violation: the size is wrong, the
-        # floor is still solid. Per frame, because the size now changes per
-        # frame -- lifting by the final radius would make it hover on the way.
-        top = float(plan.notes["surface_top"])
-        r_t = float(traj.radius[bi]) * factor
-        out.pos[t0:, bi, 2] = np.maximum(out.pos[t0:, bi, 2], top + r_t)
+        r0 = float(traj.radius[bi])
+        _geom.reseat(spec, traj, out, actor, bi, t0, r0 * factor)
+        _geom.push_out(spec, traj, out, actor, bi, t0, r0 * factor)
         self._sync_velocity(traj, out, bi, t0)
 
         out.meta = dict(traj.meta)
@@ -210,7 +293,17 @@ class Fission(Injector):
 
     family = "fission"
     persistent = True
-    SEPARATION_BY_BIN = {"weak": 1.2, "medium": 2.4, "strong": 3.8}   # m/s
+    #: Half the pair's separation speed, in m/s. Deliberately modest: you
+    #: reported the split reading as "mechanical", two objects already far
+    #: apart rather than one object coming apart, and 3.8 m/s at the strong bin
+    #: was why -- at 30 fps that is 0.13 m between two consecutive frames, so
+    #: the halves are a body-width apart on the frame after the split and the
+    #: coming-apart is never on screen. Severity here is how far they end up,
+    #: and there is a whole clip for them to get there.
+    #: In RADII per second, so the halves part by a share of their own size
+    #: rather than by an absolute distance that means one thing for a 0.25 m
+    #: ball and another for a 0.5 m cube.
+    SEPARATION_BY_BIN = {"weak": 1.2, "medium": 2.2, "strong": 3.4}
     #: Both halves keep their full size, in every bin.
     #:
     #: Shrinking them to conserve volume is the tempting choice and it costs
@@ -232,34 +325,60 @@ class Fission(Injector):
         if actor is None or twin is None:
             return None
         T = traj.num_frames
-        # Fire at the *start* of an occlusion rather than its middle, so the
-        # halves have the whole hidden stretch to separate and are unmistakably
-        # two objects by the time they re-emerge. One frame in, because the
-        # geometric occlusion test can be off by a frame at either edge.
+        # Fire just BEFORE an occlusion, not inside it. Splitting while hidden
+        # was the original choice -- it gives the halves the whole hidden
+        # stretch to separate -- and you reported the cost: on `occluder_pass`
+        # the one thing the family exists to show, an object coming apart,
+        # happens where nobody can see it, and the clip reads as two objects
+        # emerging from behind a screen one object went into. Which is
+        # `permanence`'s picture, not this one's.
         occ_run = spec.notes.get("occluded_frames") or []
         if len(occ_run) >= 3:
-            t0 = int(occ_run[0]) + 1
+            t0 = max(1, int(occ_run[0]) - self._frames_for(spec, 0.25))
         else:
-            t0 = _geom.default_event_frame(spec, T)
+            # And with room for the halves to actually part. Splitting on the
+            # frame the body lands pins both halves under friction before they
+            # have moved a body-width, which is how a split ends up looking
+            # like one blurry object rather than two.
+            t0 = _geom.acting_frame(spec, traj, int(actor.segmentation_id), T)
         if t0 is None or not (1 <= t0 < T - 1):
             return None
 
-        # Direction is a property of the SCENE, not of the bin. Drawn from
-        # the per-bin rng it came out different for weak, medium and strong,
-        # so the three were three different violations and their magnitudes
-        # stopped being comparable -- phantom_impulse reported 0.87 / 2.08 /
-        # 1.95 for bins that scale 1.0 / 2.4 / 4.5, because each heading got
-        # its own frustum-fit scale.
-        heading = float(self._instance_rng(spec).uniform(0.0, 2.0 * np.pi))
-        unit = np.array([np.cos(heading), np.sin(heading), 0.0])
+        # ACROSS THE SCREEN, and ACROSS THE BODY'S OWN MOTION. Two separate
+        # failures fixed by one rule.
+        #
+        # The direction used to be a heading drawn uniformly on the horizontal
+        # circle, which on `drop` came out very nearly along the viewing axis:
+        # the halves separated in depth, one behind the other, and the clip
+        # showed a single object that briefly looked lumpy. So the split has to
+        # live in the image plane.
+        #
+        # But the image plane still has the body's own heading in it, and
+        # splitting along that is worse than it sounds: the separation speed is
+        # comparable to the body's speed, so the trailing half does not lag --
+        # it REVERSES, and the clip reads as a collision rather than as
+        # something coming apart. Perpendicular to the screen-space velocity,
+        # both halves keep going where the body was going and simply part.
+        _, _, right, up = _geom.camera_basis(spec)
+        v = np.asarray(traj.lin_vel[t0 - 1, traj.index_of(
+            int(actor.segmentation_id))], np.float64)
+        sx, sy = float(v @ right), float(v @ up)
+        perp = (-sy * right + sx * up) if np.hypot(sx, sy) > 0.25 else right
+        n = float(np.linalg.norm(perp))
+        unit = (perp / n if n > 1e-6 else right)
+        # Sign per instance -- a property of the SCENE, not of the bin, or weak,
+        # medium and strong would be three different violations whose magnitudes
+        # are not comparable.
+        unit = unit * float(self._instance_rng(spec).choice([-1.0, 1.0]))
         twin_spec = [actor, twin]
         half_scale = self.SCALE_BY_BIN[severity_bin]
-        strongest = unit * self.SEPARATION_BY_BIN["strong"]
+        radius = float(actor.bounding_radius)
+        strongest = unit * self.SEPARATION_BY_BIN["strong"] * radius
         scale, _ = self._fit_to_frame(
             spec, traj, twin_spec, t0, strongest,
             lambda k: self._split(spec, traj, actor, twin, t0, strongest * k,
                                   self.SCALE_BY_BIN["strong"]))
-        push_v = unit * self.SEPARATION_BY_BIN[severity_bin] * scale
+        push_v = unit * self.SEPARATION_BY_BIN[severity_bin] * radius * scale
         speed = float(np.linalg.norm(push_v))
         push = push_v.tolist()
         occ = spec.notes.get("occluded_frames") or []
@@ -304,9 +423,114 @@ class Fission(Injector):
                            p0=traj.pos[t0 - 1, ai])
         return out
 
+    #: STAGED. Both halves are bodies the solver owns from `t_event` on, so
+    #: whatever they hit, they hit for real. On `collision` the edited version
+    #: could not do that: the striker split, both halves went elsewhere, and the
+    #: bystander guard then had to hold the ball they no longer struck perfectly
+    #: still -- which is what you saw, a target that never reacts to anything.
+    #: Staged, a half that reaches the target moves it and a half that misses
+    #: leaves it alone, and neither outcome has to be decided in advance.
+    simulated = True
+
+    def _twin_of(self, spec):
+        return next((b for b in spec.bodies if b.dormant), None)
+
+    def stage(self, spec, simulator, objs, plan):
+        import pybullet as pb
+
+        from ..render import stepper
+
+        actor = next((b for b in spec.bodies
+                      if int(b.segmentation_id) == int(plan.causal_body_ids[0])),
+                     None)
+        twin = self._twin_of(spec)
+        if actor is None or twin is None:
+            return ()
+        # Cleared first, never assumed empty: an early return below would
+        # otherwise leave the PREVIOUS variant's pair and proxy sitting on the
+        # instance, and `unstage` would restore a body this plan never touched.
+        self._pair = None
+        self._swap = None
+        idx = stepper.pybullet_index(simulator, objs, spec,
+                                     int(actor.segmentation_id))
+        if idx is None:
+            return ()
+        push = np.asarray(plan.params["push"], np.float64)
+        pos, quat = pb.getBasePositionAndOrientation(idx)
+        vel, ang = pb.getBaseVelocity(idx)
+        v = np.asarray(vel, np.float64)
+
+        # The understudy is declared `scripted`, so the simulator holds it at
+        # mass 0 and no change of mass revives it -- see `ShapeSwap.dynamic`.
+        swap = stepper.ShapeSwap(simulator, objs, spec, twin, dynamic=True)
+        if not swap.ok:
+            return ()
+        swap.set_scale((1.0, 1.0, 1.0), pose=(pos, quat),
+                       velocity=((v - push).tolist(), list(ang)))
+        if swap.proxy is None:
+            swap.restore()
+            return ()
+        pb.resetBaseVelocity(idx, (v + push).tolist(), list(ang))
+        # The two halves start in exactly the same place, so they must not see
+        # each other: a pair overlapping completely resolves as an explosion,
+        # which is a position jump large enough to read as a teleport. They are
+        # two parts of one body that has just come apart; everything else in the
+        # scene stays solid to both.
+        self._pair = (idx, swap.proxy)
+        pb.setCollisionFilterPair(idx, swap.proxy, -1, -1, 0)
+        self._swap = swap
+
+        # ...and solid to each other again the moment they have parted. Left
+        # suppressed for the whole clip, two halves that come to rest near each
+        # other simply share the space -- on `drop` they finished 0.37 m apart
+        # with a body width of 0.78, which renders as one lumpy object and
+        # undoes the only claim the family makes. Restored on separation rather
+        # than on a timer, for the same reason `solidity` does it: how long two
+        # bodies take to clear each other is a fact about the run.
+        state = {"restored": False}
+
+        def resolidify(_client, _step, _frame):
+            if state["restored"]:
+                return
+            if pb.getClosestPoints(idx, swap.proxy, distance=0.0):
+                return
+            pb.setCollisionFilterPair(idx, swap.proxy, -1, -1, 1)
+            state["restored"] = True
+
+        return (resolidify,)
+
+    def unstage(self, spec, simulator, objs, plan) -> None:
+        import pybullet as pb
+
+        pair = getattr(self, "_pair", None)
+        if pair is not None:
+            try:
+                pb.setCollisionFilterPair(pair[0], pair[1], -1, -1, 1)
+            except Exception:                                 # noqa: BLE001
+                pass
+        self._pair = None
+        swap = getattr(self, "_swap", None)
+        if swap is not None:
+            swap.restore()
+        self._swap = None
+
+    def post_simulate(self, spec, traj_valid, traj_invalid, plan) -> Trajectory:
+        """Switch the understudy on. PyBullet moved it; nothing told the render.
+
+        `present` is not a physical channel, so `splice` carries the valid
+        rollout's -- in which the understudy does not exist -- straight through.
+        """
+        twin = self._twin_of(spec)
+        if twin is not None:
+            ti = traj_valid.index_of(int(twin.segmentation_id))
+            traj_invalid.present = np.asarray(traj_invalid.present).copy()
+            traj_invalid.present[plan.t_event:, ti] = True
+        return super().post_simulate(spec, traj_valid, traj_invalid, plan)
+
     def _apply(self, spec, traj, plan) -> Trajectory:
+        """The host-side approximation, for the mock rollout the tests run on."""
         actor = self._primary(spec)
-        twin = next(b for b in spec.bodies if b.dormant)
+        twin = self._twin_of(spec)
         out = self._split(spec, traj, actor, twin, plan.t_event,
                           np.asarray(plan.params["push"], np.float64),
                           float(plan.params["scale_factor"]))
@@ -502,8 +726,17 @@ class Dissolve(Injector):
         if not targets:
             return None
         T = traj.num_frames
-        t0 = _geom.default_event_frame(spec, T)
-        if t0 is None:
+        # IN PLAIN SIGHT, unlike `permanence` -- and actively so, not merely by
+        # not seeking an occlusion. See `unoccluded_event_frame`.
+        #
+        # Placed against the SHORTEST fade, so all three bins share one
+        # `t_event` and stay comparable; a longer weak fade may run on into the
+        # occlusion, which is fine because its first and most legible frames are
+        # the ones in the open.
+        t0 = _geom.unoccluded_event_frame(
+            spec, T, max(self.FADE_MIN,
+                         int(round(self.FADE_BY_BIN["strong"] * T))))
+        if t0 is None or not (1 <= t0 < T - 1):
             return None
         fade = max(self.FADE_MIN,
                    int(round(self.FADE_BY_BIN[severity_bin] * T)))

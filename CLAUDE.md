@@ -52,6 +52,14 @@ beyond `physviol/render/worker_smoke.py`.
   first; three strengths of one cell is what you check second.
 - **Violations are windows, not onsets.** `violation_windows` is a *list* of intervals —
   `superelastic` fires once per bounce, and observability can be interrupted by re-occlusion.
+- **`causal_mask` lasts as long as the consequences do, and that is MEASURED.** Level 1 is
+  red (the culprit the plan names), level 2 is blue (a body it disturbed) — both drawn
+  invalid-side only, both labelled in the overlay's causal panel. The gate is the declared
+  consequence window *unioned with* the frames where the invalid trajectory provably
+  departs from the valid one, so a two-frame `newton2_mass` exchange that leaves both balls
+  travelling wrong keeps its mask for the rest of the clip without any family having to
+  declare it. Rule of thumb: if behaviour is still different because of the violation, the
+  causal mask is still on.
 - **Decouple dynamics from rendering.** Simulate → write `traj.npz` → render by replaying
   keyframes. This is the seam; it is what makes valid/invalid twins bit-identical before
   `t_event`.
@@ -79,12 +87,28 @@ beyond `physviol/render/worker_smoke.py`.
    breaks. A family may take either of two paths after `t_event`:
    - **staged** (`Injector.simulates(plan)`): the world is reset to the valid state at
      `t_event`, the intervention is applied as something PyBullet honours — a velocity, a
-     mass, a disabled collision pair — and the simulator runs forward. Real contacts.
-     `stage()` must have a matching `unstage()`, because one scene serves every family in a
-     run and a `changeDynamics` persists exactly the way a stray keyframe does.
+     mass, a disabled collision pair, a resized collision shape — and the simulator runs
+     forward. Real contacts. `stage()` must have a matching `unstage()`, because one scene
+     serves every family in a run and a `changeDynamics` persists exactly the way a stray
+     keyframe does. **This is the default and the goal**; a family stays off it only when
+     nothing in the simulator corresponds to what it changes.
    - **edited**: the finished trajectory is rewritten and re-integrated by `_rewrite_from`.
-     Approximate contacts, and the only option for families PyBullet cannot express —
-     `immutability` and `deformation`, whose collision shapes are fixed at creation.
+     Approximate contacts. What remains here is the families whose subject the simulator
+     does not own: `colour_shift`, `dissolve`, `permanence`, `shadow*` and `shadow_shape`
+     (a scripted body), plus the trajectory-shape families `non_parabolic`, `time_slip`
+     and `continuity`'s pivot-scripted neighbours. Every staged family keeps its `_apply`
+     as a **host-side approximation**, because that is what the mock rollout in `tests/`
+     exercises without a docker round trip — so `_apply` and `stage()` must describe the
+     same intervention, and where they can share a profile function they do.
+   - **Resizing IS staged.** PyBullet has no in-place collision rescale, which is why
+     `immutability` and `deformation` used to be edited — and it showed: a shrunken cube
+     stopped touching the floor and a swollen ball grew into the barrier beside it.
+     `stepper.ShapeSwap` parks the declared body and stands a correctly-sized proxy in its
+     place, rebuilt a few times per frame through the ramp. A squashed sphere is an
+     ellipsoid, which PyBullet also has no primitive for, so the proxy is a convex hull of
+     a per-axis-scaled unit sphere — measured in the pinned image, a 0.3 × 0.3 × 0.6 hull
+     comes to rest at z = 0.601. Consequence, accepted: a shape change the physics honours
+     cannot leave the path lawful, because an ellipsoid tumbles where a ball rolled.
 
    Either way frames before `t_event` are the valid rollout verbatim, so (1) holds by
    construction.

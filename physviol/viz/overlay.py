@@ -124,6 +124,8 @@ def build(clip_dir: str, out_path: Optional[str] = None,
             if kind == "mask":
                 px = int(mask[t].sum()) if mask is not None else 0
                 _text(f, "%d px" % px, (x + 5, y + panel - 8), C_DIM, 0.40, 1)
+            if kind == "causal" and causal is not None:
+                _causal_key(f, x, y, panel, causal[t])
             if kind == "seg" and seg is not None:
                 ids = [int(u) for u in np.unique(seg[t]) if u]
                 _text(f, "ids %s" % ",".join(map(str, ids[:8])),
@@ -468,6 +470,28 @@ def _sev_scale(f, x, y, size, value):
 
 def _label(f, s, org):
     _text(f, s, org, (255, 255, 255), 0.44, 1)
+
+
+def _causal_key(f, x, y, panel, layer):
+    """Name the two levels, in their own colours, in the panel that uses them.
+
+    The array is uint8 with three values and no key anywhere on the frame, so
+    "what is red and what is blue" was a question the overlay made a reader ask
+    and then did not answer. Red is the culprit -- the body the plan names --
+    and blue is a body it disturbed, which is measured rather than declared.
+    Counts beside each, because a level that is present in the legend and absent
+    from the image is worth being able to tell apart from one that is simply
+    hard to see.
+    """
+    import cv2
+
+    rows = [("culprit", C_CAUSAL1, int((layer == 1).sum())),
+            ("affected", C_CAUSAL2, int((layer == 2).sum()))]
+    ly = y + panel - 8 - 11 * (len(rows) - 1)
+    for label, colour, count in rows:
+        cv2.rectangle(f, (x + 5, ly - 7), (x + 13, ly - 1), colour, -1)
+        _text(f, "%s %d px" % (label, count), (x + 17, ly), C_DIM, 0.36, 1)
+        ly += 11
 
 
 def _text(img, s, org, color, scale, thick=1, backing=True):

@@ -257,7 +257,20 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # did this violation affect" outlives the moment of intervention. A
     # phantom impulse is delivered in two frames and the ball it launched is a
     # consequence for the rest of the clip.
-    causal_gate = consequence & observable
+    #
+    # And MEASURED, not just declared. Your rule, and it is the right one: if
+    # something is still behaving differently because of the violation, the
+    # causal mask should still be saying so. A declared window cannot know
+    # that -- `newton2_mass` declares two frames because the collision resolves
+    # in two frames, and both balls then travel wrong for the rest of the clip;
+    # `solidity`'s window closes when the bodies stop overlapping, and the ball
+    # is out the far side of a wall for every frame after it. So the gate is the
+    # union of what the plan declared and what the two trajectories actually
+    # do, which is the same comparison level 2 already uses to decide *who* was
+    # affected, now deciding *when* as well.
+    diverged = _diverged_frames(traj_v, traj_i, causal_ids + affected,
+                                int((plan_d or {}).get("t_event_frame", 0)), T)
+    causal_gate = (consequence | diverged) & observable
     cmask = masks_mod.causal_mask(seg_v, seg_i, dynamic_ids, affected,
                                   causal_gate, static_ids=static_ids)
     dmap = masks_mod.divergence_map(pv["rgba"], pi["rgba"])
@@ -426,6 +439,30 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
             "peak_severity": float(sev_t.max()),
             "mask": masks_mod.summarise(vmask),
             "noise_floor": floor.to_dict(r_strong)}
+
+
+def _diverged_frames(traj_v, traj_i, body_ids, t_event: int, T: int,
+                     tol: float = 1e-3) -> np.ndarray:
+    """[T] bool: frames at or after `t_event` where any of these bodies has
+    provably departed from its lawful path.
+
+    The measured half of the causal gate. A violation whose consequences outlive
+    its declared window still has consequences, and this is how the annotation
+    finds out: two trajectories, one comparison, no family-specific rule.
+    """
+    out = np.zeros((int(T),), bool)
+    wanted = {int(i) for i in body_ids}
+    for j, bid in enumerate(np.asarray(traj_v.body_ids, int)):
+        if int(bid) not in wanted:
+            continue
+        a = np.asarray(traj_v.pos[:, j, :], np.float64)
+        b = np.asarray(traj_i.pos[:, j, :], np.float64)
+        if a.shape != b.shape:
+            continue
+        n = min(out.shape[0], a.shape[0])
+        out[:n] |= (np.abs(a[:n] - b[:n]).max(axis=1) > tol)
+    out[:max(0, int(t_event))] = False
+    return out
 
 
 def _disturbed_bodies(traj_v, traj_i, causal_ids, tol: float = 1e-3) -> List[int]:

@@ -60,9 +60,13 @@ class Support(Injector):
         radius = float(actor.bounding_radius)
         _, top = _geom.support_under_any(spec, actor, traj, 0)
         bi = traj.index_of(int(actor.segmentation_id))
-        speed = float(np.linalg.norm(traj.lin_vel[t0, bi]))
-        # Decided by the body's state, not the scenario's name: a resting body
-        # hovers where it is, a moving one keeps moving with nothing under it.
+        # HORIZONTAL speed, not total. A body in free fall has a large speed and
+        # no horizontal motion at all, and calling that "moving" is what put
+        # `drop` into the wrong branch: it kept the downward velocity it had,
+        # drifted into the floor at a constant rate and bounced -- the up and
+        # down you reported. A body nothing is holding up does not carry on
+        # falling; that is `antigravity`. It hangs.
+        speed = float(np.linalg.norm(traj.lin_vel[t0, bi][:2]))
         mode = "hover_still" if speed < 0.3 else "hover_moving"
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
@@ -104,8 +108,8 @@ class Support(Injector):
         import pybullet as pb
         from ..render import stepper
 
-        clearance = float(plan.notes["clearance_radii"]) * float(
-            plan.notes["radius"])
+        want = float(plan.notes["clearance_radii"]) * float(plan.notes["radius"])
+        top = float(plan.notes["surface_top"])
         g = np.asarray(spec.gravity, np.float64)
         targets = []
         for bid in plan.causal_body_ids:
@@ -117,10 +121,21 @@ class Support(Injector):
             if idx is None:
                 continue
             pos, quat = pb.getBasePositionAndOrientation(idx)
-            lifted = (pos[0], pos[1], pos[2] + clearance)
+            radius = float(body.bounding_radius)
+            # Only as much lift as the clearance still needs. Adding the full
+            # clearance unconditionally teleported a body that was ALREADY
+            # airborne three and a half radii further up, which is a continuity
+            # violation smuggled into a support clip.
+            have = max(0.0, float(pos[2]) - radius - top)
+            lifted = (pos[0], pos[1], pos[2] + max(0.0, want - have))
             v, w = pb.getBaseVelocity(idx)
             pb.resetBasePositionAndOrientation(idx, lifted, quat)
-            pb.resetBaseVelocity(idx, list(v), list(w))
+            # The vertical component goes. Whatever the body was doing sideways
+            # it carries on doing -- a sliding box keeps sliding, and freezing
+            # it would add a Newton-1 violation on top of this one -- but a
+            # falling body stops falling, because that is what "nothing is
+            # holding it up, and yet" looks like.
+            pb.resetBaseVelocity(idx, [float(v[0]), float(v[1]), 0.0], list(w))
             targets.append((idx, float(getattr(body, "mass", 1.0))))
         if not targets:
             return ()
@@ -151,18 +166,21 @@ class Support(Injector):
         ease = u * u * (3.0 - 2.0 * u)
         start = traj.pos[t0 - 1, bi].astype(np.float64)
 
+        # ONE rule, three pictures. Horizontal motion carries on exactly as it
+        # lawfully would -- freezing a sliding body would add a Newton-1
+        # violation on top of this one -- and the height is held at whatever it
+        # was when support failed, raised to the clearance the bin asks for.
+        #
+        # A resting body therefore hovers where it stood, a sliding one keeps
+        # sliding with nothing under it, and a falling one stops falling and
+        # hangs. That last case is the one you reported: it used to keep its
+        # downward velocity, so it sank to the floor and bounced.
+        held = traj.pos[t0:, bi, :].astype(np.float64).copy()
         if plan.notes["mode"] == "hover_still":
-            # It was at rest: it stays where it was, only higher.
-            held = np.tile(start, (n, 1))
-            held[:, 2] = start[2] + (top + radius + lift - start[2]) * ease
-        else:
-            # It was moving: it keeps travelling exactly the path it would have
-            # taken, lifted clear of the surface. Freezing a sliding body would
-            # be a *second* violation -- Newton 1 -- on top of this one, and it
-            # is the version the eye reads as "that box is not touching the
-            # ramp" rather than "that box stopped".
-            held = traj.pos[t0:, bi, :].astype(np.float64).copy()
-            held[:, 2] = held[:, 2] + lift * ease
+            held[:, 0:2] = start[None, 0:2]
+        have = max(0.0, float(start[2]) - radius - top)
+        hold_z = float(start[2]) + max(0.0, lift - have)
+        held[:, 2] = start[2] + (hold_z - start[2]) * ease
 
         out.pos[t0:, bi, :] = held.astype(np.float32)
         out.quat[t0:, bi, :] = traj.quat[t0:, bi, :]
@@ -176,37 +194,54 @@ class Support(Injector):
 
 
 class Friction(Injector):
-    """A sliding body decelerates, halts, or reverses with nothing to do it.
+    """A moving body is dragged to a halt by a surface that should barely grip.
 
-    Implemented by **replaying the body's own lawful path at a different rate**
-    rather than by re-integrating it. That guarantees the body stays exactly on
-    the surface it was sliding along: a ramp is not a horizontal plane, so an
-    injector that re-integrates under gravity puts the block in mid-air next to
-    its ramp -- a support violation smuggled into a friction clip and annotated
-    as neither. Following the recorded path costs nothing and cannot leave it.
+    **The direction of this family changed, and it is worth saying why.** It
+    used to claim the other half of the axis -- *less* grip than declared, so a
+    body fails to slow as it should -- on the reasoning that "more grip" at its
+    limit is a body stopping dead, which is `newton1_inertia`. Measured in the
+    pinned image, the half it kept is not available: `barrier_pass`,
+    `collision` and `occluder_pass` all give their actor a friction of 0.02 to
+    0.05 so that it rolls freely, and taking that to 0.001 moves the ball by
+    0.11 m over three seconds. You reported all three as barely visible, and
+    that is the number behind it -- there is no headroom below a coefficient
+    that is already almost zero.
 
-    `strong` reverses outright, which is the version a viewer cannot miss: a
-    block sliding *up* a slope with nothing pushing it.
+    The other half has plenty, and it is not `newton1_inertia`. That family
+    removes a body's velocity *between two frames* with nothing touching it;
+    this one decelerates it over half a second while it is in continuous contact
+    with a surface, which is exactly the signature of friction and exactly what
+    the `friction` law measures. What is wrong is that nothing in the image
+    justifies the grip: a ball rolls onto ordinary floor and stops as though it
+    had rolled onto carpet.
+
+    Staged as coefficients, and **rolling friction as well as lateral**. That is
+    the measurement that decides it: lateral friction alone hardly touches a
+    rolling sphere, because a rolling contact is not sliding. The two together
+    take the same ball from 2.51 m of travel to 0.80 m and leave it at rest.
+
+    The host-side approximation replays the body's own lawful path at a reduced
+    rate rather than re-integrating it, which guarantees it stays on the surface
+    it was travelling along: a ramp is not a horizontal plane, so re-integrating
+    under gravity puts the block in mid-air beside its ramp -- a support
+    violation smuggled into a friction clip and annotated as neither.
     """
 
     family = "friction"
     persistent = True
-    #: Multiplier on the body's friction coefficient. Strictly in (0, 1): LESS
-    #: grip than declared, so the body fails to slow as it should.
-    #:
-    #: It used to be a rate at which the body was walked along its own lawful
-    #: path, with `strong = -0.6` -- a NEGATIVE rate, which retraced the path
-    #: backwards. The clip showed a ball decelerating from +1.22 m/s, reversing,
-    #: and then travelling backwards at a constant 0.73 m/s forever. Friction
-    #: opposes motion; it can bring a body to rest and it stops acting there. It
-    #: cannot reverse anything, and a body that reverses and then holds a
-    #: constant speed is not depicting friction at all.
-    #:
-    #: The other direction -- more grip, stopping sooner -- is not available
-    #: either: at its limit it is a body stopping dead, which is
-    #: `newton1_inertia`. Too little friction is the half of the axis this
-    #: family can own.
-    RATE_BY_BIN = {"weak": 0.5, "medium": 0.15, "strong": 0.02}
+    #: Fraction of its lawful speed the body keeps once the surface has gripped
+    #: it -- so 0.08 is a body that all but stops. This is the shape `_retimed`
+    #: walks the body's own path at, and the shape the staged coefficients are
+    #: chosen to produce.
+    RATE_BY_BIN = {"weak": 0.55, "medium": 0.28, "strong": 0.08}
+    #: Lateral friction the surface is given, and the rolling friction that
+    #: makes it bite on a SPHERE. Measured in the pinned image: a ball at
+    #: 1.5 m/s travels 2.51 m in two seconds at the declared mu of 0.05 and
+    #: 0.80 m at (1.0, 0.03), arriving at rest. Lateral friction alone does
+    #: almost nothing to a rolling body -- 0.05 against 0.001 differed by 0.11 m
+    #: over three seconds -- which is why the low-grip direction was invisible.
+    GRIP_BY_BIN = {"weak": 0.5, "medium": 0.8, "strong": 1.0}
+    ROLL_BY_BIN = {"weak": 0.004, "medium": 0.012, "strong": 0.03}
 
     def strong_residual_reference(self, spec) -> float:
         return 2.0
@@ -235,16 +270,25 @@ class Friction(Injector):
         rate = self.RATE_BY_BIN[severity_bin]
         strong = self._retimed(traj, bi, t0, self.RATE_BY_BIN["strong"])
         r_strong = self._measure(strong, int(actor.segmentation_id), "friction", {})
+        mu = float(getattr(actor, "friction", 0.5))
+        grip = float(self.GRIP_BY_BIN[severity_bin])
+        roll = float(self.ROLL_BY_BIN[severity_bin])
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],
             causal_body_ids=[int(actor.segmentation_id)],
-            params={"type": "path_rate_scale", "end_rate": rate},
-            magnitude=float(1.0 - rate), magnitude_unit="effective_mu_ratio",
+            params={"type": "friction_scale", "end_rate": rate,
+                    "lateral_friction": grip, "rolling_friction": roll,
+                    "declared_friction": mu},
+            # How much more grip the surface shows than it declares. Reported
+            # as a ratio so the three bins stay ordered and comparable.
+            magnitude=float(grip / max(mu, 1e-6)),
+            magnitude_unit="effective_mu_ratio",
             severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
-                   "end_rate": rate, "r_strong": float(r_strong)})
+                   "end_rate": rate, "lateral_friction": grip,
+                   "rolling_friction": roll, "r_strong": float(r_strong)})
 
     # ------------------------------------------------------------------ #
     def _retimed(self, traj, bi: int, t0: int, end_rate: float) -> Trajectory:
@@ -266,26 +310,24 @@ class Friction(Injector):
                                    * rate[:, None].astype(np.float32))
         return out
 
-    #: STAGED. `changeDynamics(lateralFriction=)` is what friction *is*, and a
-    #: coefficient cannot produce the reversal the trajectory path did. It
-    #: scores lower -- a body already near rest barely responds to a grip change
-    #: -- and that is the honest number for a clip that now depicts what it
-    #: claims, rather than a high score for one that did not.
+    #: STAGED. Coefficients are what friction *is*, so this is the family with
+    #: the least excuse for prescribing an outcome: whether the body slides,
+    #: rolls, stops or keeps creeping is the solver's answer to a surface
+    #: property, not ours.
     simulated = True
 
     def stage(self, spec, simulator, objs, plan):
-        """Scale the actor's friction coefficient and let it slide.
+        """Give the actor's contact more grip than the scene declares.
 
-        You reported a phantom bounce mixed into this family: the trajectory was
-        rewritten along a rescaled path and re-integrated, so a contact the
-        resolver invented ended up inside a clip that claims to be about
-        friction alone. Staged as a coefficient, the only thing that differs
-        from the valid twin is how much grip the surface has.
+        Both coefficients, and the rolling one is the load-bearing half: a
+        rolling contact is not a sliding one, so `lateralFriction` alone leaves
+        a ball rolling almost exactly as far as it lawfully would.
         """
         import pybullet as pb
         from ..render import stepper
 
-        rate = float(plan.params["end_rate"])
+        grip = float(plan.params["lateral_friction"])
+        roll = float(plan.params["rolling_friction"])
         for bid in plan.causal_body_ids:
             body = next((b for b in spec.bodies
                          if int(b.segmentation_id) == int(bid)), None)
@@ -293,9 +335,8 @@ class Friction(Injector):
                 continue
             idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
             if idx is not None:
-                pb.changeDynamics(
-                    idx, -1,
-                    lateralFriction=float(getattr(body, "friction", 0.5)) * rate)
+                pb.changeDynamics(idx, -1, lateralFriction=grip,
+                                  rollingFriction=roll, spinningFriction=roll)
         return ()
 
     def unstage(self, spec, simulator, objs, plan) -> None:
@@ -309,8 +350,10 @@ class Friction(Injector):
                 continue
             idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
             if idx is not None:
-                pb.changeDynamics(idx, -1,
-                                  lateralFriction=float(getattr(body, "friction", 0.5)))
+                pb.changeDynamics(
+                    idx, -1,
+                    lateralFriction=float(getattr(body, "friction", 0.5)),
+                    rollingFriction=0.0, spinningFriction=0.0)
 
     def _apply(self, spec, traj, plan) -> Trajectory:
         actor = self._primary(spec)

@@ -37,12 +37,14 @@ class PhantomImpulse(Injector):
             return None
         actor = targets[0]
         T = traj.num_frames
-        free = _geom.contact_free_run(traj, int(actor.segmentation_id), min_len=2)
-        if free is not None:
-            t0 = max(free[0] + 1, min(free[1], T // 3))
-        else:
-            t0 = max(1, T // 3)
-        if not (1 <= t0 < T - 1):
+        # Inside the contact-free run, with room left in it -- see
+        # `_geom.acting_frame`. Clamping to the run's LAST frame is what this
+        # did before, so on `drop` the shove landed one frame before the actor
+        # hit the floor and the floor absorbed it. You reported the strongest
+        # bin as barely visible; that was the reason, not the size of the push.
+        t0 = _geom.acting_frame(spec, traj, int(actor.segmentation_id), T,
+                                want=max(1, T // 3))
+        if t0 is None or not (1 <= t0 < T - 1):
             return None
 
         # Direction is a property of the SCENE, not of the bin. Drawn from
@@ -210,9 +212,17 @@ class AngularMomentum(Injector):
         r_strong = self._measure(strong, int(actor.segmentation_id),
                                  "angular_momentum", {})
 
+        t1 = min(T - 1, t0 + self._window_len(2, t0, T) - 1)
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0,
-            windows=[(t0, min(T - 1, t0 + self._window_len(2, t0, T) - 1))],
+            windows=[(t0, t1)],
+            intervention_windows=[(t0, t1)],
+            # The torque is an impulse and the spin that follows it is lawful --
+            # a free body conserves angular momentum, so nothing after `t1`
+            # breaks the law again. But the body IS spinning differently for the
+            # rest of the clip because of what happened at `t0`, and that is a
+            # consequence, which is what `causal_mask` is gated on.
+            consequence_windows=[(t0, T - 1)],
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "spin_scale" if spinning else "spin_impose",
                     "omega_scale": k,
@@ -262,7 +272,42 @@ class AngularMomentum(Injector):
                 traj.quat[t0 - 1, bi], omega, traj.dt, n)
         return out
 
+    #: STAGED for a FREE body. You reported the spin running on forever and the
+    #: physics never becoming valid again: it could not, because the edited path
+    #: wrote one constant angular velocity into every remaining frame, so the
+    #: body kept that spin through its landing and along the ground. Handed to
+    #: the solver as a one-off change of angular velocity, the torque is an
+    #: impulse and everything after it is real -- the spin persists in flight,
+    #: because that is what conservation means, and contact damps it when the
+    #: body arrives.
+    #:
+    #: A PIVOT body keeps the edited path: its arc is scripted by the scenario
+    #: over a constraint PyBullet has no joint for, so there is nothing in the
+    #: simulator to hand the change to.
+    simulated = True
+
+    def simulates(self, plan) -> bool:
+        return plan.params.get("constraint") != "pivot"
+
+    def stage(self, spec, simulator, objs, plan):
+        import pybullet as pb
+
+        from ..render import stepper
+
+        imposed = plan.notes.get("omega_imposed")
+        k = float(plan.notes["omega_scale"])
+        for bid in plan.causal_body_ids:
+            idx = stepper.pybullet_index(simulator, objs, spec, int(bid))
+            if idx is None:
+                continue
+            vel, ang = pb.getBaseVelocity(idx)
+            omega = (np.asarray(imposed, np.float64) if imposed is not None
+                     else np.asarray(ang, np.float64) * k)
+            pb.resetBaseVelocity(idx, list(vel), omega.tolist())
+        return ()
+
     def _apply(self, spec, traj, plan) -> Trajectory:
+        """The host-side approximation, for the mock rollout the tests run on."""
         targets = [b for b in spec.bodies
                    if int(b.segmentation_id) in set(plan.causal_body_ids)]
         out = self._preview(spec, traj, plan.t_event,

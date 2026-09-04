@@ -86,9 +86,20 @@ class _GravityScale(Injector):
         import pybullet as pb
         from ..render import stepper
 
-        alpha = float(plan.params["alpha_peak"])
-        g = np.asarray(spec.gravity, np.float64)
+        # THE SAME TRAPEZOID the plan was fitted and annotated against, not the
+        # peak held flat. `plan()` chooses the window length by rolling the
+        # `_pulse` profile forward and shortening it until the actor stays in
+        # shot; staging a constant `alpha_peak` instead applies roughly twice
+        # the mean effect that fit was measured on, so the clip that renders is
+        # not the clip that was fitted. Measured on `drop` at the debug tier:
+        # the actor reached z = 6.57 in a shot framed for 2.84 and spent 12 of
+        # 25 frames off camera -- which is an object leaving the frame, with an
+        # empty mask and a severity field to match, inside a clip labelled
+        # `antigravity`.
         t0, t1 = plan.windows[0]
+        alpha_profile = self._pulse(t1 - t0 + 1,
+                                    float(plan.params["alpha_peak"]))
+        g = np.asarray(spec.gravity, np.float64)
         targets = []
         for bid in plan.causal_body_ids:
             body = next((b for b in spec.bodies
@@ -104,6 +115,8 @@ class _GravityScale(Injector):
         def bend(_client, _step, frame):
             if not (t0 <= frame <= t1):
                 return
+            alpha = float(alpha_profile[min(frame - t0,
+                                            alpha_profile.shape[0] - 1)])
             for idx, mass in targets:
                 force = (g * mass * (alpha - 1.0)).tolist()
                 pos, _ = pb.getBasePositionAndOrientation(idx)
@@ -346,6 +359,14 @@ class Continuity(Injector):
             spec, traj, [actor], t0, strongest,
             lambda k: self._teleport(traj, actor, t0, strongest * k))
         delta = nominal * scale
+        # LAND IT CLEAR. A teleport is a claim about position and nothing else,
+        # so the body must not arrive inside something: on `collision` it
+        # landed slightly overlapping the ball it was supposed to skip past,
+        # and the solver's first job on the next frame was to push the two
+        # apart -- an ejection the clip neither claims nor annotates. Lengthen
+        # the jump first, since that is still the same violation only bigger,
+        # and only then try the other direction.
+        delta = self._clear_landing(spec, traj, actor, t0, delta)
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0,
             windows=[(t0, traj.num_frames - 1)],
@@ -380,6 +401,36 @@ class Continuity(Injector):
             obj.position = tuple(float(x) for x in
                                  np.asarray(obj.position, np.float64) + delta)
         return ()
+
+    #: Multiples of the fitted jump to try before giving up, then the same
+    #: distances the other way. Extending is preferred: a longer jump is the
+    #: same violation at a larger magnitude, where reversing it is a different
+    #: clip.
+    LANDING_TRIES = (1.0, 1.15, 1.3, 1.5, 1.75, -1.0, -1.15, -1.3, -1.5)
+
+    def _clear_landing(self, spec, traj, actor, t0: int, delta):
+        """The nearest version of this jump that does not land inside anything.
+
+        Everything else in the scene is where the VALID rollout puts it at
+        `t0`, which is exactly right: the teleport happens before anything has
+        had a chance to react to it.
+        """
+        bi = traj.index_of(int(actor.segmentation_id))
+        radius = float(traj.radius[bi])
+        start = np.asarray(traj.pos[t0, bi], np.float64)
+        obstacles = _geom.Obstacles(spec, traj,
+                                    exclude_ids=[int(actor.segmentation_id)])
+        for k in self.LANDING_TRIES:
+            candidate = np.asarray(delta, np.float64) * float(k)
+            target = start + candidate
+            moved, _ = obstacles.resolve(target.copy(), np.zeros(3), radius,
+                                         0.0, float(t0))
+            if float(np.linalg.norm(moved - target)) > 1e-6:
+                continue                      # something pushed it: it overlaps
+            if not bool(_geom.in_frame(spec, target[None, :])[0]):
+                continue
+            return candidate
+        return np.asarray(delta, np.float64)
 
     def _teleport(self, traj, actor, t0: int, delta) -> Trajectory:
         out = self._clone(traj)
@@ -425,7 +476,12 @@ class NonParabolic(Injector):
     #: Peak lateral excursion in body radii. Small on purpose -- legibility here
     #: comes from the number of cycles, not from the size of each one.
     AMPLITUDE_RADII = {"weak": 0.5, "medium": 0.9, "strong": 1.5}
-    CYCLES = 2.5
+    #: Fewer cycles than the 2.5 this shipped with. At v0's 30 fps a 2.5-cycle
+    #: snake over a short airborne run turns each half-cycle over in a handful
+    #: of frames, which reads as a jitter rather than as a path -- you asked for
+    #: it smoother, and the amplitude is not the part to change: legibility here
+    #: comes from the shape being continuous and obviously not a parabola.
+    CYCLES = 1.75
 
     def strong_residual_reference(self, spec) -> float:
         # The least-squares parabola absorbs a little of a symmetric wobble, so
@@ -656,7 +712,7 @@ class TimeSlip(Injector):
     #: Stall duration as a fraction of the clip. Scales with tier, like every
     #: other duration in the project. Capped well short of the clip because the
     #: body has to visibly *resume* -- see RESUME_RADII.
-    SLIP_BY_BIN = {"weak": 0.10, "medium": 0.17, "strong": 0.24}
+    SLIP_BY_BIN = {"weak": 0.13, "medium": 0.22, "strong": 0.32}
     SLIP_MIN = 2
     MOVING = 0.3                                                # m/s
     #: How far the body must still travel after the stall, in radii. Without
@@ -686,7 +742,14 @@ class TimeSlip(Injector):
         comparison with `newton1_inertia` interesting.
         """
         T = traj.num_frames
-        want = _geom.default_event_frame(spec, T)
+        # The MIDDLE of the clip, not the middle of an occlusion.
+        # `default_event_frame` hides an event behind a screen wherever the
+        # scenario offers one, and a stall that happens entirely out of sight is
+        # a body that emerges late -- which is not something a viewer can read
+        # as a stall at all. You reported it as barely visible on
+        # `occluder_pass`; this is why.
+        want = max(1, int(round(_geom.EVENT_FRACTION * T)))
+        occluded = set(int(f) for f in (spec.notes.get("occluded_frames") or []))
         order = _geom.actors(spec)
         primary = self._primary(spec)
         if primary is not None:
@@ -722,10 +785,13 @@ class TimeSlip(Injector):
                 resumed = float(arc[t0 + tail - 1] - arc[t0])
                 if resumed < self.RESUME_RADII * radius:
                     continue
-                # As close to the scenario's usual event frame as the window
-                # allows, so the stall lands mid-clip rather than in the first
-                # second -- and, where there is an occluder, behind it.
-                score = abs(t0 - (want if want is not None else t0))
+                # As close to mid-clip as the window allows, and IN SHOT: a
+                # frame spent stalled behind a screen carries none of the
+                # evidence, so each one costs more than being a frame further
+                # from the ideal moment.
+                hidden = sum(1 for f in range(t0, min(t0 + n, T))
+                             if f in occluded)
+                score = abs(t0 - want) + 3 * hidden
                 if best is None or score < best[0]:
                     best = (score, body, t0, float(speed[t0]))
         return None if best is None else best[1:]

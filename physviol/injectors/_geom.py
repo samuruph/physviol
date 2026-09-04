@@ -672,3 +672,155 @@ class Obstacles:
                 if vn < 0.0:
                     v = v - (1.0 + restitution) * vn * n
         return p, v
+
+
+# ------------------------------------------------------- resized bodies --
+def reseat(spec, traj, out, body, bi: int, t0: int,
+           half_z: np.ndarray) -> None:
+    """Keep a resized body's *clearance* to its support, not its centre height.
+
+    A family that changes a body's size and leaves `pos` alone is writing a
+    second, unlabelled violation into the clip: shrink the vertical half-extent
+    of a ball resting on the floor and it now hovers by the difference; grow it
+    and it sinks into the ground. Both were visible in the released
+    `deformation` clips -- the cube stopped touching the floor -- and the old
+    guard only handled the growing half, with a `maximum` clamp that could push
+    a body up but never bring it back down.
+
+    The invariant that survives a resize is the **gap**, not the centre:
+    whatever clearance the lawful rollout had at frame `t`, the resized body
+    keeps at frame `t`. A body seated on a surface has gap 0 and stays seated
+    through the whole ramp; a body in flight keeps its clearance and therefore
+    still lands on the frame it lawfully landed on, seated correctly when it
+    does. `half_z` is the body's vertical half-extent per frame from `t0`.
+    """
+    ground = floor_fn(spec, body)
+    r0 = float(traj.radius[bi])
+    z = np.asarray(out.pos[t0:, bi, 2], np.float64)
+    xy = np.asarray(out.pos[t0:, bi, :2], np.float64)
+    z_valid = np.asarray(traj.pos[t0:, bi, 2], np.float64)
+    xy_valid = np.asarray(traj.pos[t0:, bi, :2], np.float64)
+    hz = np.asarray(half_z, np.float64)
+    for k in range(z.shape[0]):
+        base = float(ground(xy_valid[k, 0], xy_valid[k, 1]))
+        gap = max(0.0, float(z_valid[k]) - r0 - base)
+        here = float(ground(xy[k, 0], xy[k, 1]))
+        z[k] = here + float(hz[k]) + gap
+    out.pos[t0:, bi, 2] = z.astype(np.float32)
+
+
+def push_out(spec, traj, out, body, bi: int, t0: int,
+             radius_t: np.ndarray) -> None:
+    """Move a resized body horizontally out of whatever its new size overlaps.
+
+    The counterpart to `reseat` on the other two axes. `immutability` swells a
+    ball to 2.3x beside a wall and leaves its centre where it was, so the ball
+    ends up half inside the barrier -- a solidity failure inside an identity
+    clip. Growing is the only direction that can create an overlap, so a
+    shrinking body is untouched and passes through here unchanged.
+
+    Horizontal only, and deliberately: the vertical axis belongs to `reseat`,
+    and resolving both here would let a body grow itself up the face of a wall.
+    """
+    obst = Obstacles(spec, out, exclude_ids=[int(body.segmentation_id)])
+    pos = np.asarray(out.pos[t0:, bi, :], np.float64)
+    rad = np.asarray(radius_t, np.float64)
+    for k in range(pos.shape[0]):
+        p = pos[k].copy()
+        moved, _ = obst.resolve(p.copy(), np.zeros(3), float(rad[k]), 0.0,
+                                float(t0 + k))
+        pos[k, 0:2] = moved[0:2]
+    out.pos[t0:, bi, :] = pos.astype(np.float32)
+
+
+def lateral_axis(spec, prefer_horizontal: bool = True) -> int:
+    """The world axis a size change shows up best on, from the camera's view.
+
+    A deformation nobody can see is not a deformation. Stretching along the
+    camera's viewing direction changes almost nothing on screen -- and on
+    `occluder_pass` it did something worse than nothing, pushing the actor's
+    new bulk straight out of the front of the screen it was supposed to be
+    hidden behind, so the clip read as the body spawning in front of the
+    occluder.
+
+    So the axis is chosen by how much of it lies across the image plane rather
+    than drawn at random: the world axis with the largest projection onto the
+    camera's right vector wins.
+    """
+    _, _, right, up = camera_basis(spec)
+    axes = np.eye(3)
+    score = np.abs(axes @ right)
+    if not prefer_horizontal:
+        score = np.maximum(score, np.abs(axes @ up))
+    else:
+        score[2] = -1.0                       # vertical is not ours to pick
+    return int(np.argmax(score))
+
+
+def acting_frame(spec, traj, body_id: int, num_frames: int,
+                 want: Optional[int] = None, share: float = 0.4,
+                 floor_fraction: float = 1.0 / 6.0) -> Optional[int]:
+    """A frame the violation has room to play out from.
+
+    `default_event_frame` answers "when is a good moment", and for a body in
+    free flight that is not the same question. On `drop` at the debug tier the
+    actor is airborne for nine frames and lands on the tenth, so a third of the
+    way into the *clip* is a third of the way into the *landing*: the shove
+    arrives one frame before impact and the floor absorbs it, and the split
+    happens at the moment of contact so both halves are pinned by friction
+    before they have moved a body-width. You reported both -- a phantom impulse
+    that is barely visible and a fission whose halves end up overlapping.
+
+    So a family that acts on a free body fires inside the contact-free run with
+    at least `share` of that run still ahead of it, and no earlier than
+    `floor_fraction` of the clip, which is what keeps a lawful prefix.
+    """
+    if want is None:
+        want = default_event_frame(spec, num_frames)
+    if want is None:
+        return None
+    try:
+        run = contact_free_run(traj, int(body_id), min_len=2)
+    except Exception:                                         # noqa: BLE001
+        run = None
+    if run is None:
+        return int(want)
+    lo, hi = int(run[0]), int(run[1])
+    latest = hi - int(round(share * max(hi - lo, 0)))
+    earliest = max(lo + 1, 1, int(round(floor_fraction * num_frames)))
+    t = min(max(int(want), earliest), max(earliest, latest))
+    if 1 <= t < num_frames - 1:
+        return int(t)
+    return int(want)
+
+
+def unoccluded_event_frame(spec, num_frames: int, span: int,
+                           want: Optional[int] = None) -> Optional[int]:
+    """A start frame whose next `span` frames are all in plain sight.
+
+    The opposite of `default_event_frame`, which *seeks* an occlusion so the
+    observability lag is non-zero. Some families need the other thing: a
+    `dissolve` that fades out entirely behind a screen is an object that went
+    behind a screen and did not come out, which is the picture `permanence`
+    already ships -- you noticed the two were indistinguishable on
+    `occluder_pass`, and this is what separates them.
+
+    Nearest wins, and ties go earlier: shifting back keeps more of the clip for
+    the consequence, and a fade that starts before the actor reaches the screen
+    is over before it gets there.
+    """
+    if want is None:
+        want = max(1, int(round(EVENT_FRACTION * num_frames)))
+    occ = set(int(f) for f in (spec.notes.get("occluded_frames") or []))
+    span = max(1, int(span))
+
+    def clear(t: int) -> bool:
+        return not any(f in occ for f in range(t, min(t + span, num_frames)))
+
+    if not occ:
+        return int(want) if 1 <= want < num_frames - 1 else None
+    for delta in range(0, num_frames):
+        for t in (want - delta, want + delta):
+            if 1 <= t < num_frames - 1 and clear(t):
+                return int(t)
+    return int(want) if 1 <= want < num_frames - 1 else None

@@ -219,17 +219,22 @@ class Solidity(Injector):
     family = "solidity"
 
     DEPTH_BY_BIN = {"weak": 0.30, "medium": 0.80, "strong": 2.50}
-    #: How long the collision pair stays suppressed, in frames. This IS the
+    #: How long the collision pair stays suppressed, in SECONDS. This IS the
     #: severity axis once the violation is staged: the pair is either enforced
     #: or it is not, so "how deep" is not a dial the simulator has -- but "for
     #: how long" is, and it produces exactly the qualitative ladder the depth
-    #: bins were describing. Two frames and the body dips in and is pushed back
+    #: bins were describing. A moment and the body dips in and is pushed back
     #: out when contact resumes; long enough and it is out the far side before
     #: anything can stop it, which is what `strong` has always meant.
     #:
     #: Left as a whole-clip suppression, every bin passed completely through and
-    #: all three scored 1.00 -- three renders of one violation.
-    FRAMES_BY_BIN = {"weak": 2, "medium": 4, "strong": 10}
+    #: all three scored 1.00 -- three renders of one violation. Written in
+    #: frames, it did the opposite at v0: ten frames is 0.83 s at the debug
+    #: tier's 12 fps but 0.33 s at 30, and 0.33 s is not long enough for a ball
+    #: to clear a wall -- so the pair came back while the ball was still inside
+    #: it and the solver ejected it backwards. You reported exactly that: the
+    #: strong bin did not pass through.
+    SECONDS_BY_BIN = {"weak": 0.17, "medium": 0.34, "strong": 0.85}
 
     def strong_residual_reference(self, spec) -> float:
         # The penetration law reports depth in radii, which is exactly the unit
@@ -257,8 +262,9 @@ class Solidity(Injector):
 
         radius = actor.bounding_radius
         depth_r = self.DEPTH_BY_BIN[severity_bin]
-        n_window = self._window_len(self.FRAMES_BY_BIN[severity_bin],
-                                    t_contact, traj.num_frames)
+        n_window = self._window_len(
+            self._frames_for(spec, self.SECONDS_BY_BIN[severity_bin]),
+            t_contact, traj.num_frames)
         t_end = t_contact + n_window - 1
 
         # The mode follows the contact *geometry*, not whether the partner is
@@ -311,7 +317,7 @@ class Solidity(Injector):
             # same space and coming out the other side.
             strong = self._passed_through(
                 spec, traj, actor, partner_id, t_contact,
-                self.FRAMES_BY_BIN["strong"])
+                self._frames_for(spec, self.SECONDS_BY_BIN["strong"]))
             notes["r_strong"] = self._measure(
                 strong, int(actor.segmentation_id), "penetration", notes)
 
@@ -324,6 +330,18 @@ class Solidity(Injector):
                     "frames_disabled": int(n_window),
                     "mode": mode,
                     "also_disable": extra_ids,
+                    # A bin that means "through, for good" cannot end on a
+                    # clock. Restoring the pair while the two are still
+                    # overlapping hands the solver an interpenetration to
+                    # resolve, and it resolves it the only way it can: by
+                    # ejecting the actor back the way it came. That is what you
+                    # saw -- the strong bin bouncing off a wall it was supposed
+                    # to pass through -- and no duration tuned for one scene's
+                    # approach speed fixes it for the next one. So past a
+                    # radius, the pair comes back when the bodies are
+                    # geometrically clear of each other, which is a fact about
+                    # the run rather than a guess made before it.
+                    "restore_when_clear": bool(depth_r >= 1.0),
                     "target_depth_radii": depth_r},
             magnitude=float(depth_r * radius),
             magnitude_unit="m_penetration_depth",
@@ -351,7 +369,8 @@ class Solidity(Injector):
         if t0 is None:
             return None
         depth_r = self.DEPTH_BY_BIN[severity_bin]
-        n_win = self._window_len(self.FRAMES_BY_BIN[severity_bin], t0, T)
+        n_win = self._window_len(
+            self._frames_for(spec, self.SECONDS_BY_BIN[severity_bin]), t0, T)
         t_end = min(T - 1, t0 + n_win - 1)
         lead = bodies[0]
         return InterventionPlan(
@@ -527,7 +546,11 @@ class Solidity(Injector):
             return
         plan.windows = [(t0, t_end)]
         plan.intervention_windows = [(t0, t_end)]
-        plan.consequence_windows = [(t0, t_end)]
+        # The overlap ends; being on the wrong side of a wall does not. The
+        # consequence window is what `causal_mask` is gated on, so tying it to
+        # the overlap made the mask vanish at exactly the moment the ball
+        # emerged somewhere it could not have got to.
+        plan.consequence_windows = [(t0, T - 1)]
 
     def simulates(self, plan) -> bool:
         return (plan.params.get("mode") != "sink_group"
@@ -558,10 +581,24 @@ class Solidity(Injector):
         # this the suppression lasted the whole clip and weak, medium and strong
         # were the same clip three times.
         t_end = plan.t_event + int(plan.params.get("frames_disabled", 4))
+        when_clear = bool(plan.params.get("restore_when_clear"))
         state = {"restored": False}
+
+        def clear() -> bool:
+            """True once nothing the pair covers is still overlapping."""
+            for ia, ib in pairs:
+                if pb.getClosestPoints(ia, ib, distance=0.0):
+                    return False
+            return True
 
         def restore(_client, _step, frame):
             if state["restored"] or frame < t_end:
+                return
+            # The weak and medium bins WANT the pair back while the bodies still
+            # overlap -- being shoved back out is the whole shape of a transient
+            # sinking. Only the bins that claim to go all the way through wait
+            # for the far side.
+            if when_clear and not clear():
                 return
             for ia, ib in pairs:
                 pb.setCollisionFilterPair(ia, ib, -1, -1, 1)
@@ -696,7 +733,15 @@ class SuperElastic(Injector):
     """
 
     family = "superelastic"
-    GAIN_BY_BIN = {"weak": 1.20, "medium": 1.55, "strong": 2.10}
+    #: Outgoing speed as a multiple of incoming. Raised from 1.2/1.55/2.1,
+    #: because the ceiling those numbers were chosen against was the wrong one:
+    #: they were low enough that a vertical bounce stayed in shot, which made
+    #: every *horizontal* rebound -- `barrier_pass`, `collision` -- barely
+    #: distinguishable from its lawful twin. The framing constraint belongs on
+    #: the individual clip, not on the constant, so the nominal gain is now what
+    #: reads clearly and `_fit_to_frame` walks it back per scene wherever the
+    #: geometry cannot host it.
+    GAIN_BY_BIN = {"weak": 1.35, "medium": 1.90, "strong": 2.80}
 
     def strong_residual_reference(self, spec) -> float:
         # The law reports fractional kinetic-energy gain, and energy goes as
@@ -825,8 +870,20 @@ class SuperElastic(Injector):
         if not (1 <= t0 < traj.num_frames - 2):
             return None
 
-        gain = self.GAIN_BY_BIN[severity_bin]
         targets = self._targets(spec, actor, partner_id)
+        # KEEP THE BOUNCE IN SHOT. A gain that reads well on a ball rebounding
+        # across the frame throws a dropped one clean out of the top of it, and
+        # a body that leaves frame has an empty mask for the rest of the clip --
+        # the clip then depicts an object vanishing while claiming an energy
+        # violation. Fitted on the STRONGEST bin so all three share one scale
+        # and stay ordered, and the knob scaled is the *excess* over 1, since a
+        # gain of 1 is a lawful bounce rather than no bounce at all.
+        excess = self.GAIN_BY_BIN["strong"] - 1.0
+        fit, _ = self._fit_to_frame(
+            spec, traj, targets, t0, excess,
+            lambda k: self._boosted(spec, traj, targets, t0,
+                                    1.0 + excess * k, normal))
+        gain = 1.0 + (self.GAIN_BY_BIN[severity_bin] - 1.0) * fit
         # Roll the boosted trajectory forward here so the windows can be the
         # frames energy is *actually* gained on, rather than a guess. `apply`
         # recomputes the same thing deterministically.
@@ -842,7 +899,7 @@ class SuperElastic(Injector):
         # every clip in that scenario scores a fraction of what it deserves.
         top = _top_of_partner(spec, traj, partner_id, t0)
         strong_preview = self._boosted(spec, traj, targets, t0,
-                                       self.GAIN_BY_BIN["strong"], normal)
+                                       1.0 + excess * fit, normal)
         r_strong = self._measure(strong_preview, int(actor.segmentation_id),
                                  "energy_at_contact", {"surface_top": top})
 
@@ -852,6 +909,7 @@ class SuperElastic(Injector):
             causal_body_ids=[int(b.segmentation_id) for b in targets],
             params={"type": "restitution_gain", "speed_gain": gain,
                     "energy_gain_ratio": gain ** 2 - 1.0,
+                    "frame_fit_scale": float(fit),
                     "first_contact_frame": int(t0)},
             magnitude=float(gain ** 2 - 1.0),
             magnitude_unit="energy_gain_ratio", severity_bin=severity_bin,
@@ -1084,12 +1142,30 @@ class _CollisionEdit(Injector):
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         dv = float(np.linalg.norm(traj.lin_vel[t0, ib] - traj.lin_vel[t0 - 1, ib]))
         t1 = min(traj.num_frames - 1, t0 + 1)
+        # The exchange is over in a frame or two; what it did to the two bodies
+        # is not. Both leave the collision on paths their masses do not justify
+        # and stay on them, so the consequence window runs to the end of the
+        # clip -- which is what `causal_mask` is gated on, and what you asked
+        # for when you said the mask should continue because both balls are
+        # changed in behaviour.
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0, windows=[(t0, t1)],
+            intervention_windows=[(t0, t1)],
+            consequence_windows=[(t0, traj.num_frames - 1)],
             causal_body_ids=self._causal_order(actor_id, other_id),
             params=dict(self._params(ratio), collision_frame=int(t0),
                         actor=actor_id, other=other_id),
-            magnitude=float(dv * abs(1.0 - 1.0 / ratio) / max(g_dt, 1e-9)),
+            # THE KNOB, not a derived effect. The magnitude used to be the
+            # velocity change the pair failed to show, scaled by g*dt -- which
+            # is measured *after* the fact, and is measured at the geometric
+            # touch frame, where PyBullet has usually not resolved the collision
+            # yet. On `collision` that read 7.8e-09 for a staged mass ratio of
+            # 25: a maximal violation reporting as none at all. The unit has
+            # always said `effective_mass_ratio`; now the number does too, and
+            # it is exact and known before anything is simulated, which is what
+            # CLAUDE.md asks `intervention.magnitude` to be. The measured effect
+            # lives in the residual, where it belongs.
+            magnitude=float(ratio),
             magnitude_unit=self.magnitude_unit, severity_bin=severity_bin,
             notes={"radius": float(traj.radius[ia]),
                    "surface_top": _geom.surface_top(spec, actor),

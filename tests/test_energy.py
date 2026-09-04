@@ -126,7 +126,17 @@ def test_deformation_is_mass_neutral_but_immutability_is_not():
                                   "barrier_pass", "stack_topple"])
 def test_deformation_never_lifts_a_resting_body(name):
     """The staging rule, checked where it matters: on the scenarios whose actors
-    are in contact with a surface when the squash fires."""
+    are in contact with a surface when the squash fires.
+
+    The invariant is that no work appears from nowhere -- so the body's centre
+    of mass must never RISE. It used to be checked as "z never changes at all",
+    and that was the bug rather than the guarantee: a volume-preserving stretch
+    along x shortens the body vertically, so holding its centre still lifts it
+    clear of the floor by the difference. That is what shipped, and what you
+    see in a clip is a cube that stops touching the ground the moment it
+    squashes. Seating it back on the surface *lowers* the centre of mass, which
+    releases energy rather than creating it, and is what a real object does.
+    """
     sc, spec, traj = _scene(name)
     inj = get_injector("deformation")
     plan = inj.plan(spec, traj, np.random.RandomState(0), "strong")
@@ -139,8 +149,18 @@ def test_deformation_never_lifts_a_resting_body(name):
         "is an energy violation this family never claimed")
     out = inj.apply(spec, traj, plan)
     j = traj.index_of(int(plan.causal_body_ids[0]))
-    assert np.allclose(traj.pos[:, j, 2], out.pos[:, j, 2], atol=1e-6), (
-        "deformation moved the body vertically")
+    t0 = plan.t_event
+    assert np.all(out.pos[t0:, j, 2] <= traj.pos[t0:, j, 2] + 1e-6), (
+        "deformation raised the body's centre of mass")
+
+    # And it stays ON the surface: the bottom of the squashed body tracks the
+    # bottom of the lawful one, rather than floating above it.
+    r = float(traj.radius[j])
+    sz = out.scale_mul[t0:, j, 2].astype(np.float64)
+    bottom_valid = traj.pos[t0:, j, 2].astype(np.float64) - r
+    bottom_squashed = out.pos[t0:, j, 2].astype(np.float64) - r * sz
+    assert np.allclose(bottom_valid, bottom_squashed, atol=1e-5), (
+        "deformation changed the body's clearance to its support")
 
 
 def test_vanishing_body_shows_up_as_excess_loss():

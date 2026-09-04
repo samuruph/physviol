@@ -35,6 +35,23 @@ def steps_per_frame(scene) -> int:
     return max(int(scene.step_rate) // max(int(scene.frame_rate), 1), 1)
 
 
+def substeps_of(simulator, default: int = 20) -> int:
+    """Substeps per frame, asked of a live simulator rather than a scene.
+
+    A staged hook is handed `(client, step, frame)` and nothing else, so a hook
+    that wants to act several times *within* a frame has to know how long a
+    frame is. Kubric's simulator keeps its scene, and the fallback is the rate
+    the worker builds every scene at.
+    """
+    scene = getattr(simulator, "scene", None)
+    if scene is None:
+        return int(default)
+    try:
+        return steps_per_frame(scene)
+    except Exception:                                         # noqa: BLE001
+        return int(default)
+
+
 def reset_to(spec, objs, traj, frame: int) -> None:
     """Put every dynamic body back to its state at `frame`.
 
@@ -145,6 +162,16 @@ def run_from(simulator, scene, spec, objs, t0: int, t_end: int,
         for hook in hooks:
             hook(pc, step, frame)
 
+        # RE-READ the mapping after the hooks have run, every substep. A hook
+        # may have changed which PyBullet body stands for one of ours --
+        # `ShapeSwap` does exactly that, because resizing a collision shape
+        # means replacing the body that carries it, and it does so several
+        # times within a frame. Built once outside the loop, the map went stale
+        # the instant a body was resized and every pose and contact belonging to
+        # the resized actor was silently dropped. A dict of five entries per
+        # substep does not show up against a step of the solver.
+        idx_of = _body_index_map(simulator, objs, order)
+
         for contact in pc.getContactPoints():
             (_flag, body_a, body_b, _la, _lb, _pa, position_b, normal_b,
              _dist, normal_force, *_rest) = contact
@@ -223,3 +250,186 @@ def splice(traj_valid, tail: Dict[str, np.ndarray], t0: int):
     out.meta = dict(traj_valid.meta)
     out.meta["contacts"] = "simulated"
     return out
+
+
+# ------------------------------------------------------------- resizing --
+#: Where a parked body waits while a proxy stands in for it. Far outside any
+#: scenario's frustum and far below its floor, so it can neither be seen nor
+#: touch anything even with its collision mask still on.
+PARKED_Z = -2000.0
+
+_HULL = None
+
+
+def unit_hull(subdivisions: int = 2) -> np.ndarray:
+    """Vertices of a unit sphere, for building an ellipsoid collision shape.
+
+    PyBullet has a box and a sphere and nothing in between: `GEOM_SPHERE` takes
+    one radius, so a body squashed along one axis has no primitive to be. It
+    does accept an explicit vertex list for a convex hull, and an icosphere
+    scaled per axis is exactly an ellipsoid -- measured in the pinned image, a
+    0.3 x 0.3 x 0.6 hull dropped on a plane comes to rest at z = 0.601.
+
+    Cached, because the vertices depend on nothing.
+    """
+    global _HULL
+    if _HULL is not None:
+        return _HULL
+    t = (1.0 + 5.0 ** 0.5) / 2.0
+    v = np.array([[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
+                  [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
+                  [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]], np.float64)
+    faces = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11),
+             (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+             (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9),
+             (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)]
+    for _ in range(int(subdivisions)):
+        out, cache = [], {}
+        for tri in faces:
+            mids = []
+            for a, b in ((tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])):
+                key = (min(a, b), max(a, b))
+                if key not in cache:
+                    v = np.vstack([v, (v[a] + v[b]) / 2.0])
+                    cache[key] = len(v) - 1
+                mids.append(cache[key])
+            a, b, c = tri
+            ab, bc, ca = mids
+            out += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
+        faces = out
+    _HULL = v / np.linalg.norm(v, axis=1, keepdims=True)
+    return _HULL
+
+
+class ShapeSwap:
+    """Change a body's SIZE in the simulator while the simulation is running.
+
+    The one thing PyBullet genuinely cannot do in place: there is no API to
+    rescale a collision shape, which is why `deformation` and `immutability`
+    were the two families that edited a finished trajectory instead of staging
+    themselves. That cost exactly what the trajectory path always costs -- the
+    render knew the body had changed size and the physics did not, so a
+    shrunken cube stopped touching the floor it was standing on and a swollen
+    ball grew half-way into the barrier beside it.
+
+    What PyBullet *can* do is create a new body and remove an old one, mid-run,
+    carrying the pose and both velocities across. So this parks the declared
+    body out of the world and stands a correctly-sized **proxy** in its place,
+    swapping the proxy again on each frame of a resize ramp. From `t_event` on
+    the actor's contacts, its resting height and everything it runs into come
+    from the solver at its *current* size.
+
+    The declared body is parked rather than removed because Kubric's traitlet
+    setters close over its PyBullet index at scene-build time: remove it and the
+    next `obj.position = ...` writes to a body that no longer exists. Parking
+    keeps every one of those setters valid, and `linked_objects` -- a plain
+    dict, checked in the image -- is retargeted so that `_body_index_map`, and
+    therefore the recorded poses and contacts, follow the proxy.
+
+    `restore()` is **not optional**, for the reason every `unstage` is not: one
+    scene serves every family in a run.
+    """
+
+    def __init__(self, simulator, objs, spec, body, dynamic: bool = False):
+        self.simulator = simulator
+        self.spec = spec
+        self.body = body
+        self.obj = objs[body.name]
+        # `dynamic` overrides the declared `sim_static`. `fission`'s understudy
+        # is declared scripted, so the simulator holds it at mass 0 and
+        # `changeDynamics(mass=...)` does not bring it back to life -- measured
+        # in the pinned image, a body created with mass 0 and
+        # `useMaximalCoordinates` stays put however its mass is later changed.
+        # Standing a genuinely dynamic proxy in its place is what makes the
+        # second half of a split a body the solver actually moves.
+        self.dynamic = bool(dynamic)
+        self.original = pybullet_index(simulator, objs, spec,
+                                       int(body.segmentation_id))
+        self.proxy = None
+        self._scale = None
+
+    @property
+    def ok(self) -> bool:
+        return self.original is not None
+
+    @property
+    def live(self):
+        """The PyBullet body currently standing for this one."""
+        return self.original if self.proxy is None else self.proxy
+
+    def set_scale(self, scale, pose=None, velocity=None) -> None:
+        """Give the body a collision shape `scale` times its declared size.
+
+        `pose` and `velocity` override what the outgoing body was doing, for the
+        case where the proxy is not continuing that body's motion at all -- a
+        `fission` understudy starts from the *original's* pose, not from the
+        parking spot it has been sitting in since frame 0.
+        """
+        import pybullet as pb
+
+        if not self.ok:
+            return
+        scale = np.asarray(scale, np.float64).reshape(3)
+        if (self._scale is not None and pose is None
+                and float(np.abs(scale - self._scale).max()) < 1e-4):
+            return
+        if pose is None:
+            pos, quat = pb.getBasePositionAndOrientation(self.live)
+        else:
+            pos, quat = pose
+        if velocity is None:
+            vel, ang = pb.getBaseVelocity(self.live)
+        else:
+            vel, ang = velocity
+
+        half = np.asarray(self.body.scale, np.float64) * scale
+        if self.body.kind == "cube":
+            shape = pb.createCollisionShape(pb.GEOM_BOX,
+                                            halfExtents=half.tolist())
+        else:
+            shape = pb.createCollisionShape(
+                pb.GEOM_MESH, vertices=(unit_hull() * half[None, :]).tolist())
+
+        if self.proxy is None:
+            self._park()
+        else:
+            pb.removeBody(self.proxy)
+
+        mass = (float(self.body.mass)
+                if (self.dynamic or not self.body.sim_static) else 0.0)
+        self.proxy = pb.createMultiBody(mass, shape, -1, pos, quat,
+                                        useMaximalCoordinates=True)
+        pb.changeDynamics(self.proxy, -1, contactProcessingThreshold=0,
+                          lateralFriction=float(self.body.friction),
+                          restitution=float(self.body.restitution))
+        pb.resetBaseVelocity(self.proxy, list(vel), list(ang))
+        self.obj.linked_objects[self.simulator] = self.proxy
+        self._scale = scale
+
+    def restore(self) -> None:
+        """Put the declared body back, wherever the proxy left off."""
+        import pybullet as pb
+
+        if not self.ok or self.proxy is None:
+            return
+        pos, quat = pb.getBasePositionAndOrientation(self.proxy)
+        vel, ang = pb.getBaseVelocity(self.proxy)
+        pb.removeBody(self.proxy)
+        self.proxy = None
+        self._scale = None
+        pb.setCollisionFilterGroupMask(self.original, -1, 1, 1)
+        pb.changeDynamics(self.original, -1,
+                          mass=0.0 if self.body.sim_static
+                          else float(self.body.mass))
+        pb.resetBasePositionAndOrientation(self.original, pos, quat)
+        pb.resetBaseVelocity(self.original, list(vel), list(ang))
+        self.obj.linked_objects[self.simulator] = self.original
+
+    def _park(self) -> None:
+        import pybullet as pb
+
+        pb.setCollisionFilterGroupMask(self.original, -1, 0, 0)
+        pb.changeDynamics(self.original, -1, mass=0.0)
+        pb.resetBasePositionAndOrientation(
+            self.original, (0.0, 0.0, PARKED_Z), (0.0, 0.0, 0.0, 1.0))
+        pb.resetBaseVelocity(self.original, [0.0] * 3, [0.0] * 3)
