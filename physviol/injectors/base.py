@@ -551,7 +551,8 @@ class Injector:
     def _integrate_profile(p0: np.ndarray, v0: np.ndarray, g_per_frame: np.ndarray,
                            dt: float, floor_z, radius: float,
                            restitution: float, substeps: int = 24,
-                           obstacles=None, t_start: float = 0.0):
+                           obstacles=None, t_start: float = 0.0,
+                           friction: float = 0.0):
         """Integrate under a *time-varying* gravity, respecting a ground plane.
 
         Two things this buys over plain ballistics:
@@ -563,6 +564,15 @@ class Injector:
           instead of being a step that lasts to the end of the clip. That is
           what makes the residual -- and therefore the severity map -- vary over
           time rather than sitting at one value.
+        * **a body on the ground slows down.** Without this a shoved body slides
+          at constant speed for the rest of the clip and leaves frame, which is
+          not what the simulator does and not what the render shows -- but it IS
+          what `_fit_to_frame` measures, because the fit is decided on this
+          integrator. So every family that keeps its actor in shot by weakening
+          itself was weakening itself against a body that never stops. Measured
+          on `drop x fission`: the fit clamped to 0.34 of the nominal push, and
+          the staged halves it produced came to rest 0.50 m apart when they
+          needed 0.78 m to be two objects rather than one blurred one.
         """
         p = np.asarray(p0, np.float64).copy()
         v = np.asarray(v0, np.float64).copy()
@@ -582,6 +592,17 @@ class Injector:
                     v[2] = -v[2] * restitution
                     if abs(v[2]) < 0.05:
                         v[2] = 0.0
+                # The contact band has to allow for the bounce completing
+                # between substeps: a body settling on the floor spends most of
+                # them a little above it, and an exact test finds it in contact
+                # almost never -- which is how the first version of this changed
+                # nothing at all.
+                if friction > 0.0 and (p[2] - radius) <= fz + max(
+                        2e-3, abs(float(v[2])) * h):
+                    speed = float(np.linalg.norm(v[:2]))
+                    if speed > 1e-9:
+                        drop = friction * abs(float(g[2])) * h
+                        v[:2] *= max(0.0, 1.0 - drop / speed)
                 if obstacles is not None:
                     p, v = obstacles.resolve(
                         p, v, radius, restitution,
@@ -713,7 +734,8 @@ class Injector:
                       else _geom.floor_fn(spec, body)), float(traj.radius[bi]),
             float(body.restitution if restitution is None else restitution),
             obstacles=self._obstacles(spec, traj, body, obstacles, solid),
-            t_start=float(t0 - 1))
+            t_start=float(t0 - 1),
+            friction=float(getattr(body, "friction", 0.0)))
         out.pos[t0:, bi, :] = pos
         out.lin_vel[t0:, bi, :] = vel
 

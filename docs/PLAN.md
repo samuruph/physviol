@@ -421,7 +421,7 @@ Part 2 still describes what ships today.
 | `newton2_mass` | dynamics | identical-looking bodies respond differently to equal impulse | `effective_mass_ratio` | instant |
 | `angular_momentum` | dynamics | spin reverses, or torque appears with no contact | `angular_momentum_defect` | instant |
 | `support` | equilibrium | an unsupported body hovers, or an unstable stack holds | `m_support_clearance` | sustained |
-| `friction` | equilibrium | a surface grips far harder than it declares, dragging a body to a halt | `effective_mu_ratio` | sustained |
+| `friction` | equilibrium | a surface grips far harder than it declares, dragging a body to a halt | `path_length_deficit` | sustained |
 | `shadow` | optical | the shadow detaches from its caster and slides away | `shadow_caster_offset_radii` | sustained |
 | `shadow_inverted` | optical | the shadow sits on the lit side of its caster, all clip | `shadow_caster_offset_radii` | sustained |
 | `shadow_shape` | optical | the shadow stays put but stops matching the caster's shape | `shadow_aspect_ratio` | sustained |

@@ -25,7 +25,11 @@ class PhantomImpulse(Injector):
     """
 
     family = "phantom_impulse"
-    DV_BY_BIN = {"weak": 1.0, "medium": 2.4, "strong": 4.5}      # m/s
+    #: Raised from 1.0 / 2.4 / 4.5. The frustum fit walks these back per scene
+    #: wherever the geometry cannot host them, so the nominal value should be
+    #: what reads clearly rather than what never overflows -- you judged the
+    #: strongest bin too gentle on `drop` and elsewhere.
+    DV_BY_BIN = {"weak": 1.6, "medium": 3.6, "strong": 7.0}      # m/s
 
     def strong_residual_reference(self, spec) -> float:
         g_dt = 9.81 / float(spec.tier.fps)

@@ -262,10 +262,22 @@ class Solidity(Injector):
 
         radius = actor.bounding_radius
         depth_r = self.DEPTH_BY_BIN[severity_bin]
+
+        # FIRE ONE FRAME BEFORE THE RECORDED CONTACT. `t_contact` is the frame
+        # the contact is *reported* on, and by then the solver has already
+        # resolved most of it: on `barrier_pass` the ball's vx reads 0.93 m/s at
+        # frame 12 and 0.30 m/s at frame 13, because it has bounced in between.
+        # The staged path resets the world to `t_event` and disables the pair
+        # from there, so firing on the contact frame hands the intervention a
+        # ball that has already stopped -- which then creeps into the wall at a
+        # quarter of its approach speed and is still inside it when the clip
+        # ends. That is the "strong doesn't pass through" you saw; the ball was
+        # never given the speed to get out the far side.
+        t_fire = max(1, t_contact - 1)
         n_window = self._window_len(
             self._frames_for(spec, self.SECONDS_BY_BIN[severity_bin]),
-            t_contact, traj.num_frames)
-        t_end = t_contact + n_window - 1
+            t_fire, traj.num_frames)
+        t_end = t_fire + n_window - 1
 
         # The mode follows the contact *geometry*, not whether the partner is
         # static. Landing on something (near-vertical normal) can be expressed
@@ -322,8 +334,8 @@ class Solidity(Injector):
                 strong, int(actor.segmentation_id), "penetration", notes)
 
         return InterventionPlan(
-            family=self.family, kind="sustained", t_event=t_contact,
-            windows=[(t_contact, t_end)],
+            family=self.family, kind="sustained", t_event=t_fire,
+            windows=[(t_fire, t_end)],
             causal_body_ids=[int(actor.segmentation_id), int(partner_id)],
             params={"type": "disable_collision_pair",
                     "pair": [int(actor.segmentation_id), int(partner_id)],
@@ -546,11 +558,14 @@ class Solidity(Injector):
             return
         plan.windows = [(t0, t_end)]
         plan.intervention_windows = [(t0, t_end)]
-        # The overlap ends; being on the wrong side of a wall does not. The
-        # consequence window is what `causal_mask` is gated on, so tying it to
-        # the overlap made the mask vanish at exactly the moment the ball
-        # emerged somewhere it could not have got to.
-        plan.consequence_windows = [(t0, T - 1)]
+        # And the SEVERITY window ends with the overlap too. Widening this to
+        # the end of the clip -- which is what the causal mask wanted -- put
+        # severity on every frame after the ball emerged, so the field marked
+        # where the body ENDED UP rather than where it was passing through. You
+        # reported exactly that on `drop`. The causal mask gets its long tail
+        # from the measured trajectory divergence in `annotate.pipeline`
+        # instead, which does not drag severity along with it.
+        plan.consequence_windows = [(t0, t_end)]
 
     def simulates(self, plan) -> bool:
         return (plan.params.get("mode") != "sink_group"
@@ -741,7 +756,7 @@ class SuperElastic(Injector):
     #: the individual clip, not on the constant, so the nominal gain is now what
     #: reads clearly and `_fit_to_frame` walks it back per scene wherever the
     #: geometry cannot host it.
-    GAIN_BY_BIN = {"weak": 1.35, "medium": 1.90, "strong": 2.80}
+    GAIN_BY_BIN = {"weak": 1.50, "medium": 2.20, "strong": 3.60}
 
     def strong_residual_reference(self, spec) -> float:
         # The law reports fractional kinetic-energy gain, and energy goes as
@@ -1142,16 +1157,15 @@ class _CollisionEdit(Injector):
         g_dt = float(np.linalg.norm(traj.gravity)) * traj.dt
         dv = float(np.linalg.norm(traj.lin_vel[t0, ib] - traj.lin_vel[t0 - 1, ib]))
         t1 = min(traj.num_frames - 1, t0 + 1)
-        # The exchange is over in a frame or two; what it did to the two bodies
-        # is not. Both leave the collision on paths their masses do not justify
-        # and stay on them, so the consequence window runs to the end of the
-        # clip -- which is what `causal_mask` is gated on, and what you asked
-        # for when you said the mask should continue because both balls are
-        # changed in behaviour.
+        # The exchange is over in a frame or two, and so is the *evidence*: what
+        # follows is two bodies travelling lawfully on wrong paths. The causal
+        # mask still runs to the end of the clip, because it is gated on the
+        # measured divergence between the twins rather than on this window --
+        # which is what lets severity stay on the frames that show the breach.
         return InterventionPlan(
             family=self.family, kind="instant", t_event=t0, windows=[(t0, t1)],
             intervention_windows=[(t0, t1)],
-            consequence_windows=[(t0, traj.num_frames - 1)],
+            consequence_windows=[(t0, t1)],
             causal_body_ids=self._causal_order(actor_id, other_id),
             params=dict(self._params(ratio), collision_frame=int(t0),
                         actor=actor_id, other=other_id),
@@ -1292,7 +1306,16 @@ class Newton2Mass(_CollisionEdit):
 
     @staticmethod
     def _causal_order(actor_id, other_id):
-        return [int(actor_id), int(other_id)]
+        """The culprit ALONE, and it is the body whose mass is the lie.
+
+        `_staged_masses` scales `other`, so `other` is the thing that is wrong;
+        the striker merely rebounds off it. Both used to be listed, which made
+        both level 1 in `causal_mask` -- two red bodies and no way to tell the
+        cause from the effect. Naming one leaves the other to be picked up as a
+        measured consequence, which is level 2, blue: exactly the reading you
+        asked for.
+        """
+        return [int(other_id)]
 
     def _outcome(self, traj, actor_id, other_id, t0, normal, ratio):
         """Re-solve the collision for effective masses (ratio*m, m).

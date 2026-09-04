@@ -304,7 +304,27 @@ def annotate_pair(workdir: str, vdir: str, outroot: str,
     # Where there is no wrong place to confuse it with, "where it should have
     # been" is the only honest localisation available, and it is exactly what
     # reference_mask carries.
-    gone = visible & ~imask.any(axis=(1, 2))
+    #
+    # ABSENT, not merely hidden. "No pixels in the invalid render" is true of a
+    # body that was removed AND of one that is behind a screen, and the two
+    # deserve opposite answers: for the removed body the lawful footprint is the
+    # only localisation there is, while for the hidden one it is a lie -- it
+    # paints severity where the object would have been in the *valid* clip,
+    # which is not where the object is. You caught this on
+    # `occluder_pass x friction`: the ball had fallen behind the screen and the
+    # severity field was sitting out in the open where its twin had gone.
+    #
+    # The trajectory knows which case it is, so ask it rather than the pixels.
+    absent = np.zeros((T,), bool)
+    for bid in (dynamic_ids or [primary_id]):
+        try:
+            j = traj_i.index_of(int(bid))
+        except Exception:                                     # noqa: BLE001
+            continue
+        present = np.asarray(traj_i.present[:, j], bool)
+        n = min(T, present.shape[0])
+        absent[:n] |= ~present[:n]
+    gone = visible & absent & ~imask.any(axis=(1, 2))
     if gone.any():
         fallback = rmask & gone[:, None, None]
         if fallback.any():

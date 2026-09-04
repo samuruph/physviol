@@ -230,18 +230,41 @@ class Friction(Injector):
     family = "friction"
     persistent = True
     #: Fraction of its lawful speed the body keeps once the surface has gripped
-    #: it -- so 0.08 is a body that all but stops. This is the shape `_retimed`
-    #: walks the body's own path at, and the shape the staged coefficients are
-    #: chosen to produce.
+    #: it. Used by the host-side `_retimed` approximation and as the residual
+    #: reference; the staged coefficient is solved for separately, below.
     RATE_BY_BIN = {"weak": 0.55, "medium": 0.28, "strong": 0.08}
-    #: Lateral friction the surface is given, and the rolling friction that
-    #: makes it bite on a SPHERE. Measured in the pinned image: a ball at
-    #: 1.5 m/s travels 2.51 m in two seconds at the declared mu of 0.05 and
-    #: 0.80 m at (1.0, 0.03), arriving at rest. Lateral friction alone does
-    #: almost nothing to a rolling body -- 0.05 against 0.001 differed by 0.11 m
-    #: over three seconds -- which is why the low-grip direction was invisible.
-    GRIP_BY_BIN = {"weak": 0.5, "medium": 0.8, "strong": 1.0}
-    ROLL_BY_BIN = {"weak": 0.004, "medium": 0.012, "strong": 0.03}
+
+    #: **How far the body still travels, as a fraction of the distance it
+    #: lawfully would.** The knob is a stopping DISTANCE rather than a
+    #: coefficient, and that is what keeps this family distinguishable from
+    #: `newton1_inertia`.
+    #:
+    #: You reported the two as near-identical on `barrier_pass`, and they were:
+    #: a fixed coefficient stopped the ball inside two frames, which is a step
+    #: to zero -- exactly newton-1's picture. Friction is not a step, it is a
+    #: curve, and a curve needs room. Solving for the distance gives the body
+    #: that room and adapts to whatever speed the scenario happens to give it,
+    #: which also answers the other half of your report: `collision`'s friction
+    #: clip looked like its valid twin because the same coefficient that halts a
+    #: fast ball barely touches a slow one.
+    #:
+    #: Even `strong` leaves a third of the lawful travel, so the body is still
+    #: sliding when the deceleration becomes obvious. A body that stops dead in
+    #: one frame is a different family and stays one.
+    TRAVEL_BY_BIN = {"weak": 0.70, "medium": 0.50, "strong": 0.32}
+    #: Ceilings, so a solved coefficient stays inside what Bullet handles well.
+    MAX_LATERAL = 1.2
+    MAX_ROLLING = 0.40
+    #: Floor, as a multiple of the DECLARED coefficient. Whatever the solve
+    #: returns, the surface must grip harder than it says it does -- otherwise
+    #: the clip depicts the opposite violation from the one it is labelled
+    #: with. `ramp_slide` is where that bit: its block is already slowing on a
+    #: slope, so the arithmetic asked for *less* grip than declared.
+    #:
+    #: Per bin, not one number, because on a slope the floor IS the knob: the
+    #: stopping-distance solve is below it for every bin there, so a single
+    #: floor made weak, medium and strong the same clip three times.
+    MIN_RATIO_BY_BIN = {"weak": 1.6, "medium": 2.6, "strong": 4.0}
 
     def strong_residual_reference(self, spec) -> float:
         return 2.0
@@ -263,7 +286,17 @@ class Friction(Injector):
         moving = np.flatnonzero(speed > 0.35)
         if moving.size < 3:
             return None
-        t0 = int(max(moving[0] + 1, min(moving[-1] - 1, T // 3)))
+        want = T // 3
+        # BRAKE IN THE OPEN. The deceleration takes the better part of a second,
+        # so firing a third of the way into `occluder_pass` brings the body to
+        # rest behind the screen -- and a body at rest behind a screen has no
+        # pixels in the invalid render, so the severity field has nowhere to
+        # land and the clip ships scoring nothing. Starting early enough that
+        # the stop happens before the occlusion keeps the evidence on camera.
+        occ = [int(f) for f in (spec.notes.get("occluded_frames") or [])]
+        if occ:
+            want = min(want, max(1, min(occ) - self._frames_for(spec, 0.5)))
+        t0 = int(max(moving[0] + 1, min(moving[-1] - 1, want)))
         if not (1 <= t0 < T - 1):
             return None
 
@@ -271,24 +304,63 @@ class Friction(Injector):
         strong = self._retimed(traj, bi, t0, self.RATE_BY_BIN["strong"])
         r_strong = self._measure(strong, int(actor.segmentation_id), "friction", {})
         mu = float(getattr(actor, "friction", 0.5))
-        grip = float(self.GRIP_BY_BIN[severity_bin])
-        roll = float(self.ROLL_BY_BIN[severity_bin])
+        grip, roll, target = self._solve_grip(spec, traj, actor, bi, t0,
+                                              severity_bin)
         return InterventionPlan(
             family=self.family, kind="sustained", t_event=t0,
             windows=[(t0, T - 1)],
             causal_body_ids=[int(actor.segmentation_id)],
             params={"type": "friction_scale", "end_rate": rate,
                     "lateral_friction": grip, "rolling_friction": roll,
-                    "declared_friction": mu},
-            # How much more grip the surface shows than it declares. Reported
-            # as a ratio so the three bins stay ordered and comparable.
-            magnitude=float(grip / max(mu, 1e-6)),
-            magnitude_unit="effective_mu_ratio",
+                    "declared_friction": mu,
+                    "travel_fraction": float(self.TRAVEL_BY_BIN[severity_bin]),
+                    "target_distance_m": float(target)},
+            # THE KNOB: how much of its lawful journey the body never makes.
+            # Not the coefficient ratio, which is a *derived* quantity here --
+            # the solve clamps it against floors and ceilings, so on `collision`
+            # all three bins came out at the same ratio while the clips plainly
+            # differed. The travel fraction is exact, ordered by construction
+            # and the thing a viewer actually sees.
+            magnitude=float(1.0 - self.TRAVEL_BY_BIN[severity_bin]),
+            magnitude_unit="path_length_deficit",
             severity_bin=severity_bin,
             notes={"radius": float(actor.bounding_radius),
                    "surface_top": _geom.surface_top(spec, actor),
                    "end_rate": rate, "lateral_friction": grip,
-                   "rolling_friction": roll, "r_strong": float(r_strong)})
+                   "rolling_friction": roll,
+                   "target_distance_m": float(target),
+                   "r_strong": float(r_strong)})
+
+    def _solve_grip(self, spec, traj, actor, bi: int, t0: int,
+                    severity_bin: str):
+        """(lateral, rolling, target_distance) that stop the body where we want.
+
+        Uniform deceleration: a body at `v` covering `d` before stopping needs
+        `a = v^2 / 2d`. For a SLIDING body that is `mu*g`, so `mu = v^2/(2 g d)`;
+        for a ROLLING one the retarding torque gives `a = mu_r*g/r`, so the
+        coefficient carries an extra factor of the radius. Both fall straight
+        out of the target distance, which is why the knob is expressed there.
+
+        `d` is a share of the distance the body lawfully still travels --
+        measured along its own path, so a scenario where it rebounds off a wall
+        and comes back counts the whole journey rather than the net
+        displacement.
+        """
+        pos = np.asarray(traj.pos[t0:, bi, :], np.float64)
+        lawful = float(np.linalg.norm(np.diff(pos, axis=0), axis=1).sum())
+        v = float(np.linalg.norm(traj.lin_vel[t0, bi]))
+        target = max(1e-3, float(self.TRAVEL_BY_BIN[severity_bin]) * lawful)
+        accel = v * v / (2.0 * target)
+        g = float(np.linalg.norm(traj.gravity)) or 9.81
+        radius = max(float(traj.radius[bi]), 1e-6)
+        mu = float(getattr(actor, "friction", 0.5))
+        floor = self.MIN_RATIO_BY_BIN[severity_bin] * mu
+        if actor.kind == "sphere":
+            # Rolling resistance does the work; lateral friction only has to be
+            # enough to keep it rolling rather than sliding.
+            roll = min(self.MAX_ROLLING, max(accel * radius / g, floor * 0.1))
+            return (min(self.MAX_LATERAL, max(0.4, floor)), roll, target)
+        return (min(self.MAX_LATERAL, max(accel / g, floor)), 0.0, target)
 
     # ------------------------------------------------------------------ #
     def _retimed(self, traj, bi: int, t0: int, end_rate: float) -> Trajectory:

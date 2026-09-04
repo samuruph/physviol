@@ -172,7 +172,18 @@ def run_from(simulator, scene, spec, objs, t0: int, t_end: int,
         # substep does not show up against a step of the solver.
         idx_of = _body_index_map(simulator, objs, order)
 
-        for contact in pc.getContactPoints():
+        # NOT on the first substep. `getContactPoints` returns whatever the
+        # last `stepSimulation` computed, and on step 0 that call belongs to a
+        # different run -- the valid rollout's final frame, or the previous
+        # variant's. `reset_to` moves the bodies but does not recompute the
+        # manifold, so the stale one is read out and stamped onto `t_event`.
+        #
+        # It cost a whole family. `drop x angular_momentum` fires at frame 3
+        # with the actor in free fall; the leftover manifold said it was resting
+        # on the floor, and `laws.angular_momentum` gates out every frame within
+        # one of a contact -- which is exactly the frame the spin changes on. The
+        # residual came out identically zero and the severity map with it.
+        for contact in (pc.getContactPoints() if step else ()):
             (_flag, body_a, body_b, _la, _lb, _pa, position_b, normal_b,
              _dist, normal_force, *_rest) = contact
             if normal_force <= 1e-6:
